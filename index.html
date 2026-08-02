@@ -68,7 +68,7 @@ function compressImage(file,maxDim=900,quality=0.72){
 /* ── FULL-RESOLUTION LOCAL FOLDER STORAGE (desktop Chrome/Edge/Brave only) ──
    Original, uncompressed images are saved as real files in a folder you choose
    on your computer. Only a small compressed thumbnail syncs to the cloud/mobile. */
-const BUILD_TAG="BUILD-2026-07-19-A";
+const BUILD_TAG="BUILD-2026-08-02-B-FIX";
 const FS_SUPPORTED=typeof window!=="undefined"&&"showDirectoryPicker" in window;
 function idbOpen(){
   return new Promise((resolve,reject)=>{
@@ -909,12 +909,12 @@ function App({firebaseConfig,onResetConfig}){
 
       const unsubDb=firestore.doc("meta/db").onSnapshot(snap=>{
         clearTimeout(timer);setTimedOut(false);
-        if(snap.exists()){setDb(snap.data())}
+        if(snap.exists){setDb(snap.data())}
         else{const seed=JSON.parse(JSON.stringify(DEFAULT_DB));firestore.doc("meta/db").set(seed).catch(()=>{});setDb(seed)}
       },err=>{clearTimeout(timer);setConnError(err.message)});
 
       const unsubCarp=firestore.doc("meta/carpenters").onSnapshot(snap=>{
-        setCarpenters(snap.exists()?(snap.data().list||[]):[]);
+        setCarpenters(snap.exists?(snap.data().list||[]):[]);
       },err=>setConnError(err.message));
 
       // One-time silent migration of any pre-existing local data into the cloud
