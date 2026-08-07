@@ -10,6 +10,7 @@
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+<script src="https://unpkg.com/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:'Noto Sans Bengali',sans-serif;background:#f1f1f1;min-height:100vh}
@@ -68,7 +69,7 @@ function compressImage(file,maxDim=900,quality=0.72){
 /* ── FULL-RESOLUTION LOCAL FOLDER STORAGE (desktop Chrome/Edge/Brave only) ──
    Original, uncompressed images are saved as real files in a folder you choose
    on your computer. Only a small compressed thumbnail syncs to the cloud/mobile. */
-const BUILD_TAG="BUILD-2026-08-03-C";
+const BUILD_TAG="BUILD-2026-08-05-D";
 const FS_SUPPORTED=typeof window!=="undefined"&&"showDirectoryPicker" in window;
 function idbOpen(){
   return new Promise((resolve,reject)=>{
@@ -167,10 +168,12 @@ const autoCode=(baseName,suffix)=>{
   const initials=words.map(w=>w[0]?.toUpperCase()||"").join("").slice(0,4);
   return`${initials}-${suffix||Math.floor(Math.random()*900+100)}`;
 };
-const addDays=(dateStr,days)=>{const d=new Date(dateStr);d.setDate(d.getDate()+days);return d.toISOString().slice(0,10)};
-const daysBetween=(d1,d2)=>Math.round((new Date(d2)-new Date(d1))/(1000*60*60*24));
-const todayStr=()=>new Date().toISOString().slice(0,10);
-const fmtDate=(d)=>{if(!d)return"";const dt=new Date(d);return`${String(dt.getDate()).padStart(2,"0")}/${String(dt.getMonth()+1).padStart(2,"0")}/${dt.getFullYear()}`};
+const parseISO=(s)=>{const[y,m,d]=(s||"").split("-").map(Number);return new Date(Date.UTC(y||1970,(m||1)-1,d||1))};
+const toISO=(dt)=>`${dt.getUTCFullYear()}-${String(dt.getUTCMonth()+1).padStart(2,"0")}-${String(dt.getUTCDate()).padStart(2,"0")}`;
+const addDays=(dateStr,days)=>{const d=parseISO(dateStr);d.setUTCDate(d.getUTCDate()+days);return toISO(d)};
+const daysBetween=(d1,d2)=>Math.round((parseISO(d2)-parseISO(d1))/(1000*60*60*24));
+const todayStr=()=>{const d=new Date();return`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`};
+const fmtDate=(d)=>{if(!d)return"";const dt=parseISO(String(d).slice(0,10));return`${String(dt.getUTCDate()).padStart(2,"0")}/${String(dt.getUTCMonth()+1).padStart(2,"0")}/${dt.getUTCFullYear()}`};
 const toIntlPhone=(phone)=>{
   const digits=(phone||"").replace(/\D/g,"");
   if(digits.startsWith("880"))return digits;
@@ -248,6 +251,13 @@ const DEFAULT_DB={
 };
 
 /* ── SHARED UI ── */
+function DateInput({value,onChange,disabled,accent}){
+  const boxStyle={width:"100%",border:`1.5px solid ${disabled?"#eee":"#e0e0e0"}`,borderRadius:9,padding:"10px 11px",fontSize:13,background:disabled?"#f5f5f5":"white",color:disabled?"#999":(value?"#111":"#999"),boxSizing:"border-box",fontWeight:value?700:400,display:"flex",alignItems:"center",justifyContent:"space-between"};
+  return<div style={{position:"relative"}}>
+    <div style={boxStyle}><span>{value?fmtDate(value):"dd/mm/yyyy"}</span><span style={{color:accent||"#999",fontSize:14}}>📅</span></div>
+    <input type="date" value={value||""} disabled={disabled} onChange={e=>onChange(e.target.value)} style={{position:"absolute",inset:0,opacity:0,width:"100%",height:"100%",border:"none",cursor:disabled?"default":"pointer"}}/>
+  </div>
+}
 function IR({l,v}){if(!v)return null;return<div style={{display:"flex",gap:6,marginBottom:4,fontSize:11}}><span style={{color:"#888",flexShrink:0,minWidth:90}}>{l}:</span><span style={{fontWeight:600,color:"#222"}}>{v}</span></div>}
 function Hdr({title,sub,no,bg}){return<><div style={{background:bg,color:"white",padding:"10px 14px"}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}><div><div style={{fontSize:16,fontWeight:800}}>রূপালী ফার্নিচার</div><div style={{fontSize:9,opacity:.88}}>শেরে বাংলা ফজলুল হক রোড, ডুকু ব্রিজ ১ সংলগ্ন, সিরাজগঞ্জ | ☎ 01711-318070 | পরিচালক: সাদমান সাকিব</div></div><div style={{textAlign:"right"}}><div style={{fontSize:9,opacity:.7}}>অর্ডার নং</div><div style={{fontSize:11,fontWeight:800}}>{no}</div></div></div></div><div style={{background:"#111",color:"white",padding:"4px 14px",display:"flex",justifyContent:"space-between"}}><span style={{fontSize:11,fontWeight:700}}>{title}</span><span style={{fontSize:9,opacity:.6}}>{sub}</span></div></>}
 function PrintLog({log}){
@@ -255,6 +265,29 @@ function PrintLog({log}){
   return<div style={{fontSize:8,color:"#999",marginTop:6,fontStyle:"italic"}}>প্রিন্ট: {log.length} বার | সর্বশেষ: {fmtDate(log[log.length-1])}{log.length>1?` (মোট: ${log.map(fmtDate).join(", ")})`:""}</div>
 }
 function PrintBtn({onPrint}){return<button className="no-print" onClick={onPrint} style={{background:"white",color:"inherit",border:"1.5px solid currentColor",borderRadius:7,padding:"6px 13px",fontWeight:700,fontSize:11,display:"flex",alignItems:"center",gap:5}}>🖨️ এই স্লিপ প্রিন্ট করুন</button>}
+function WhatsAppSendBtn({targetRef,phone,label}){
+  const[busy,setBusy]=useState(false);
+  const send=async()=>{
+    if(!targetRef.current||typeof html2canvas==="undefined")return;
+    setBusy(true);
+    try{
+      const canvas=await html2canvas(targetRef.current,{scale:2,useCORS:true,backgroundColor:"#ffffff"});
+      canvas.toBlob(async(blob)=>{
+        if(!blob){setBusy(false);return}
+        const file=new File([blob],"receipt.png",{type:"image/png"});
+        if(navigator.canShare&&navigator.canShare({files:[file]})){
+          try{await navigator.share({files:[file],title:"রূপালী ফার্নিচার",text:"আপনার অর্ডারের রশিদ"})}catch(e){}
+        }else{
+          const url=URL.createObjectURL(blob);
+          const a=document.createElement("a");a.href=url;a.download="receipt.png";document.body.appendChild(a);a.click();document.body.removeChild(a);
+          setTimeout(()=>{window.open(`https://wa.me/${toIntlPhone(phone)}`,"_blank");alert("ছবিটি ডাউনলোড হয়েছে। WhatsApp চ্যাটে গিয়ে ম্যানুয়ালি ছবিটি অ্যাটাচ করে পাঠান।")},300);
+        }
+        setBusy(false);
+      },"image/png");
+    }catch(e){alert("ছবি তৈরি করতে সমস্যা হয়েছে: "+e.message);setBusy(false)}
+  };
+  return<button className="no-print" onClick={send} disabled={busy} style={{background:"#16a34a",color:"white",border:"none",borderRadius:7,padding:"6px 13px",fontWeight:700,fontSize:11,display:"flex",alignItems:"center",gap:5}}>{busy?"⏳ তৈরি হচ্ছে...":`📤 ${label||"WhatsApp-এ পাঠান"}`}</button>
+}
 function FullImgBtn({fileName}){
   if(!fileName||!FS_SUPPORTED)return null;
   return<button className="no-print" onClick={()=>openFullResImageForPrint(fileName)} style={{background:"#1e293b",color:"white",border:"none",borderRadius:5,padding:"2px 7px",fontSize:8,fontWeight:700,marginTop:2}}>🖨️ ফুল ছবি প্রিন্ট</button>
@@ -267,12 +300,14 @@ function S1({order,onPrint}){
   const totalPaid=(payments||[]).reduce((s,p)=>s+(parseFloat(p.amount)||0),0);
   const rem=(parseFloat(cust.total)||0)-totalPaid;
   const days=cust.delivery?daysBetween(cust.date,cust.delivery):null;
+  const captureRef=useRef();
   return<div style={{fontSize:11}}>
-    <div className="no-print" style={{padding:"8px 14px",background:"#fff",borderBottom:"1px solid #eee",display:"flex",justifyContent:"flex-end"}}><PrintBtn onPrint={()=>onPrint("s1")}/></div>
+    <div className="no-print" style={{padding:"8px 14px",background:"#fff",borderBottom:"1px solid #eee",display:"flex",justifyContent:"flex-end",gap:8}}><WhatsAppSendBtn targetRef={captureRef} phone={cust.phone}/><PrintBtn onPrint={()=>onPrint("s1")}/></div>
+    <div ref={captureRef}>
     <Hdr title="গ্রাহকের কপি" sub="Customer Copy" no={no} bg={RED}/>
     <div style={{padding:"10px 14px"}}>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"3px 12px",background:"#fff8f8",borderRadius:7,padding:"8px",marginBottom:8}}>
-        <IR l="তারিখ" v={cust.date}/><IR l="ডেলিভারি" v={cust.delivery?`${cust.delivery} (${days} দিনে)`:""}/>
+        <IR l="তারিখ" v={fmtDate(cust.date)}/><IR l="ডেলিভারি" v={cust.delivery?`${fmtDate(cust.delivery)} (${days} দিনে)`:""}/>
         <IR l="গ্রাহকের নাম" v={cust.name}/><IR l="মোবাইল" v={cust.phone}/>
         <IR l="ঠিকানা" v={cust.address}/>{cust.notes&&<IR l="মন্তব্য" v={cust.notes}/>}
       </div>
@@ -290,18 +325,19 @@ function S1({order,onPrint}){
       </div>)}
       <div style={{background:"#fff0f0",borderRadius:7,padding:"8px",marginTop:4}}>
         <div style={{fontWeight:700,fontSize:10,color:RED,marginBottom:4}}>পেমেন্টের বিবরণ</div>
-        {(payments||[]).map((p,i)=><div key={i} style={{display:"flex",justifyContent:"space-between",fontSize:10,marginBottom:2}}><span>{p.date} — {p.note||"পেমেন্ট"}</span><span style={{fontWeight:700}}>{money(p.amount)}</span></div>)}
+        {(payments||[]).map((p,i)=><div key={i} style={{display:"flex",justifyContent:"space-between",fontSize:10,marginBottom:2}}><span>{fmtDate(p.date)} — {p.note||"পেমেন্ট"}</span><span style={{fontWeight:700}}>{money(p.amount)}</span></div>)}
         <div style={{display:"flex",justifyContent:"space-between",borderTop:"1px solid #fcc",paddingTop:5,marginTop:4}}><span style={{fontWeight:700,fontSize:11,color:RED}}>বাকি:</span><span style={{fontWeight:800,fontSize:12,color:RED}}>{money(rem)}</span></div>
       </div>
       <div style={{marginTop:8,background:"#f0fdf4",borderRadius:6,padding:"6px 10px",fontSize:9,color:"#166534",textAlign:"center"}}>আজীবন ওয়ারেন্টি · লেকার স্প্রে ফিনিশ · প্রাকৃতিকভাবে সিজনড কাঠ</div>
       <div style={{marginTop:16,display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>{["গ্রাহকের স্বাক্ষর","রূপালী ফার্নিচার"].map(t=><div key={t} style={{minHeight:52,display:"flex",flexDirection:"column",justifyContent:"flex-end"}}><div style={{borderTop:"1.5px solid #999",paddingTop:6,textAlign:"center",fontSize:10,color:"#666"}}>{t}</div></div>)}</div>
-      <div className="no-print"><PrintLog log={printLogs?.s1}/></div>
     </div>
+    </div>
+    <div className="no-print"><PrintLog log={printLogs?.s1}/></div>
   </div>
 }
 
 /* ── SLIP 2: ORDER BOOK ── */
-function S2({order,onPrint,db,onUpdateOrder}){
+function S2({order,onPrint,db,saveDb,onUpdateOrder}){
   const{cust,items,payments,refImg,refImgs,no,printLogs}=order;
   const images=refImgs&&refImgs.length?refImgs:(refImg?[{src:refImg,caption:"রেফারেন্স ছবি"}]:[]);
   const totalPaid=(payments||[]).reduce((s,p)=>s+(parseFloat(p.amount)||0),0);
@@ -311,6 +347,11 @@ function S2({order,onPrint,db,onUpdateOrder}){
   const[editForm,setEditForm]=useState(null);
   const[editingImages,setEditingImages]=useState(false);
   const imgInputRef=useRef();
+  const[addingNew,setAddingNew]=useState(false);
+  const[newItem,setNewItem]=useState({catKey:"",varKey:"",wood:"S",qty:1,notes:""});
+  const[newCatMode,setNewCatMode]=useState(false);
+  const[newCatName,setNewCatName]=useState("");
+  const[newCatVarName,setNewCatVarName]=useState("");
 
   const startEditItem=(i)=>{
     const it=items[i];
@@ -325,6 +366,30 @@ function S2({order,onPrint,db,onUpdateOrder}){
     newItems[editIdx]={...newItems[editIdx],catKey:editForm.catKey,varKey:editForm.varKey,variantBn:variant.bn,code:variant.code,wood:editForm.wood,woodBn:WOOD[editForm.wood].bn,qty:editForm.qty,notes:editForm.notes,sections:keepSections};
     onUpdateOrder({...order,items:newItems});
     setEditIdx(null);setEditForm(null);
+  };
+  const removeItem=(i)=>{
+    if(!window.confirm("এই ফার্নিচারটি অর্ডার থেকে বাদ দিতে চান?"))return;
+    onUpdateOrder({...order,items:items.filter((_,j)=>j!==i)});
+  };
+  const createNewCategoryInline=()=>{
+    const catName=newCatName.trim()||`নতুন ফার্নিচার ${Object.keys(db).length+1}`;
+    const varName=newCatVarName.trim()||"স্ট্যান্ডার্ড মডেল";
+    const catKey="cat_"+Date.now();
+    const varKey="var_"+Date.now();
+    const code=autoCode(catName+" "+varName,String(Math.floor(Math.random()*900+100)));
+    const nd=JSON.parse(JSON.stringify(db));
+    nd[catKey]={bn:catName,en:catName,variants:{[varKey]:{bn:varName,code,sections:[{name:"কাঠের তালিকা (পরে যোগ করুন)",pieces:[]}]}}};
+    saveDb(nd);
+    setNewItem({...newItem,catKey,varKey});
+    setNewCatMode(false);setNewCatName("");setNewCatVarName("");
+  };
+  const addNewItem=()=>{
+    const cat=db[newItem.catKey];
+    const variant=cat?.variants[newItem.varKey];
+    if(!variant)return;
+    const item={catKey:newItem.catKey,varKey:newItem.varKey,variantBn:variant.bn,code:variant.code,wood:newItem.wood,woodBn:WOOD[newItem.wood].bn,qty:newItem.qty,notes:newItem.notes,sections:JSON.parse(JSON.stringify(variant.sections))};
+    onUpdateOrder({...order,items:[...items,item]});
+    setNewItem({catKey:"",varKey:"",wood:"S",qty:1,notes:""});setAddingNew(false);
   };
   const addNewImages=async(e)=>{
     const files=Array.from(e.target.files||[]);
@@ -355,7 +420,7 @@ function S2({order,onPrint,db,onUpdateOrder}){
     <Hdr title="অর্ডার বুক কপি" sub="Order Book Copy" no={no} bg="#1d4ed8"/>
     <div style={{padding:"10px 14px"}}>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"3px 12px",background:"#eff6ff",borderRadius:7,padding:"8px",marginBottom:8}}>
-        <IR l="তারিখ" v={cust.date}/><IR l="ডেলিভারি" v={cust.delivery?`${cust.delivery} (${days} দিনে)`:""}/>
+        <IR l="তারিখ" v={fmtDate(cust.date)}/><IR l="ডেলিভারি" v={cust.delivery?`${fmtDate(cust.delivery)} (${days} দিনে)`:""}/>
         <IR l="গ্রাহকের নাম" v={cust.name}/><IR l="মোবাইল" v={cust.phone}/>
         <IR l="ঠিকানা" v={cust.address}/><IR l="মন্তব্য" v={cust.notes}/>
       </div>
@@ -409,13 +474,50 @@ function S2({order,onPrint,db,onUpdateOrder}){
               <div style={{color:"#555",marginTop:1}}>কাঠ: {it.woodBn} ({it.wood}) | পরিমাণ: {it.qty} | CFT: {(totalCft(it.sections)*it.qty).toFixed(3)}</div>
               {it.notes&&<div style={{color:"#888",marginTop:1}}>⚙ {it.notes}</div>}
             </div>
-            <button className="no-print" onClick={()=>startEditItem(i)} style={{background:"#eff6ff",border:"none",borderRadius:5,padding:"4px 8px",fontSize:9,color:"#1d4ed8",fontWeight:700}}>✏️ পরিবর্তন</button>
+            <div className="no-print" style={{display:"flex",gap:4,flexShrink:0}}>
+              <button onClick={()=>startEditItem(i)} style={{background:"#eff6ff",border:"none",borderRadius:5,padding:"4px 8px",fontSize:9,color:"#1d4ed8",fontWeight:700}}>✏️ পরিবর্তন</button>
+              {items.length>1&&<button onClick={()=>removeItem(i)} style={{background:"#fee2e2",border:"none",borderRadius:5,padding:"4px 8px",fontSize:9,color:RED,fontWeight:700}}>✕ বাদ</button>}
+            </div>
           </div>
         </>}
       </div>)}
+      <div className="no-print">
+        {addingNew?<div style={{background:"#eff6ff",borderRadius:9,padding:10,marginBottom:8}}>
+          <div style={{fontSize:10,fontWeight:700,color:"#1d4ed8",marginBottom:7}}>নতুন ফার্নিচার যোগ করুন</div>
+          {!newCatMode&&<button onClick={()=>setNewCatMode(true)} style={{background:"white",border:"1px solid #93c5fd",color:"#1d4ed8",borderRadius:6,padding:"4px 9px",fontSize:9,fontWeight:700,marginBottom:7}}>+ নতুন ক্যাটাগরি</button>}
+          {newCatMode?<div style={{background:"white",borderRadius:7,padding:8,marginBottom:7,border:"1px solid #93c5fd"}}>
+            <input value={newCatName} onChange={e=>setNewCatName(e.target.value)} placeholder="ফার্নিচারের নাম" style={{width:"100%",border:"1px solid #ddd",borderRadius:5,padding:"6px 7px",fontSize:10,marginBottom:5}}/>
+            <input value={newCatVarName} onChange={e=>setNewCatVarName(e.target.value)} placeholder="মডেল/বিবরণ" style={{width:"100%",border:"1px solid #ddd",borderRadius:5,padding:"6px 7px",fontSize:10,marginBottom:6}}/>
+            <div style={{display:"flex",gap:5}}>
+              <button onClick={()=>{setNewCatMode(false);setNewCatName("");setNewCatVarName("")}} style={{flex:1,background:"#f3f4f6",border:"none",borderRadius:5,padding:"6px",fontSize:9}}>বাতিল</button>
+              <button onClick={createNewCategoryInline} style={{flex:2,background:"#1d4ed8",color:"white",border:"none",borderRadius:5,padding:"6px",fontSize:9,fontWeight:700}}>তৈরি করুন</button>
+            </div>
+          </div>:<>
+            <select value={newItem.catKey} onChange={e=>setNewItem({...newItem,catKey:e.target.value,varKey:""})} style={{width:"100%",border:"1px solid #ddd",borderRadius:6,padding:"6px 8px",fontSize:10,marginBottom:6}}>
+              <option value="">-- ক্যাটাগরি নির্বাচন করুন --</option>
+              {Object.entries(db).map(([k,c])=><option key={k} value={k}>{c.bn}</option>)}
+            </select>
+            {newItem.catKey&&db[newItem.catKey]&&<select value={newItem.varKey} onChange={e=>setNewItem({...newItem,varKey:e.target.value})} style={{width:"100%",border:"1px solid #ddd",borderRadius:6,padding:"6px 8px",fontSize:10,marginBottom:6}}>
+              <option value="">-- মডেল নির্বাচন করুন --</option>
+              {Object.entries(db[newItem.catKey].variants).map(([k,v])=><option key={k} value={k}>[{v.code}] {v.bn}</option>)}
+            </select>}
+          </>}
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,marginBottom:6}}>
+            <select value={newItem.wood} onChange={e=>setNewItem({...newItem,wood:e.target.value})} style={{border:"1px solid #ddd",borderRadius:6,padding:"6px 8px",fontSize:10}}>
+              {Object.entries(WOOD).map(([k,v])=><option key={k} value={k}>{v.bn}</option>)}
+            </select>
+            <input type="number" min={1} value={newItem.qty} onChange={e=>setNewItem({...newItem,qty:parseInt(e.target.value)||1})} style={{border:"1px solid #ddd",borderRadius:6,padding:"6px 8px",fontSize:10}}/>
+          </div>
+          <textarea rows={2} value={newItem.notes} onChange={e=>setNewItem({...newItem,notes:e.target.value})} placeholder="বিশেষ নির্দেশনা" style={{width:"100%",border:"1px solid #ddd",borderRadius:6,padding:"6px 8px",fontSize:10,marginBottom:7,resize:"vertical"}}/>
+          <div style={{display:"flex",gap:6}}>
+            <button onClick={()=>{setAddingNew(false);setNewCatMode(false)}} style={{flex:1,background:"white",border:"1px solid #ddd",borderRadius:6,padding:"7px",fontSize:10}}>বাতিল</button>
+            <button onClick={addNewItem} disabled={!newItem.varKey} style={{flex:2,background:newItem.varKey?"#1d4ed8":"#ccc",color:"white",border:"none",borderRadius:6,padding:"7px",fontSize:10,fontWeight:700}}>যোগ করুন</button>
+          </div>
+        </div>:<button onClick={()=>setAddingNew(true)} style={{width:"100%",background:"white",border:"2px dashed #1d4ed8",color:"#1d4ed8",borderRadius:8,padding:"9px",fontSize:11,fontWeight:600,marginBottom:8}}>+ আরেকটি ফার্নিচার যোগ করুন</button>}
+      </div>
       <div style={{background:"#eff6ff",borderRadius:7,padding:"8px",marginTop:4}}>
         <div style={{fontWeight:700,fontSize:10,color:"#1d4ed8",marginBottom:4}}>পেমেন্ট ট্র্যাকিং</div>
-        {(payments||[]).map((p,i)=><div key={i} style={{display:"flex",justifyContent:"space-between",fontSize:10,marginBottom:2,borderBottom:"1px dashed #bfdbfe",paddingBottom:2}}><span>{p.date} — {p.note||"পেমেন্ট"}</span><span style={{fontWeight:700}}>{money(p.amount)}</span></div>)}
+        {(payments||[]).map((p,i)=><div key={i} style={{display:"flex",justifyContent:"space-between",fontSize:10,marginBottom:2,borderBottom:"1px dashed #bfdbfe",paddingBottom:2}}><span>{fmtDate(p.date)} — {p.note||"পেমেন্ট"}</span><span style={{fontWeight:700}}>{money(p.amount)}</span></div>)}
         <div style={{display:"flex",justifyContent:"space-between",paddingTop:4,marginTop:2}}><span style={{fontSize:10}}>মোট পরিশোধ:</span><span style={{fontWeight:700,color:"#166534"}}>{money(totalPaid)}</span></div>
         <div style={{display:"flex",justifyContent:"space-between"}}><span style={{fontSize:10,fontWeight:700}}>বাকি:</span><span style={{fontWeight:800,color:RED}}>{money(rem)}</span></div>
       </div>
@@ -469,7 +571,7 @@ function S3({order,onPrint,onUpdateOrder,carpenters,saveCarpenters}){
     <Hdr title="বিভাগ ট্র্যাকিং কপি" sub="Department Tracking" no={no} bg="#6d28d9"/>
     <div style={{padding:"10px 14px"}}>
       <div style={{background:"#f5f3ff",borderRadius:7,padding:"8px",marginBottom:10}}>
-        <IR l="গ্রাহক" v={cust.name}/><IR l="মোবাইল" v={cust.phone}/><IR l="ডেলিভারি" v={cust.delivery}/>
+        <IR l="গ্রাহক" v={cust.name}/><IR l="মোবাইল" v={cust.phone}/><IR l="ডেলিভারি" v={fmtDate(cust.delivery)}/>
         {items.map((it,i)=><IR key={i} l={`ফার্নিচার ${i+1}`} v={`[${it.code}] ${it.variantBn} (${it.woodBn}) × ${it.qty}`}/>)}
       </div>
 
@@ -482,8 +584,8 @@ function S3({order,onPrint,onUpdateOrder,carpenters,saveCarpenters}){
           return<div key={d.id} style={{background:"white",border:"1px solid #ede9fe",borderRadius:9,padding:"10px 12px",marginBottom:8}}>
             <div style={{fontWeight:700,fontSize:12,color:"#6d28d9",marginBottom:6}}>{d.bn}</div>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
-              <div><div style={{fontSize:9,color:"#888",marginBottom:2}}>শুরুর তারিখ</div><input type="date" value={cur.start} onChange={e=>setStart(d.id,e.target.value)} style={{width:"100%",border:"1px solid #ddd",borderRadius:6,padding:"6px 7px",fontSize:11,outline:"none"}}/></div>
-              <div><div style={{fontSize:9,color:"#888",marginBottom:2}}>শেষের তারিখ</div><input type="date" value={cur.end} onChange={e=>setEnd(d.id,e.target.value)} style={{width:"100%",border:"1px solid #ddd",borderRadius:6,padding:"6px 7px",fontSize:11,outline:"none"}}/></div>
+              <div><div style={{fontSize:9,color:"#888",marginBottom:2}}>শুরুর তারিখ</div><DateInput value={cur.start} onChange={v=>setStart(d.id,v)} accent="#6d28d9"/></div>
+              <div><div style={{fontSize:9,color:"#888",marginBottom:2}}>শেষের তারিখ</div><DateInput value={cur.end} onChange={v=>setEnd(d.id,v)} accent="#6d28d9"/></div>
             </div>
             <input type="range" min="0" max="100" value={cur.pct} onChange={e=>setPct(d.id,e.target.value)} style={{width:"100%",accentColor:barColor}}/>
             <div style={{textAlign:"right",fontSize:11,fontWeight:800,color:barColor,marginBottom:8}}>{cur.pct}%{cur.pct>=100?" ✅":""}</div>
@@ -504,7 +606,7 @@ function S3({order,onPrint,onUpdateOrder,carpenters,saveCarpenters}){
       {/* Print-only static table */}
       <table className="print-only-table" style={{width:"100%",borderCollapse:"collapse",fontSize:10,display:"none"}}>
         <thead><tr style={{background:"#6d28d9",color:"white"}}>{["বিভাগ","দায়িত্বে","শুরুর তারিখ","শেষের তারিখ","স্বাক্ষর"].map(h=><th key={h} style={{padding:"6px 5px",textAlign:"left",fontWeight:700}}>{h}</th>)}</tr></thead>
-        <tbody>{DEPTS.map((d,i)=>{const cur=getDept(d.id);return<tr key={d.id} style={{background:i%2===0?"#f5f3ff":"white",borderBottom:"1px solid #ede9fe"}}><td style={{padding:"10px 5px",fontWeight:600}}>{d.bn} ({cur.pct}%)</td><td style={{padding:"10px 5px",fontSize:9}}>{(cur.workers||[]).join(", ")||"—"}</td><td style={{padding:"10px 5px",color:cur.start?"#333":"#bbb"}}>{cur.start||"___/___/______"}</td><td style={{padding:"10px 5px",color:cur.end?"#333":"#bbb"}}>{cur.end||"___/___/______"}</td><td style={{padding:"10px 5px",color:"#bbb"}}>____________</td></tr>})}</tbody>
+        <tbody>{DEPTS.map((d,i)=>{const cur=getDept(d.id);return<tr key={d.id} style={{background:i%2===0?"#f5f3ff":"white",borderBottom:"1px solid #ede9fe"}}><td style={{padding:"10px 5px",fontWeight:600}}>{d.bn} ({cur.pct}%)</td><td style={{padding:"10px 5px",fontSize:9}}>{(cur.workers||[]).join(", ")||"—"}</td><td style={{padding:"10px 5px",color:cur.start?"#333":"#bbb"}}>{cur.start?fmtDate(cur.start):"___/___/______"}</td><td style={{padding:"10px 5px",color:cur.end?"#333":"#bbb"}}>{cur.end?fmtDate(cur.end):"___/___/______"}</td><td style={{padding:"10px 5px",color:"#bbb"}}>____________</td></tr>})}</tbody>
       </table>
 
       <div className="no-print"><PrintLog log={printLogs?.s3}/></div>
@@ -546,7 +648,7 @@ function S4({order,onPrint,db,saveDb,onUpdateOrder}){
     <div className="no-print" style={{padding:"8px 14px",background:"#fff",borderBottom:"1px solid #eee",display:"flex",justifyContent:"flex-end",color:"#92400e"}}><PrintBtn onPrint={()=>onPrint("s4")}/></div>
     <Hdr title="কার্পেন্টারের কপি" sub="Carpenter Copy" no={no} bg="#92400e"/>
     <div style={{padding:"10px 14px"}}>
-      <div style={{background:"#fef3c7",borderRadius:7,padding:"8px",marginBottom:10}}><IR l="গ্রাহক" v={cust.name}/><IR l="ডেলিভারি" v={cust.delivery}/></div>
+      <div style={{background:"#fef3c7",borderRadius:7,padding:"8px",marginBottom:10}}><IR l="গ্রাহক" v={cust.name}/><IR l="ডেলিভারি" v={fmtDate(cust.delivery)}/></div>
       {images.length>0&&<div style={{marginBottom:10}}>
         <div style={{fontSize:9,color:"#92400e",fontWeight:700,marginBottom:5,textAlign:"center"}}>গ্রাহকের রেফারেন্স ছবি — এই অনুযায়ী তৈরি করুন</div>
         <div style={{display:"flex",flexWrap:"wrap",gap:6,justifyContent:"center"}}>
@@ -604,7 +706,7 @@ function S5({order,onPrint}){
     <Hdr title="ট্রান্সপোর্ট কপি — কাঠের তালিকা" sub="Transport Wood List" no={no} bg="#065f46"/>
     <div style={{padding:"10px 14px"}}>
       <div style={{background:"#f0fdf4",borderRadius:7,padding:"8px",marginBottom:10}}>
-        <IR l="গ্রাহক" v={cust.name}/><IR l="তারিখ" v={cust.date}/>
+        <IR l="গ্রাহক" v={cust.name}/><IR l="তারিখ" v={fmtDate(cust.date)}/>
         {items.map((it,i)=><IR key={i} l={`ফার্নিচার ${i+1}`} v={`[${it.code}] ${it.variantBn} (${it.woodBn}) × ${it.qty}`}/>)}
       </div>
       <div style={{fontWeight:700,fontSize:10,color:"#065f46",marginBottom:6}}>গোডাউনের র‍্যাক থেকে নিন:</div>
@@ -626,16 +728,25 @@ function S5({order,onPrint}){
 }
 
 /* ── SLIP 6: DELIVERY RECEIPT ── */
-function S6({order,onPrint}){
+function S6({order,onPrint,onUpdateOrder}){
   const{cust,items,payments,no,deliveryImg,printLogs}=order;
   const totalPaid=(payments||[]).reduce((s,p)=>s+(parseFloat(p.amount)||0),0);
+  const captureRef=useRef();
+  const markDelivered=()=>{
+    if(window.confirm("এই অর্ডারটি ডেলিভারি সম্পন্ন হয়েছে বলে চিহ্নিত করতে চান? এটি 'চলমান অর্ডার' লিস্ট থেকে সরে 'ডেলিভারড' তালিকায় যাবে।")){
+      onUpdateOrder({...order,delivered:true,deliveredAt:todayStr()});
+    }
+  };
   return<div style={{fontSize:11}}>
-    <div className="no-print" style={{padding:"8px 14px",background:"#fff",borderBottom:"1px solid #eee",display:"flex",justifyContent:"flex-end",color:"#0f766e"}}><PrintBtn onPrint={()=>onPrint("s6")}/></div>
+    <div className="no-print" style={{padding:"8px 14px",background:"#fff",borderBottom:"1px solid #eee",display:"flex",justifyContent:"flex-end",gap:8,color:"#0f766e"}}><WhatsAppSendBtn targetRef={captureRef} phone={cust.phone}/><PrintBtn onPrint={()=>onPrint("s6")}/></div>
+    {!order.delivered&&<div className="no-print" style={{padding:"8px 14px",background:"#f0fdfa",borderBottom:"1px solid #eee"}}><button onClick={markDelivered} style={{width:"100%",background:"#0f766e",color:"white",border:"none",borderRadius:8,padding:"9px",fontSize:12,fontWeight:700}}>✅ ডেলিভারি সম্পন্ন হয়েছে — চিহ্নিত করুন</button></div>}
+    {order.delivered&&<div className="no-print" style={{padding:"8px 14px",background:"#dcfce7",textAlign:"center",fontSize:11,fontWeight:700,color:"#166534"}}>✅ ডেলিভারি সম্পন্ন হয়েছে ({fmtDate(order.deliveredAt)})</div>}
+    <div ref={captureRef}>
     <Hdr title="ডেলিভারি রশিদ" sub="Delivery Receipt" no={no} bg="#0f766e"/>
     <div style={{padding:"12px 14px"}}>
       <div style={{background:"#f0fdfa",borderRadius:7,padding:"9px",marginBottom:10}}>
         <IR l="গ্রাহকের নাম" v={cust.name}/><IR l="মোবাইল" v={cust.phone}/><IR l="ঠিকানা" v={cust.address}/>
-        <IR l="অর্ডারের তারিখ" v={cust.date}/><IR l="ডেলিভারির তারিখ" v={todayStr()}/>
+        <IR l="অর্ডারের তারিখ" v={fmtDate(cust.date)}/><IR l="ডেলিভারির তারিখ" v={fmtDate(order.deliveredAt||todayStr())}/>
       </div>
       <div style={{fontWeight:700,fontSize:10,color:"#0f766e",marginBottom:5}}>ডেলিভারিকৃত পণ্য</div>
       {items.map((it,i)=><div key={i} style={{border:"1px solid #99f6e4",borderRadius:6,padding:"6px 9px",marginBottom:5,fontSize:10}}>
@@ -651,8 +762,9 @@ function S6({order,onPrint}){
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
         {["গ্রাহকের স্বাক্ষর","রূপালী ফার্নিচার\nপরিচালক স্বাক্ষর"].map(t=><div key={t} style={{borderTop:"2px solid #0f766e",paddingTop:6,textAlign:"center",fontSize:9,color:"#555",whiteSpace:"pre-line"}}>{t}</div>)}
       </div>
-      <div className="no-print"><PrintLog log={printLogs?.s6}/></div>
     </div>
+    </div>
+    <div className="no-print" style={{padding:"0 14px"}}><PrintLog log={printLogs?.s6}/></div>
   </div>
 }
 
@@ -970,6 +1082,10 @@ function App({firebaseConfig,onResetConfig}){
     setViewed(updated);if(draft&&draft.no===updated.no)setDraft(updated);
     if(fsRef.current)fsRef.current.collection("orders").doc(updated.no).set(updated).catch(err=>alert("⚠️ পরিবর্তন সিঙ্ক করতে সমস্যা হয়েছে: "+err.message));
   };
+  const deleteOrderPermanently=(orderNo)=>{
+    if(fsRef.current)fsRef.current.collection("orders").doc(orderNo).delete().catch(err=>alert("⚠️ ডিলিট করতে সমস্যা হয়েছে: "+err.message));
+    setViewed(null);setDraft(null);setPage("history");
+  };
   const saveExpense=(exp)=>{
     const id=exp.id||("exp_"+Date.now());
     const withId={...exp,id};
@@ -1010,7 +1126,7 @@ function App({firebaseConfig,onResetConfig}){
     </div>;
     return<div style={{padding:40,textAlign:"center"}}><div style={{fontSize:9,color:"#ccc",marginBottom:10}}>{BUILD_TAG}</div>সিঙ্ক হচ্ছে...</div>;
   }
-  if(page==="preview")return<Preview order={viewed||draft} onBack={()=>{setViewed(null);setPage(viewed?"history":"home")}} slip={slip} setSlip={setSlip} onUpdate={updateOrder} db={db} saveDb={saveDb} carpenters={carpenters} saveCarpenters={saveCarpenters}/>;
+  if(page==="preview")return<Preview order={viewed||draft} onBack={()=>{setViewed(null);setPage(viewed?"history":"home")}} slip={slip} setSlip={setSlip} onUpdate={updateOrder} onDelete={deleteOrderPermanently} db={db} saveDb={saveDb} carpenters={carpenters} saveCarpenters={saveCarpenters}/>;
   if(page==="form")return<Form onSave={saveOrder} onBack={()=>setPage("home")} db={db} saveDb={saveDb}/>;
   if(page==="history")return<Hist orders={orders} onBack={()=>setPage("home")} onView={o=>{setViewed(o);setSlip(0);setPage("preview")}}/>;
   if(page==="manage")return<ManageDB db={db} saveDb={saveDb} onBack={()=>setPage("home")}/>;
@@ -1219,8 +1335,14 @@ function Home({orders,expenses,woodLots,db,onNew,onHist,onManage,onExpense,onWoo
                 <div style={{width:26,height:26,borderRadius:"50%",background:urgent?RED:warn?"#f97316":"#94a3b8",color:"white",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:800,flexShrink:0}}>{i+1}</div>
                 <div style={{flex:1,minWidth:0}}>
                   <div style={{fontSize:12,fontWeight:700,color:"#222",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{o.cust.name} — {o.no}</div>
-                  <div style={{fontSize:10,color:"#888"}}>{o.items.map(it=>it.variantBn).join(", ").slice(0,40)}</div>
+                  <div style={{display:"flex",flexWrap:"wrap",gap:3,marginTop:2}}>
+                    {[...new Set(o.items.map(it=>(db&&it.catKey&&db[it.catKey])?db[it.catKey].bn:it.variantBn.split(" ")[0]))].map((cat,ci)=><span key={ci} style={{fontSize:9,background:"#f1f5f9",color:"#475569",borderRadius:10,padding:"1px 7px"}}>{cat}</span>)}
+                  </div>
                   {o.allWorkers&&o.allWorkers.length>0&&<div style={{fontSize:10,color:"#6d28d9",fontWeight:600,marginTop:2}}>👷 {o.allWorkers.join(", ")}</div>}
+                  <div style={{display:"flex",alignItems:"center",gap:6,marginTop:4}}>
+                    <a href={`tel:${o.cust.phone}`} onClick={e=>e.stopPropagation()} style={{background:"#eff6ff",color:"#1d4ed8",border:"none",borderRadius:6,padding:"2px 8px",fontSize:9,fontWeight:700,textDecoration:"none"}}>📱 কল</a>
+                    <a href={`https://wa.me/${toIntlPhone(o.cust.phone)}`} target="_blank" rel="noopener noreferrer" onClick={e=>e.stopPropagation()} style={{background:"#f0fdf4",color:"#166534",border:"none",borderRadius:6,padding:"2px 8px",fontSize:9,fontWeight:700,textDecoration:"none"}}>💬 WhatsApp</a>
+                  </div>
                 </div>
                 <div style={{textAlign:"right",flexShrink:0}}>
                   <div style={{fontSize:11,fontWeight:800,color:urgent?RED:warn?"#f97316":"#555"}}>{o.daysLeft<0?`${-o.daysLeft} দিন লেট`:o.daysLeft===999?"তারিখ নেই":`${o.daysLeft} দিন বাকি`}</div>
@@ -1371,7 +1493,7 @@ function ExpensePage({expenses,onSave,onBack}){
     <div style={{padding:"18px 16px",maxWidth:560,margin:"0 auto"}}>
       <div style={{background:"white",borderRadius:14,padding:"18px",boxShadow:"0 2px 10px rgba(0,0,0,.07)",marginBottom:18}}>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:14}}>
-          <div>{lbl("তারিখ")}<input type="date" value={form.date} onChange={e=>setForm({...form,date:e.target.value})} style={inp}/></div>
+          <div>{lbl("তারিখ")}<DateInput value={form.date} onChange={v=>setForm({...form,date:v})} accent="#0f766e"/></div>
           <div>{lbl("ক্যাটাগরি")}
             <select value={form.category} onChange={e=>setForm({...form,category:e.target.value})} style={inp}>
               {EXP_CATS.map(c=><option key={c.id} value={c.id}>{c.bn}</option>)}
@@ -1456,9 +1578,8 @@ function WoodStockPage({woodLots,saveWoodLots,onBack}){
     updateLot({...selLot,logs:selLot.logs.filter(l=>l.id!==logId)});
   };
   const toggleCut=(logId,logLabel,currentlyCut)=>{
-    if(!currentlyCut){
-      if(!window.confirm(`আপনি কি নিশ্চিত "${logLabel}" এই গুড়িটি কাটা হয়েছে বলে চিহ্নিত করতে চান?`))return;
-    }
+    const msg=currentlyCut?`"${logLabel}" এই গুড়ির কাটা চিহ্ন বাতিল করতে চান?`:`আপনি কি নিশ্চিত "${logLabel}" এই গুড়িটি কাটা হয়েছে বলে চিহ্নিত করতে চান?`;
+    if(!window.confirm(msg))return;
     const logs=selLot.logs.map(l=>l.id===logId?{...l,cut:!l.cut,cutDate:!l.cut?today:""}:l);
     updateLot({...selLot,logs});
   };
@@ -1493,11 +1614,13 @@ function WoodStockPage({woodLots,saveWoodLots,onBack}){
   const lotRemaining=(lot)=>lotTotalCost(lot)-lotTotalPaid(lot);
   const lotSoldCft=(lot)=>lot.logs.filter(l=>l.sold).reduce((s,l)=>s+l.cft,0);
   const lotSoldAmount=(lot)=>lot.logs.filter(l=>l.sold).reduce((s,l)=>s+(parseFloat(l.soldPrice)||0),0);
+  const lotCutCft=(lot)=>lot.logs.filter(l=>l.cut&&!l.sold).reduce((s,l)=>s+l.cft,0);
   const lotAvailableCft=(lot)=>lot.logs.filter(l=>!l.sold&&!l.cut).reduce((s,l)=>s+l.cft,0);
   const lotCurrentStockPricePerCft=(lot)=>{
     const availCft=lotAvailableCft(lot);
     if(availCft<=0)return 0;
-    const adjustedCost=lotTotalCost(lot)-lotSoldAmount(lot);
+    const cutCost=lotCutCft(lot)*(parseFloat(lot.ratePerCft)||0);
+    const adjustedCost=lotTotalCost(lot)-lotSoldAmount(lot)-cutCost;
     return adjustedCost/availCft;
   };
 
@@ -1518,7 +1641,7 @@ function WoodStockPage({woodLots,saveWoodLots,onBack}){
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"start"}}>
               <div>
                 <div style={{fontWeight:700,fontSize:14}}>{WOOD[lot.woodType].bn} — {lot.supplier}</div>
-                <div style={{fontSize:11,color:"#888",marginTop:2}}>{lot.date} | {lot.logs.length} গুড়ি ({uncut} বাকি) | {tCft.toFixed(2)} CFT</div>
+                <div style={{fontSize:11,color:"#888",marginTop:2}}>{fmtDate(lot.date)} | {lot.logs.length} গুড়ি ({uncut} বাকি) | {tCft.toFixed(2)} CFT</div>
               </div>
               <div style={{textAlign:"right"}}>
                 <div style={{fontWeight:700,color:"#065f46"}}>{money(tCost)}</div>
@@ -1535,7 +1658,7 @@ function WoodStockPage({woodLots,saveWoodLots,onBack}){
         <select value={newLot.woodType} onChange={e=>setNewLot({...newLot,woodType:e.target.value})} style={{...inp,marginBottom:10}}>
           {Object.entries(WOOD).map(([k,v])=><option key={k} value={k}>{v.bn} ({v.en})</option>)}
         </select>
-        {lbl("ক্রয়ের তারিখ")}<input type="date" value={newLot.date} onChange={e=>setNewLot({...newLot,date:e.target.value})} style={{...inp,marginBottom:10}}/>
+        {lbl("ক্রয়ের তারিখ")}<div style={{marginBottom:10}}><DateInput value={newLot.date} onChange={v=>setNewLot({...newLot,date:v})} accent="#065f46"/></div>
         {lbl("বিক্রেতার নাম *")}<input value={newLot.supplier} onChange={e=>setNewLot({...newLot,supplier:e.target.value})} style={{...inp,marginBottom:10}}/>
         {lbl("বিক্রেতার ফোন")}<input value={newLot.supplierPhone} onChange={e=>setNewLot({...newLot,supplierPhone:e.target.value})} style={{...inp,marginBottom:10}}/>
         {lbl("বিক্রেতার ঠিকানা")}<input value={newLot.supplierAddress} onChange={e=>setNewLot({...newLot,supplierAddress:e.target.value})} style={{...inp,marginBottom:14}}/>
@@ -1548,7 +1671,7 @@ function WoodStockPage({woodLots,saveWoodLots,onBack}){
       {view==="detail"&&selLot&&<>
         <div style={{background:"white",borderRadius:12,padding:14,marginBottom:14,boxShadow:"0 1px 4px rgba(0,0,0,.07)"}}>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"4px 14px",marginBottom:8}}>
-            <IR l="কাঠের ধরন" v={WOOD[selLot.woodType].bn}/><IR l="তারিখ" v={selLot.date}/>
+            <IR l="কাঠের ধরন" v={WOOD[selLot.woodType].bn}/><IR l="তারিখ" v={fmtDate(selLot.date)}/>
             <IR l="বিক্রেতা" v={selLot.supplier}/><IR l="ফোন" v={selLot.supplierPhone}/>
           </div>
           <IR l="ঠিকানা" v={selLot.supplierAddress}/>
@@ -1566,8 +1689,8 @@ function WoodStockPage({woodLots,saveWoodLots,onBack}){
               <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
                 <div style={{flex:"1 1 auto",minWidth:140,color:(log.cut||log.sold)?"#999":"#222",textDecoration:(log.cut||log.sold)?"line-through":"none"}}>
                   <span style={{fontWeight:700,fontSize:13}}>#{i+1}</span> — লম্বা {log.lengthFt}ft × ব্যাস {log.diameterIn}″ = <strong>{log.cft.toFixed(3)} CFT</strong>
-                  {log.cut&&log.cutDate&&<span style={{fontSize:10,marginLeft:6}}>(কাটা: {log.cutDate})</span>}
-                  {log.sold&&<span style={{fontSize:10,marginLeft:6,color:"#7c3aed",fontWeight:700}}>(বিক্রি: {money(log.soldPrice)}, {log.soldDate})</span>}
+                  {log.cut&&log.cutDate&&<span style={{fontSize:10,marginLeft:6}}>(কাটা: {fmtDate(log.cutDate)})</span>}
+                  {log.sold&&<span style={{fontSize:10,marginLeft:6,color:"#7c3aed",fontWeight:700}}>(বিক্রি: {money(log.soldPrice)}, {fmtDate(log.soldDate)})</span>}
                 </div>
                 <div style={{display:"flex",gap:5,alignItems:"center",flexShrink:0}}>
                   {!log.sold&&<button onClick={()=>toggleCut(log.id,label,log.cut)} title="কাটা হয়েছে" style={{width:26,height:26,borderRadius:"50%",border:`2px solid ${log.cut?"#16a34a":"#ccc"}`,background:log.cut?"#16a34a":"white",color:"white",fontSize:13,flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center"}}>{log.cut?"✓":""}</button>}
@@ -1628,9 +1751,9 @@ function WoodStockPage({woodLots,saveWoodLots,onBack}){
         {/* Payments */}
         <div style={{background:"white",borderRadius:11,padding:14,marginBottom:14,boxShadow:"0 1px 4px rgba(0,0,0,.07)"}}>
           <div style={{fontWeight:700,fontSize:12,marginBottom:8,color:"#065f46"}}>পেমেন্ট</div>
-          {(selLot.payments||[]).map((p,i)=><div key={i} style={{display:"flex",justifyContent:"space-between",fontSize:12,marginBottom:4,borderBottom:"1px dashed #eee",paddingBottom:4}}><span>{p.date}</span><span style={{fontWeight:700}}>{money(p.amount)}</span></div>)}
+          {(selLot.payments||[]).map((p,i)=><div key={i} style={{display:"flex",justifyContent:"space-between",fontSize:12,marginBottom:4,borderBottom:"1px dashed #eee",paddingBottom:4}}><span>{fmtDate(p.date)}</span><span style={{fontWeight:700}}>{money(p.amount)}</span></div>)}
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr auto",gap:8,marginTop:8,alignItems:"end"}}>
-            <div><div style={{fontSize:10,marginBottom:3}}>তারিখ</div><input type="date" value={newPay.date} onChange={e=>setNewPay({...newPay,date:e.target.value})} style={{...inp,padding:"8px 9px"}}/></div>
+            <div><div style={{fontSize:10,marginBottom:3}}>তারিখ</div><DateInput value={newPay.date} onChange={v=>setNewPay({...newPay,date:v})} accent="#065f46"/></div>
             <div><div style={{fontSize:10,marginBottom:3}}>পরিমাণ (৳)</div><input type="number" value={newPay.amount} onChange={e=>setNewPay({...newPay,amount:e.target.value})} style={{...inp,padding:"8px 9px"}}/></div>
             <button onClick={addPayment} style={{background:"#16a34a",color:"white",border:"none",borderRadius:8,padding:"9px 14px",fontSize:12,fontWeight:700}}>+ যোগ</button>
           </div>
@@ -1921,22 +2044,22 @@ function Form({onSave,onBack,db,saveDb}){
           </label>
         </div>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:6}}>
-          <div>{lbl("অর্ডারের তারিখ")}<input type="date" value={c.date} onChange={e=>onDateChange(e.target.value)} style={inp}/></div>
-          <div>{lbl("ডেলিভারির তারিখ")}<input type="date" value={c.delivery} disabled={!emergency} onChange={e=>setC({...c,delivery:e.target.value})} style={{...inp,background:emergency?"white":"#f5f5f5",color:emergency?"#000":"#888"}}/></div>
+          <div>{lbl("অর্ডারের তারিখ")}<DateInput value={c.date} onChange={v=>onDateChange(v)} accent={RED}/></div>
+          <div>{lbl("ডেলিভারির তারিখ")}<DateInput value={c.delivery} disabled={!emergency} onChange={v=>setC({...c,delivery:v})} accent={RED}/></div>
         </div>
         <div style={{background:days<0?"#fee2e2":"#f0fdf4",borderRadius:8,padding:"7px 12px",marginBottom:14,fontSize:12,color:days<0?RED:"#166534",fontWeight:600,textAlign:"center"}}>
           {days!==null&&(days<0?`⚠ ডেলিভারি তারিখ অতীতে!`:`ডেলিভারি হবে ${days} দিন পরে${!emergency?" (স্বয়ংক্রিয় ৬০ দিন)":" (ইমারজেন্সি — ম্যানুয়াল)"}`)}
         </div>
         {[{l:"গ্রাহকের নাম *",k:"name",t:"text",p:"পূর্ণ নাম"},{l:"মোবাইল *",k:"phone",t:"tel",p:"01X-XXXXXXXX"},{l:"ঠিকানা",k:"address",t:"text",p:"বিস্তারিত ঠিকানা"}].map(f=><div key={f.k} style={{marginBottom:11}}>{lbl(f.l)}<input type={f.t} value={c[f.k]} onChange={e=>setC({...c,[f.k]:e.target.value})} placeholder={f.p} style={inp}/></div>)}
-        <div style={{marginBottom:11}}>{lbl("মোট মূল্য (৳)")}<input type="number" value={c.total} onChange={e=>setC({...c,total:e.target.value})} placeholder="0" style={inp}/></div>
         <div style={{marginBottom:14}}>{lbl("বিশেষ মন্তব্য")}<textarea rows={2} value={c.notes} onChange={e=>setC({...c,notes:e.target.value})} style={{...inp,resize:"vertical"}}/></div>
         <button onClick={()=>setStep(2)} style={{width:"100%",background:RED,color:"white",border:"none",borderRadius:10,padding:"14px",fontSize:14,fontWeight:700}}>পরবর্তী →</button>
       </>}
       {step===2&&<>
+        <div style={{marginBottom:14}}>{lbl("মোট মূল্য (৳)")}<input type="number" value={c.total} onChange={e=>setC({...c,total:e.target.value})} placeholder="0" style={{...inp,padding:"12px",fontSize:16,fontWeight:700}}/></div>
         <div style={{fontWeight:700,fontSize:15,marginBottom:14}}>💵 পেমেন্টের তালিকা</div>
         {payments.map((p,i)=><div key={i} style={{background:"white",borderRadius:12,padding:"14px",marginBottom:12,boxShadow:"0 2px 8px rgba(0,0,0,.08)",border:"1.5px solid #f0f0f0"}}>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
-            <div>{lbl("তারিখ")}<input type="date" value={p.date} onChange={e=>{const ps=[...payments];ps[i]={...ps[i],date:e.target.value};setPayments(ps)}} style={{...inp,padding:"12px",fontSize:14}}/></div>
+            <div>{lbl("তারিখ")}<DateInput value={p.date} onChange={v=>{const ps=[...payments];ps[i]={...ps[i],date:v};setPayments(ps)}} accent="#16a34a"/></div>
             <div>{lbl("পরিমাণ (৳)")}<input type="number" value={p.amount} onChange={e=>{const ps=[...payments];ps[i]={...ps[i],amount:e.target.value};setPayments(ps)}} placeholder="0" style={{...inp,padding:"12px",fontSize:16,fontWeight:700,color:"#166534"}}/></div>
           </div>
           <div style={{display:"flex",gap:8,alignItems:"end"}}>
@@ -2040,7 +2163,7 @@ function Form({onSave,onBack,db,saveDb}){
 }
 
 /* ── PREVIEW (each slip prints independently now) ── */
-function Preview({order,onBack,slip,setSlip,onUpdate,db,saveDb,carpenters,saveCarpenters}){
+function Preview({order,onBack,slip,setSlip,onUpdate,onDelete,db,saveDb,carpenters,saveCarpenters}){
   const totalPaid=(order.payments||[]).reduce((s,p)=>s+(parseFloat(p.amount)||0),0);
   const isFullyPaid=parseFloat(order.cust.total)>0&&totalPaid>=(parseFloat(order.cust.total)||0);
   const[addingPay,setAddingPay]=useState(false);
@@ -2081,6 +2204,13 @@ function Preview({order,onBack,slip,setSlip,onUpdate,db,saveDb,carpenters,saveCa
       onUpdate({...order,cancelled:false});
     }
   };
+  const permanentDelete=()=>{
+    if(window.confirm("⚠️ এই অর্ডারটি স্থায়ীভাবে মুছে ফেলতে চান? এই কাজটি কখনো ফিরিয়ে আনা যাবে না, সব তথ্য হারিয়ে যাবে।")){
+      if(window.confirm("সত্যিই নিশ্চিত? আরেকবার নিশ্চিত করুন।")){
+        onDelete(order.no);
+      }
+    }
+  };
 
   const tabs=[{id:0,l:"গ্রাহক",c:RED},{id:1,l:"অর্ডার বুক",c:"#1d4ed8"},{id:2,l:"ট্র্যাকিং",c:"#6d28d9"},{id:3,l:"কার্পেন্টার",c:"#92400e"},{id:4,l:"ট্রান্সপোর্ট",c:"#065f46"},{id:5,l:"ডেলিভারি 🔒",c:"#0f766e",locked:!isFullyPaid}];
 
@@ -2088,7 +2218,8 @@ function Preview({order,onBack,slip,setSlip,onUpdate,db,saveDb,carpenters,saveCa
     <div className="no-print" style={{background:RED,color:"white",padding:"11px 14px",display:"flex",alignItems:"center",gap:9}}>
       <button onClick={onBack} style={{background:"rgba(255,255,255,.2)",border:"none",color:"white",borderRadius:7,padding:"6px 12px",fontSize:12}}>←</button>
       <span style={{flex:1,fontWeight:700,fontSize:13}}>#{order.no}{order.cancelled?" — ❌ বাতিল":""}</span>
-      {order.cancelled?<button onClick={restoreOrder} style={{background:"white",color:"#166534",border:"none",borderRadius:7,padding:"6px 12px",fontSize:11,fontWeight:700}}>পুনরুদ্ধার করুন</button>
+      {order.cancelled?<><button onClick={restoreOrder} style={{background:"white",color:"#166534",border:"none",borderRadius:7,padding:"6px 10px",fontSize:11,fontWeight:700,marginRight:6}}>পুনরুদ্ধার</button>
+      <button onClick={permanentDelete} style={{background:"#7f1d1d",color:"white",border:"1px solid white",borderRadius:7,padding:"6px 10px",fontSize:11,fontWeight:700}}>🗑 স্থায়ী ডিলিট</button></>
       :<button onClick={cancelOrder} style={{background:"rgba(255,255,255,.2)",color:"white",border:"none",borderRadius:7,padding:"6px 12px",fontSize:11,fontWeight:700}}>❌ ক্যান্সেল</button>}
     </div>
     {order.cancelled&&<div className="no-print" style={{background:"#fee2e2",color:"#991b1b",padding:"8px 14px",textAlign:"center",fontSize:12,fontWeight:700}}>এই অর্ডারটি বাতিল করা হয়েছে ({order.cancelledAt?fmtDate(order.cancelledAt):""})</div>}
@@ -2099,7 +2230,7 @@ function Preview({order,onBack,slip,setSlip,onUpdate,db,saveDb,carpenters,saveCa
       </div>
       {addingPay&&<div style={{background:"#fafafa",borderRadius:10,padding:12,border:"1px solid #eee"}}>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
-          <div><div style={{fontSize:11,marginBottom:4,fontWeight:600,color:"#555"}}>তারিখ</div><input type="date" value={newPay.date} onChange={e=>setNewPay({...newPay,date:e.target.value})} style={{width:"100%",border:"1.5px solid #ddd",borderRadius:8,padding:"10px",fontSize:14,outline:"none"}}/></div>
+          <div><div style={{fontSize:11,marginBottom:4,fontWeight:600,color:"#555"}}>তারিখ</div><DateInput value={newPay.date} onChange={v=>setNewPay({...newPay,date:v})} accent="#16a34a"/></div>
           <div><div style={{fontSize:11,marginBottom:4,fontWeight:600,color:"#555"}}>পরিমাণ (৳)</div><input type="number" value={newPay.amount} onChange={e=>setNewPay({...newPay,amount:e.target.value})} placeholder="0" style={{width:"100%",border:"1.5px solid #ddd",borderRadius:8,padding:"10px",fontSize:16,fontWeight:700,color:"#166534",outline:"none"}}/></div>
         </div>
         <div style={{display:"flex",gap:8,alignItems:"end"}}>
@@ -2118,11 +2249,11 @@ function Preview({order,onBack,slip,setSlip,onUpdate,db,saveDb,carpenters,saveCa
     <div className="print-wrap" style={{padding:"12px",maxWidth:640,margin:"0 auto"}}>
       <div className="slip-card" style={{background:"white",borderRadius:10,overflow:"hidden",boxShadow:"0 2px 10px rgba(0,0,0,.1)"}}>
         {slip===0&&<S1 order={order} onPrint={logPrint}/>}
-        {slip===1&&<S2 order={order} onPrint={logPrint} db={db} onUpdateOrder={onUpdate}/>}
+        {slip===1&&<S2 order={order} onPrint={logPrint} db={db} saveDb={saveDb} onUpdateOrder={onUpdate}/>}
         {slip===2&&<S3 order={order} onPrint={logPrint} onUpdateOrder={onUpdate} carpenters={carpenters} saveCarpenters={saveCarpenters}/>}
         {slip===3&&<S4 order={order} onPrint={logPrint} db={db} saveDb={saveDb} onUpdateOrder={onUpdate}/>}
         {slip===4&&<S5 order={order} onPrint={logPrint}/>}
-        {slip===5&&isFullyPaid&&<S6 order={{...order,deliveryImg}} onPrint={logPrint}/>}
+        {slip===5&&isFullyPaid&&<S6 order={{...order,deliveryImg}} onPrint={logPrint} onUpdateOrder={onUpdate}/>}
         {slip===5&&!isFullyPaid&&<div style={{padding:40,textAlign:"center",color:"#aaa"}}><div style={{fontSize:40,marginBottom:10}}>🔒</div><div style={{fontSize:14}}>সম্পূর্ণ পেমেন্টের পরে আনলক হবে</div></div>}
       </div>
     </div>
@@ -2133,9 +2264,14 @@ function Preview({order,onBack,slip,setSlip,onUpdate,db,saveDb,carpenters,saveCa
 function Hist({orders,onBack,onView}){
   const[q,setQ]=useState("");
   const filtered=useMemo(()=>{
-    if(!q.trim())return orders;
-    const s=q.trim().toLowerCase();
-    return orders.filter(o=>o.cust.name.toLowerCase().includes(s)||o.cust.phone.includes(s)||o.no.toLowerCase().includes(s));
+    let list=orders;
+    if(q.trim()){
+      const s=q.trim().toLowerCase();
+      list=list.filter(o=>o.cust.name.toLowerCase().includes(s)||o.cust.phone.includes(s)||o.no.toLowerCase().includes(s));
+    }
+    const runningList=list.filter(o=>!o.delivered).sort((a,b)=>new Date(b.at||b.cust.date)-new Date(a.at||a.cust.date));
+    const deliveredList=list.filter(o=>o.delivered).sort((a,b)=>new Date(b.deliveredAt||b.cust.delivery||0)-new Date(a.deliveredAt||a.cust.delivery||0));
+    return[...runningList,...deliveredList];
   },[orders,q]);
 
   return<div style={{minHeight:"100vh",background:"#f8f8f8"}}>
@@ -2149,7 +2285,9 @@ function Hist({orders,onBack,onView}){
       :filtered.map((o,i)=>{
         const paid=(o.payments||[]).reduce((s,p)=>s+(parseFloat(p.amount)||0),0);
         const full=parseFloat(o.cust.total)>0&&paid>=(parseFloat(o.cust.total)||0);
-        return<div key={i} onClick={()=>onView(o)} style={{background:o.cancelled?"#fafafa":"white",borderRadius:11,padding:"12px",marginBottom:9,boxShadow:"0 1px 4px rgba(0,0,0,.08)",borderLeft:`4px solid ${o.cancelled?"#999":full?"#16a34a":RED}`,cursor:"pointer",opacity:o.cancelled?0.65:1}}>
+        const bg=o.cancelled?"#fafafa":o.delivered?"#f0fdf4":"white";
+        const borderColor=o.cancelled?"#999":o.delivered?"#0f766e":full?"#16a34a":RED;
+        return<div key={i} onClick={()=>onView(o)} style={{background:bg,borderRadius:11,padding:"12px",marginBottom:9,boxShadow:"0 1px 4px rgba(0,0,0,.08)",border:o.delivered?"1px solid #99f6e4":"none",borderLeft:`4px solid ${borderColor}`,cursor:"pointer",opacity:o.cancelled?0.65:1}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"start"}}>
             <div>
               <div style={{fontWeight:700,fontSize:14,textDecoration:o.cancelled?"line-through":"none"}}>{o.cust.name}</div>
@@ -2161,7 +2299,11 @@ function Hist({orders,onBack,onView}){
               <div style={{fontSize:11,color:"#888",marginTop:1}}>{o.no}</div>
               <div style={{fontSize:11,color:"#666",marginTop:2}}>{o.items.map(it=>it.variantBn).join(", ")}</div>
             </div>
-            <div style={{textAlign:"right"}}><div style={{fontWeight:700,fontSize:13,color:RED}}>{money(o.cust.total)}</div><div style={{fontSize:10,color:o.cancelled?"#991b1b":full?"#16a34a":"#f97316",marginTop:2,fontWeight:600}}>{o.cancelled?"❌ বাতিল":full?"✅ পরিশোধ":"⏳ বাকি আছে"}</div><div style={{fontSize:10,color:"#aaa",marginTop:1}}>{o.cust.date}</div></div>
+            <div style={{textAlign:"right"}}>
+              <div style={{fontWeight:700,fontSize:13,color:RED}}>{money(o.cust.total)}</div>
+              <div style={{fontSize:10,color:o.cancelled?"#991b1b":o.delivered?"#0f766e":full?"#16a34a":"#f97316",marginTop:2,fontWeight:600}}>{o.cancelled?"❌ বাতিল":o.delivered?"📦 ডেলিভারড":full?"✅ পরিশোধ":"⏳ বাকি আছে"}</div>
+              <div style={{fontSize:10,color:"#aaa",marginTop:1}}>{o.delivered?fmtDate(o.deliveredAt):fmtDate(o.cust.date)}</div>
+            </div>
           </div>
         </div>
       })}
