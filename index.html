@@ -69,7 +69,7 @@ function compressImage(file,maxDim=900,quality=0.72){
 /* ── FULL-RESOLUTION LOCAL FOLDER STORAGE (desktop Chrome/Edge/Brave only) ──
    Original, uncompressed images are saved as real files in a folder you choose
    on your computer. Only a small compressed thumbnail syncs to the cloud/mobile. */
-const BUILD_TAG="BUILD-2026-08-05-D";
+const BUILD_TAG="BUILD-2026-08-06-E";
 const FS_SUPPORTED=typeof window!=="undefined"&&"showDirectoryPicker" in window;
 function idbOpen(){
   return new Promise((resolve,reject)=>{
@@ -258,6 +258,83 @@ function DateInput({value,onChange,disabled,accent}){
     <input type="date" value={value||""} disabled={disabled} onChange={e=>onChange(e.target.value)} style={{position:"absolute",inset:0,opacity:0,width:"100%",height:"100%",border:"none",cursor:disabled?"default":"pointer"}}/>
   </div>
 }
+function FurnitureCategoryModelPicker({db,saveDb,galleries,catKey,varKey,onSelect}){
+  const[newCatMode,setNewCatMode]=useState(false);
+  const[newCatName,setNewCatName]=useState("");
+  const[newCatVarName,setNewCatVarName]=useState("");
+  const[newModelMode,setNewModelMode]=useState(false);
+  const[newModelName,setNewModelName]=useState("");
+  const[dropdownOpen,setDropdownOpen]=useState(false);
+
+  const fCat=catKey?db[catKey]:null;
+  const fVar=fCat&&varKey?fCat.variants[varKey]:null;
+  const inp={width:"100%",border:"1px solid #ddd",borderRadius:6,padding:"6px 8px",fontSize:10,marginBottom:6,boxSizing:"border-box"};
+  const coverFor=(vk)=>(galleries&&galleries[`${catKey}__${vk}`]&&galleries[`${catKey}__${vk}`].coverImage)||null;
+
+  const createNewCategory=()=>{
+    const catName=newCatName.trim()||`নতুন ফার্নিচার ${Object.keys(db).length+1}`;
+    const varName=newCatVarName.trim()||"স্ট্যান্ডার্ড মডেল";
+    const newCatKey="cat_"+Date.now();
+    const newVarKey="var_"+Date.now();
+    const code=autoCode(catName+" "+varName,String(Math.floor(Math.random()*900+100)));
+    const nd=JSON.parse(JSON.stringify(db));
+    nd[newCatKey]={bn:catName,en:catName,variants:{[newVarKey]:{bn:varName,code,sections:[{name:"কাঠের তালিকা (পরে যোগ করুন)",pieces:[]}]}}};
+    saveDb(nd);
+    onSelect(newCatKey,newVarKey);
+    setNewCatMode(false);setNewCatName("");setNewCatVarName("");
+  };
+  const createNewModel=()=>{
+    const varName=newModelName.trim()||`নতুন মডেল ${Object.keys(fCat.variants).length+1}`;
+    const newVarKey="var_"+Date.now();
+    const code=autoCode((fCat.bn||"")+" "+varName,String(Math.floor(Math.random()*900+100)));
+    const nd=JSON.parse(JSON.stringify(db));
+    nd[catKey].variants[newVarKey]={bn:varName,code,sections:[{name:"কাঠের তালিকা (পরে যোগ করুন)",pieces:[]}]};
+    saveDb(nd);
+    onSelect(catKey,newVarKey);
+    setNewModelMode(false);setNewModelName("");
+  };
+
+  return<div>
+    {!newCatMode&&<div style={{display:"flex",gap:6,marginBottom:6}}>
+      <select value={catKey||""} onChange={e=>onSelect(e.target.value,"")} style={{...inp,marginBottom:0,flex:1}}>
+        <option value="">-- ক্যাটাগরি নির্বাচন করুন --</option>
+        {Object.entries(db).map(([k,c])=><option key={k} value={k}>{c.bn}</option>)}
+      </select>
+      <button type="button" onClick={()=>setNewCatMode(true)} style={{background:"#f5f3ff",border:"1px solid #ddd6fe",color:"#6d28d9",borderRadius:6,padding:"0 9px",fontSize:9,fontWeight:700,whiteSpace:"nowrap"}}>+ নতুন</button>
+    </div>}
+    {newCatMode&&<div style={{background:"#f5f3ff",borderRadius:7,padding:8,marginBottom:6,border:"1px solid #ddd6fe"}}>
+      <input value={newCatName} onChange={e=>setNewCatName(e.target.value)} placeholder="ফার্নিচারের নাম" style={inp}/>
+      <input value={newCatVarName} onChange={e=>setNewCatVarName(e.target.value)} placeholder="মডেল/বিবরণ" style={{...inp,marginBottom:0}}/>
+      <div style={{display:"flex",gap:5,marginTop:6}}>
+        <button type="button" onClick={()=>{setNewCatMode(false);setNewCatName("");setNewCatVarName("")}} style={{flex:1,background:"white",border:"1px solid #ddd",borderRadius:5,padding:"6px",fontSize:9}}>বাতিল</button>
+        <button type="button" onClick={createNewCategory} style={{flex:2,background:"#6d28d9",color:"white",border:"none",borderRadius:5,padding:"6px",fontSize:9,fontWeight:700}}>তৈরি করুন</button>
+      </div>
+    </div>}
+
+    {fCat&&!newCatMode&&(newModelMode?<div style={{background:"#f5f3ff",borderRadius:7,padding:8,marginBottom:6,border:"1px solid #ddd6fe"}}>
+        <input value={newModelName} onChange={e=>setNewModelName(e.target.value)} placeholder="মডেলের নাম" style={{...inp,marginBottom:0}} autoFocus/>
+        <div style={{display:"flex",gap:5,marginTop:6}}>
+          <button type="button" onClick={()=>{setNewModelMode(false);setNewModelName("")}} style={{flex:1,background:"white",border:"1px solid #ddd",borderRadius:5,padding:"6px",fontSize:9}}>বাতিল</button>
+          <button type="button" onClick={createNewModel} style={{flex:2,background:"#6d28d9",color:"white",border:"none",borderRadius:5,padding:"6px",fontSize:9,fontWeight:700}}>তৈরি করুন</button>
+        </div>
+      </div>
+    :<div style={{position:"relative",marginBottom:6}}>
+        <button type="button" onClick={()=>setDropdownOpen(!dropdownOpen)} style={{...inp,marginBottom:0,textAlign:"left",display:"flex",alignItems:"center",gap:6,cursor:"pointer",background:"white"}}>
+          {coverFor(varKey)&&<img src={coverFor(varKey)} style={{width:18,height:18,objectFit:"cover",borderRadius:4,flexShrink:0}} alt=""/>}
+          <span style={{flex:1,color:fVar?"#000":"#999",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{fVar?`${isEmptyWood(fVar)?"⚠️ ":""}[${fVar.code}] ${fVar.bn}`:"-- মডেল নির্বাচন করুন --"}</span>
+          <span style={{color:"#888"}}>▾</span>
+        </button>
+        {dropdownOpen&&<div style={{position:"absolute",top:"105%",left:0,right:0,background:"white",border:"1.5px solid #ddd",borderRadius:8,boxShadow:"0 4px 16px rgba(0,0,0,.12)",zIndex:20,maxHeight:220,overflowY:"auto"}}>
+          {Object.entries(fCat.variants).map(([k,v])=><div key={k} onClick={()=>{onSelect(catKey,k);setDropdownOpen(false)}} style={{display:"flex",alignItems:"center",gap:6,padding:"7px 9px",cursor:"pointer",borderBottom:"1px solid #f5f5f5"}}>
+            {coverFor(k)?<img src={coverFor(k)} style={{width:26,height:26,objectFit:"cover",borderRadius:5,flexShrink:0,border:"1px solid #eee"}} alt=""/>:<div style={{width:26,height:26,background:"#f3f4f6",borderRadius:5,flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,color:"#ccc"}}>🪑</div>}
+            <span style={{fontSize:10,color:"#222"}}>{isEmptyWood(v)?"⚠️ ":""}[{v.code}] {v.bn}</span>
+          </div>)}
+          <div onClick={()=>{setNewModelMode(true);setDropdownOpen(false)}} style={{padding:"8px 9px",cursor:"pointer",color:"#6d28d9",fontWeight:700,fontSize:10}}>➕ নতুন মডেল যোগ করুন...</div>
+        </div>}
+      </div>
+    )}
+  </div>;
+}
 function IR({l,v}){if(!v)return null;return<div style={{display:"flex",gap:6,marginBottom:4,fontSize:11}}><span style={{color:"#888",flexShrink:0,minWidth:90}}>{l}:</span><span style={{fontWeight:600,color:"#222"}}>{v}</span></div>}
 function Hdr({title,sub,no,bg}){return<><div style={{background:bg,color:"white",padding:"10px 14px"}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}><div><div style={{fontSize:16,fontWeight:800}}>রূপালী ফার্নিচার</div><div style={{fontSize:9,opacity:.88}}>শেরে বাংলা ফজলুল হক রোড, ডুকু ব্রিজ ১ সংলগ্ন, সিরাজগঞ্জ | ☎ 01711-318070 | পরিচালক: সাদমান সাকিব</div></div><div style={{textAlign:"right"}}><div style={{fontSize:9,opacity:.7}}>অর্ডার নং</div><div style={{fontSize:11,fontWeight:800}}>{no}</div></div></div></div><div style={{background:"#111",color:"white",padding:"4px 14px",display:"flex",justifyContent:"space-between"}}><span style={{fontSize:11,fontWeight:700}}>{title}</span><span style={{fontSize:9,opacity:.6}}>{sub}</span></div></>}
 function PrintLog({log}){
@@ -324,6 +401,7 @@ function S1({order,onPrint}){
         {it.notes&&<div style={{color:"#888",marginTop:1}}>⚙ {it.notes}</div>}
       </div>)}
       <div style={{background:"#fff0f0",borderRadius:7,padding:"8px",marginTop:4}}>
+        <div style={{display:"flex",justifyContent:"space-between",fontSize:11,marginBottom:5}}><span style={{color:"#555"}}>মোট মূল্য:</span><span style={{fontWeight:700}}>{money(cust.total)}</span></div>
         <div style={{fontWeight:700,fontSize:10,color:RED,marginBottom:4}}>পেমেন্টের বিবরণ</div>
         {(payments||[]).map((p,i)=><div key={i} style={{display:"flex",justifyContent:"space-between",fontSize:10,marginBottom:2}}><span>{fmtDate(p.date)} — {p.note||"পেমেন্ট"}</span><span style={{fontWeight:700}}>{money(p.amount)}</span></div>)}
         <div style={{display:"flex",justifyContent:"space-between",borderTop:"1px solid #fcc",paddingTop:5,marginTop:4}}><span style={{fontWeight:700,fontSize:11,color:RED}}>বাকি:</span><span style={{fontWeight:800,fontSize:12,color:RED}}>{money(rem)}</span></div>
@@ -337,7 +415,7 @@ function S1({order,onPrint}){
 }
 
 /* ── SLIP 2: ORDER BOOK ── */
-function S2({order,onPrint,db,saveDb,onUpdateOrder}){
+function S2({order,onPrint,db,saveDb,galleries,onUpdateOrder}){
   const{cust,items,payments,refImg,refImgs,no,printLogs}=order;
   const images=refImgs&&refImgs.length?refImgs:(refImg?[{src:refImg,caption:"রেফারেন্স ছবি"}]:[]);
   const totalPaid=(payments||[]).reduce((s,p)=>s+(parseFloat(p.amount)||0),0);
@@ -449,13 +527,7 @@ function S2({order,onPrint,db,saveDb,onUpdateOrder}){
       {items.map((it,i)=><div key={i} style={{border:"1.5px solid #bfdbfe",borderRadius:6,padding:"6px 9px",marginBottom:5,fontSize:10}}>
         {editIdx===i?<div className="no-print" style={{background:"#eff6ff",borderRadius:7,padding:8}}>
           <div style={{fontSize:9,fontWeight:700,color:"#1d4ed8",marginBottom:6}}>ফার্নিচার পরিবর্তন করুন</div>
-          <select value={editForm.catKey} onChange={e=>setEditForm({...editForm,catKey:e.target.value,varKey:""})} style={{width:"100%",border:"1px solid #ddd",borderRadius:6,padding:"6px 8px",fontSize:10,marginBottom:6}}>
-            {Object.entries(db).map(([k,c])=><option key={k} value={k}>{c.bn}</option>)}
-          </select>
-          <select value={editForm.varKey} onChange={e=>setEditForm({...editForm,varKey:e.target.value})} style={{width:"100%",border:"1px solid #ddd",borderRadius:6,padding:"6px 8px",fontSize:10,marginBottom:6}}>
-            <option value="">-- মডেল নির্বাচন করুন --</option>
-            {db[editForm.catKey]&&Object.entries(db[editForm.catKey].variants).map(([k,v])=><option key={k} value={k}>[{v.code}] {v.bn}</option>)}
-          </select>
+          <FurnitureCategoryModelPicker db={db} saveDb={saveDb} galleries={galleries} catKey={editForm.catKey} varKey={editForm.varKey} onSelect={(ck,vk)=>setEditForm({...editForm,catKey:ck,varKey:vk})}/>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,marginBottom:6}}>
             <select value={editForm.wood} onChange={e=>setEditForm({...editForm,wood:e.target.value})} style={{border:"1px solid #ddd",borderRadius:6,padding:"6px 8px",fontSize:10}}>
               {Object.entries(WOOD).map(([k,v])=><option key={k} value={k}>{v.bn}</option>)}
@@ -484,24 +556,7 @@ function S2({order,onPrint,db,saveDb,onUpdateOrder}){
       <div className="no-print">
         {addingNew?<div style={{background:"#eff6ff",borderRadius:9,padding:10,marginBottom:8}}>
           <div style={{fontSize:10,fontWeight:700,color:"#1d4ed8",marginBottom:7}}>নতুন ফার্নিচার যোগ করুন</div>
-          {!newCatMode&&<button onClick={()=>setNewCatMode(true)} style={{background:"white",border:"1px solid #93c5fd",color:"#1d4ed8",borderRadius:6,padding:"4px 9px",fontSize:9,fontWeight:700,marginBottom:7}}>+ নতুন ক্যাটাগরি</button>}
-          {newCatMode?<div style={{background:"white",borderRadius:7,padding:8,marginBottom:7,border:"1px solid #93c5fd"}}>
-            <input value={newCatName} onChange={e=>setNewCatName(e.target.value)} placeholder="ফার্নিচারের নাম" style={{width:"100%",border:"1px solid #ddd",borderRadius:5,padding:"6px 7px",fontSize:10,marginBottom:5}}/>
-            <input value={newCatVarName} onChange={e=>setNewCatVarName(e.target.value)} placeholder="মডেল/বিবরণ" style={{width:"100%",border:"1px solid #ddd",borderRadius:5,padding:"6px 7px",fontSize:10,marginBottom:6}}/>
-            <div style={{display:"flex",gap:5}}>
-              <button onClick={()=>{setNewCatMode(false);setNewCatName("");setNewCatVarName("")}} style={{flex:1,background:"#f3f4f6",border:"none",borderRadius:5,padding:"6px",fontSize:9}}>বাতিল</button>
-              <button onClick={createNewCategoryInline} style={{flex:2,background:"#1d4ed8",color:"white",border:"none",borderRadius:5,padding:"6px",fontSize:9,fontWeight:700}}>তৈরি করুন</button>
-            </div>
-          </div>:<>
-            <select value={newItem.catKey} onChange={e=>setNewItem({...newItem,catKey:e.target.value,varKey:""})} style={{width:"100%",border:"1px solid #ddd",borderRadius:6,padding:"6px 8px",fontSize:10,marginBottom:6}}>
-              <option value="">-- ক্যাটাগরি নির্বাচন করুন --</option>
-              {Object.entries(db).map(([k,c])=><option key={k} value={k}>{c.bn}</option>)}
-            </select>
-            {newItem.catKey&&db[newItem.catKey]&&<select value={newItem.varKey} onChange={e=>setNewItem({...newItem,varKey:e.target.value})} style={{width:"100%",border:"1px solid #ddd",borderRadius:6,padding:"6px 8px",fontSize:10,marginBottom:6}}>
-              <option value="">-- মডেল নির্বাচন করুন --</option>
-              {Object.entries(db[newItem.catKey].variants).map(([k,v])=><option key={k} value={k}>[{v.code}] {v.bn}</option>)}
-            </select>}
-          </>}
+          <FurnitureCategoryModelPicker db={db} saveDb={saveDb} galleries={galleries} catKey={newItem.catKey} varKey={newItem.varKey} onSelect={(ck,vk)=>setNewItem({...newItem,catKey:ck,varKey:vk})}/>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,marginBottom:6}}>
             <select value={newItem.wood} onChange={e=>setNewItem({...newItem,wood:e.target.value})} style={{border:"1px solid #ddd",borderRadius:6,padding:"6px 8px",fontSize:10}}>
               {Object.entries(WOOD).map(([k,v])=><option key={k} value={k}>{v.bn}</option>)}
@@ -510,12 +565,13 @@ function S2({order,onPrint,db,saveDb,onUpdateOrder}){
           </div>
           <textarea rows={2} value={newItem.notes} onChange={e=>setNewItem({...newItem,notes:e.target.value})} placeholder="বিশেষ নির্দেশনা" style={{width:"100%",border:"1px solid #ddd",borderRadius:6,padding:"6px 8px",fontSize:10,marginBottom:7,resize:"vertical"}}/>
           <div style={{display:"flex",gap:6}}>
-            <button onClick={()=>{setAddingNew(false);setNewCatMode(false)}} style={{flex:1,background:"white",border:"1px solid #ddd",borderRadius:6,padding:"7px",fontSize:10}}>বাতিল</button>
+            <button onClick={()=>{setAddingNew(false)}} style={{flex:1,background:"white",border:"1px solid #ddd",borderRadius:6,padding:"7px",fontSize:10}}>বাতিল</button>
             <button onClick={addNewItem} disabled={!newItem.varKey} style={{flex:2,background:newItem.varKey?"#1d4ed8":"#ccc",color:"white",border:"none",borderRadius:6,padding:"7px",fontSize:10,fontWeight:700}}>যোগ করুন</button>
           </div>
         </div>:<button onClick={()=>setAddingNew(true)} style={{width:"100%",background:"white",border:"2px dashed #1d4ed8",color:"#1d4ed8",borderRadius:8,padding:"9px",fontSize:11,fontWeight:600,marginBottom:8}}>+ আরেকটি ফার্নিচার যোগ করুন</button>}
       </div>
       <div style={{background:"#eff6ff",borderRadius:7,padding:"8px",marginTop:4}}>
+        <div style={{display:"flex",justifyContent:"space-between",fontSize:10,marginBottom:5}}><span style={{color:"#555"}}>মোট মূল্য:</span><span style={{fontWeight:700}}>{money(cust.total)}</span></div>
         <div style={{fontWeight:700,fontSize:10,color:"#1d4ed8",marginBottom:4}}>পেমেন্ট ট্র্যাকিং</div>
         {(payments||[]).map((p,i)=><div key={i} style={{display:"flex",justifyContent:"space-between",fontSize:10,marginBottom:2,borderBottom:"1px dashed #bfdbfe",paddingBottom:2}}><span>{fmtDate(p.date)} — {p.note||"পেমেন্ট"}</span><span style={{fontWeight:700}}>{money(p.amount)}</span></div>)}
         <div style={{display:"flex",justifyContent:"space-between",paddingTop:4,marginTop:2}}><span style={{fontSize:10}}>মোট পরিশোধ:</span><span style={{fontWeight:700,color:"#166534"}}>{money(totalPaid)}</span></div>
@@ -979,6 +1035,7 @@ function App({firebaseConfig,onResetConfig}){
   const[timedOut,setTimedOut]=useState(false);
   const[retryKey,setRetryKey]=useState(0);
   const[folderStatus,setFolderStatus]=useState({supported:FS_SUPPORTED,connected:false,name:""});
+  const[galleries,setGalleries]=useState({});
   const fsRef=useRef(null);
 
   useEffect(()=>{
@@ -1003,6 +1060,11 @@ function App({firebaseConfig,onResetConfig}){
     const handle=await pickImageFolder();
     if(handle)setFolderStatus({supported:true,connected:true,name:handle.name});
     else alert("ফোল্ডার নির্বাচন করা যায়নি বা বাতিল করা হয়েছে।");
+  };
+  const saveGalleryEntry=(catKey,varKey,data)=>{
+    const key=`${catKey}__${varKey}`;
+    setGalleries(prev=>({...prev,[key]:data}));
+    if(fsRef.current)fsRef.current.collection("galleries").doc(key).set(data).catch(err=>alert("⚠️ ছবি সেভ করতে সমস্যা হয়েছে: "+err.message));
   };
 
   useEffect(()=>{
@@ -1032,9 +1094,37 @@ function App({firebaseConfig,onResetConfig}){
 
       const unsubDb=firestore.doc("meta/db").onSnapshot(snap=>{
         clearTimeout(timer);setTimedOut(false);
-        if(snap.exists){setDb(snap.data())}
+        if(snap.exists){
+          const data=snap.data();
+          // Migration: strip any legacy gallery/coverImage fields out of the main db doc
+          // (these can bloat the single document past Firestore's 1MB limit, silently
+          // blocking future writes like new categories/models). Move them to their own
+          // "galleries" collection instead.
+          let hadLegacyImages=false;
+          const slim=JSON.parse(JSON.stringify(data));
+          Object.entries(slim).forEach(([catKey,cat])=>{
+            if(!cat.variants)return;
+            Object.entries(cat.variants).forEach(([varKey,v])=>{
+              if(v.gallery||v.coverImage){
+                hadLegacyImages=true;
+                firestore.collection("galleries").doc(`${catKey}__${varKey}`).set({gallery:v.gallery||[],coverImage:v.coverImage||null},{merge:true}).catch(()=>{});
+                delete v.gallery;delete v.coverImage;
+              }
+            });
+          });
+          setDb(slim);
+          if(hadLegacyImages){
+            firestore.doc("meta/db").set(slim).catch(()=>{});
+          }
+        }
         else{const seed=JSON.parse(JSON.stringify(DEFAULT_DB));firestore.doc("meta/db").set(seed).catch(()=>{});setDb(seed)}
       },err=>{clearTimeout(timer);setConnError(err.message)});
+
+      const unsubGalleries=firestore.collection("galleries").onSnapshot(snap=>{
+        const map={};
+        snap.docs.forEach(d=>{map[d.id]=d.data()});
+        setGalleries(map);
+      },err=>{});
 
       const unsubCarp=firestore.doc("meta/carpenters").onSnapshot(snap=>{
         setCarpenters(snap.exists?(snap.data().list||[]):[]);
@@ -1063,7 +1153,7 @@ function App({firebaseConfig,onResetConfig}){
         localStorage.setItem("rf_migrated_to_cloud","true");
       })();
 
-      return()=>{clearTimeout(timer);unsubOrders();unsubExpenses();unsubLots();unsubDb();unsubCarp()};
+      return()=>{clearTimeout(timer);unsubOrders();unsubExpenses();unsubLots();unsubDb();unsubGalleries();unsubCarp()};
     }catch(e){
       clearTimeout(timer);
       setConnError(e.message);
@@ -1126,10 +1216,10 @@ function App({firebaseConfig,onResetConfig}){
     </div>;
     return<div style={{padding:40,textAlign:"center"}}><div style={{fontSize:9,color:"#ccc",marginBottom:10}}>{BUILD_TAG}</div>সিঙ্ক হচ্ছে...</div>;
   }
-  if(page==="preview")return<Preview order={viewed||draft} onBack={()=>{setViewed(null);setPage(viewed?"history":"home")}} slip={slip} setSlip={setSlip} onUpdate={updateOrder} onDelete={deleteOrderPermanently} db={db} saveDb={saveDb} carpenters={carpenters} saveCarpenters={saveCarpenters}/>;
-  if(page==="form")return<Form onSave={saveOrder} onBack={()=>setPage("home")} db={db} saveDb={saveDb}/>;
+  if(page==="preview")return<Preview order={viewed||draft} onBack={()=>{setViewed(null);setPage(viewed?"history":"home")}} slip={slip} setSlip={setSlip} onUpdate={updateOrder} onDelete={deleteOrderPermanently} db={db} saveDb={saveDb} carpenters={carpenters} saveCarpenters={saveCarpenters} galleries={galleries}/>;
+  if(page==="form")return<Form onSave={saveOrder} onBack={()=>setPage("home")} db={db} saveDb={saveDb} galleries={galleries}/>;
   if(page==="history")return<Hist orders={orders} onBack={()=>setPage("home")} onView={o=>{setViewed(o);setSlip(0);setPage("preview")}}/>;
-  if(page==="manage")return<ManageDB db={db} saveDb={saveDb} onBack={()=>setPage("home")}/>;
+  if(page==="manage")return<ManageDB db={db} saveDb={saveDb} galleries={galleries} saveGalleryEntry={saveGalleryEntry} onBack={()=>setPage("home")}/>;
   if(page==="woodstock")return<WoodStockPage woodLots={woodLots} saveWoodLots={saveWoodLots} onBack={()=>setPage("home")}/>;
   if(page==="expense")return<ExpensePage expenses={expenses} onSave={saveExpense} onBack={()=>setPage("home")}/>;
   return<Home orders={orders} expenses={expenses} woodLots={woodLots} db={db} onNew={()=>setPage("form")} onHist={()=>setPage("history")} onManage={()=>setPage("manage")} onExpense={()=>setPage("expense")} onWoodStock={()=>setPage("woodstock")} onView={o=>{setViewed(o);setSlip(0);setPage("preview")}} online={online} connError={connError} onResetConfig={onResetConfig} folderStatus={folderStatus} connectFolder={connectFolder}/>;
@@ -1330,11 +1420,14 @@ function Home({orders,expenses,woodLots,db,onNew,onHist,onManage,onExpense,onWoo
           {stats.running.slice(0,8).map((o,i)=>{
             const urgent=o.daysLeft<=3;
             const warn=o.daysLeft>3&&o.daysLeft<=7;
+            const refThumb=(o.refImgs&&o.refImgs.length&&o.refImgs[0].src)||o.refImg||null;
             return<div key={i} onClick={()=>onView(o)} style={{padding:"10px 12px",borderBottom:i<stats.running.length-1?"1px solid #f2f2f2":"none",cursor:"pointer",background:urgent?"#fef2f2":"white"}}>
               <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:7}}>
                 <div style={{width:26,height:26,borderRadius:"50%",background:urgent?RED:warn?"#f97316":"#94a3b8",color:"white",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:800,flexShrink:0}}>{i+1}</div>
+                {refThumb&&<img src={refThumb} style={{width:34,height:34,objectFit:"cover",borderRadius:7,border:"1px solid #eee",flexShrink:0}} alt=""/>}
                 <div style={{flex:1,minWidth:0}}>
                   <div style={{fontSize:12,fontWeight:700,color:"#222",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{o.cust.name} — {o.no}</div>
+                  <div style={{fontSize:10,color:"#999",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",marginTop:1}}>{o.items.map(it=>it.variantBn).join(", ")}</div>
                   <div style={{display:"flex",flexWrap:"wrap",gap:3,marginTop:2}}>
                     {[...new Set(o.items.map(it=>(db&&it.catKey&&db[it.catKey])?db[it.catKey].bn:it.variantBn.split(" ")[0]))].map((cat,ci)=><span key={ci} style={{fontSize:9,background:"#f1f5f9",color:"#475569",borderRadius:10,padding:"1px 7px"}}>{cat}</span>)}
                   </div>
@@ -1768,7 +1861,7 @@ function WoodStockPage({woodLots,saveWoodLots,onBack}){
 }
 
 /* ── MANAGE DB ── */
-function ManageDB({db,saveDb,onBack}){
+function ManageDB({db,saveDb,galleries,saveGalleryEntry,onBack}){
   const[tab,setTab]=useState("list");
   const[newCat,setNewCat]=useState({key:"",bn:"",en:""});
   const[newVar,setNewVar]=useState({catKey:"",key:"",bn:"",code:""});
@@ -1802,33 +1895,33 @@ function ManageDB({db,saveDb,onBack}){
   const[galleryVar,setGalleryVar]=useState("");
   const galleryInput=useRef();
   const openGallery=(catK,varK)=>{setGalleryCat(catK);setGalleryVar(varK);setTab("gallery")};
+  const galleryKey=(catK,varK)=>`${catK}__${varK}`;
+  const currentGallery=()=>galleries&&galleries[galleryKey(galleryCat,galleryVar)]||{gallery:[],coverImage:null};
   const addGalleryImages=async(e)=>{
     const files=Array.from(e.target.files||[]);
     e.target.value="";
     if(files.length===0)return;
-    let working=JSON.parse(JSON.stringify(db));
+    let cur=JSON.parse(JSON.stringify(currentGallery()));
+    if(!cur.gallery)cur.gallery=[];
     for(const file of files){
       const compressed=await compressImage(file);
       if(!compressed)continue;
-      const v2=working[galleryCat].variants[galleryVar];
-      if(!v2.gallery)v2.gallery=[];
-      v2.gallery.push(compressed);
-      if(!v2.coverImage)v2.coverImage=compressed;
+      cur.gallery.push(compressed);
+      if(!cur.coverImage)cur.coverImage=compressed;
     }
-    saveDb(working);
+    saveGalleryEntry(galleryCat,galleryVar,cur);
   };
   const removeGalleryImage=(idx)=>{
-    const nd=JSON.parse(JSON.stringify(db));
-    const variant=nd[galleryCat].variants[galleryVar];
-    const removed=variant.gallery[idx];
-    variant.gallery.splice(idx,1);
-    if(variant.coverImage===removed)variant.coverImage=variant.gallery[0]||null;
-    saveDb(nd);
+    const cur=JSON.parse(JSON.stringify(currentGallery()));
+    const removed=cur.gallery[idx];
+    cur.gallery.splice(idx,1);
+    if(cur.coverImage===removed)cur.coverImage=cur.gallery[0]||null;
+    saveGalleryEntry(galleryCat,galleryVar,cur);
   };
   const setCoverImage=(img)=>{
-    const nd=JSON.parse(JSON.stringify(db));
-    nd[galleryCat].variants[galleryVar].coverImage=img;
-    saveDb(nd);
+    const cur=JSON.parse(JSON.stringify(currentGallery()));
+    cur.coverImage=img;
+    saveGalleryEntry(galleryCat,galleryVar,cur);
   };
   const[renamingCat,setRenamingCat]=useState(null);
   const[renameVal,setRenameVal]=useState("");
@@ -1867,8 +1960,8 @@ function ManageDB({db,saveDb,onBack}){
               <button onClick={()=>saveRenameVar(catK,vK)} style={{background:"#6d28d9",color:"white",border:"none",borderRadius:6,padding:"5px 9px",fontSize:11,fontWeight:700}}>✓</button>
               <button onClick={()=>setRenamingVar(null)} style={{background:"#f3f4f6",border:"none",borderRadius:6,padding:"5px 9px",fontSize:11}}>✕</button>
             </>:<>
-              {v.coverImage&&<img src={v.coverImage} style={{width:32,height:32,objectFit:"cover",borderRadius:6,border:"1px solid #eee",flexShrink:0}} alt=""/>}
-              <div style={{flex:1}}><div style={{fontSize:12,fontWeight:600}}>{isEmptyWood(v)?"⚠️ ":""}{v.bn}</div><div style={{fontSize:10,color:"#888",fontFamily:"monospace"}}>Code: {v.code}{isEmptyWood(v)?" — কাঠের মাপ ফাঁকা":""}{v.gallery&&v.gallery.length?` · ${v.gallery.length} ছবি`:""}</div></div>
+              {galleries&&galleries[`${catK}__${vK}`]&&galleries[`${catK}__${vK}`].coverImage&&<img src={galleries[`${catK}__${vK}`].coverImage} style={{width:32,height:32,objectFit:"cover",borderRadius:6,border:"1px solid #eee",flexShrink:0}} alt=""/>}
+              <div style={{flex:1}}><div style={{fontSize:12,fontWeight:600}}>{isEmptyWood(v)?"⚠️ ":""}{v.bn}</div><div style={{fontSize:10,color:"#888",fontFamily:"monospace"}}>Code: {v.code}{isEmptyWood(v)?" — কাঠের মাপ ফাঁকা":""}{galleries&&galleries[`${catK}__${vK}`]&&galleries[`${catK}__${vK}`].gallery&&galleries[`${catK}__${vK}`].gallery.length?` · ${galleries[`${catK}__${vK}`].gallery.length} ছবি`:""}</div></div>
               <button onClick={()=>startRenameVar(catK,vK)} style={{background:"#f5f3ff",border:"none",borderRadius:6,padding:"5px 8px",color:"#6d28d9",fontSize:10,fontWeight:600}}>✏️ নাম</button>
               <button onClick={()=>openGallery(catK,vK)} style={{background:"#fef3c7",border:"none",borderRadius:6,padding:"5px 8px",color:"#92400e",fontSize:10,fontWeight:600}}>🖼️ ছবি</button>
               <button onClick={()=>openEdit(catK,vK)} style={{background:"#f5f3ff",border:"none",borderRadius:6,padding:"5px 10px",color:"#6d28d9",fontSize:11,fontWeight:600}}>কাঠ সম্পাদনা</button>
@@ -1922,8 +2015,8 @@ function ManageDB({db,saveDb,onBack}){
         <input ref={galleryInput} type="file" accept="image/*" multiple onChange={addGalleryImages} style={{display:"none"}}/>
         <button onClick={()=>galleryInput.current.click()} style={{width:"100%",background:"#fef3c7",border:"2px dashed #92400e",color:"#92400e",borderRadius:10,padding:"13px",fontSize:13,fontWeight:600,marginBottom:14}}>📷 ছবি যোগ করুন (একাধিক)</button>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8}}>
-          {(db[galleryCat]?.variants[galleryVar]?.gallery||[]).map((img,idx)=>{
-            const isCover=db[galleryCat].variants[galleryVar].coverImage===img;
+          {(currentGallery().gallery||[]).map((img,idx)=>{
+            const isCover=currentGallery().coverImage===img;
             return<div key={idx} style={{position:"relative",borderRadius:9,overflow:"hidden",border:isCover?`3px solid #16a34a`:"1px solid #eee"}}>
               <img src={img} style={{width:"100%",height:90,objectFit:"cover",display:"block"}} alt=""/>
               {isCover&&<div style={{position:"absolute",top:3,left:3,background:"#16a34a",color:"white",fontSize:8,fontWeight:700,padding:"2px 6px",borderRadius:20}}>✓ কভার</div>}
@@ -1934,7 +2027,7 @@ function ManageDB({db,saveDb,onBack}){
             </div>
           })}
         </div>
-        {(!db[galleryCat]?.variants[galleryVar]?.gallery||db[galleryCat].variants[galleryVar].gallery.length===0)&&<div style={{textAlign:"center",color:"#aaa",fontSize:12,padding:20}}>এখনো কোনো ছবি যোগ করা হয়নি</div>}
+        {(!currentGallery().gallery||currentGallery().gallery.length===0)&&<div style={{textAlign:"center",color:"#aaa",fontSize:12,padding:20}}>এখনো কোনো ছবি যোগ করা হয়নি</div>}
         <button onClick={()=>setTab("list")} style={{width:"100%",background:"#f3f4f6",border:"none",borderRadius:9,padding:"12px",fontSize:13,fontWeight:600,marginTop:16}}>← তালিকায় ফিরে যান</button>
       </div>}
     </div>
@@ -1942,7 +2035,7 @@ function ManageDB({db,saveDb,onBack}){
 }
 
 /* ── FORM (no wood editing here anymore, smart delivery date, inline new-category) ── */
-function Form({onSave,onBack,db,saveDb}){
+function Form({onSave,onBack,db,saveDb,galleries}){
   const today=todayStr();
   const[orderNo]=useState(()=>genNo());
   const[step,setStep]=useState(1);
@@ -2095,51 +2188,9 @@ function Form({onSave,onBack,db,saveDb}){
           </div>
         </div>)}
         {adding?<div style={{background:"white",borderRadius:12,padding:"14px",marginBottom:10,boxShadow:"0 2px 8px rgba(0,0,0,.08)"}}>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:11}}>
-            <div style={{fontWeight:700,fontSize:13}}>ফার্নিচার যোগ করুন</div>
-            {!newCatMode&&<button onClick={()=>setNewCatMode(true)} style={{background:"#f5f3ff",border:"1px solid #ddd6fe",color:"#6d28d9",borderRadius:7,padding:"5px 10px",fontSize:11,fontWeight:700}}>+ নতুন ক্যাটাগরি</button>}
-          </div>
-          {newCatMode?<div style={{background:"#f5f3ff",borderRadius:10,padding:12,marginBottom:12,border:"1.5px solid #ddd6fe"}}>
-            <div style={{fontWeight:700,fontSize:12,color:"#6d28d9",marginBottom:8}}>🆕 নতুন ফার্নিচার ক্যাটাগরি তৈরি করুন</div>
-            <div style={{marginBottom:8}}>{lbl("ফার্নিচারের নাম (যেমন: শোকেস, কেবিনেট)")}<input value={newCatName} onChange={e=>setNewCatName(e.target.value)} placeholder="খালি রাখলে ডিফল্ট নাম হবে" style={inp}/></div>
-            <div style={{marginBottom:10}}>{lbl("মডেল/বিবরণ (যেমন: 5ft x 3ft, 3 door cabinet)")}<input value={newCatVarName} onChange={e=>setNewCatVarName(e.target.value)} placeholder="খালি রাখলে ডিফল্ট নাম হবে" style={inp}/></div>
-            <div style={{background:"#fffbeb",borderRadius:7,padding:"7px 9px",fontSize:10,color:"#92400e",marginBottom:10}}>ℹ️ কাঠের মাপ এখন ফাঁকা থাকবে। অর্ডার কনফার্ম হওয়ার পর কার্পেন্টার স্লিপ থেকে মাপ যোগ করে নিন। নাম পরে ডেটাবেস থেকে এডিট করা যাবে।</div>
-            <div style={{display:"flex",gap:8}}>
-              <button onClick={()=>{setNewCatMode(false);setNewCatName("");setNewCatVarName("")}} style={{flex:1,background:"white",border:"1px solid #ddd",borderRadius:8,padding:"9px",fontSize:12}}>বাতিল</button>
-              <button onClick={createNewCategory} style={{flex:2,background:"#6d28d9",color:"white",border:"none",borderRadius:8,padding:"9px",fontSize:12,fontWeight:700}}>তৈরি করে যোগ করুন</button>
-            </div>
-          </div>:<>
-          {lbl("ক্যাটাগরি")}
-          <select value={ni.catKey} onChange={e=>setNi({...ni,catKey:e.target.value,varKey:""})} style={{...inp,marginBottom:10}}>
-            <option value="">-- নির্বাচন করুন --</option>
-            {Object.entries(db).map(([k,c])=><option key={k} value={k}>{c.bn}</option>)}
-          </select>
-          {fCat&&<>{lbl("মডেল / ভেরিয়েন্ট")}
-            {ni.varKey==="__NEW__"?<div style={{background:"#f5f3ff",borderRadius:9,padding:10,marginBottom:10,border:"1.5px solid #ddd6fe"}}>
-              <div style={{fontSize:11,fontWeight:700,color:"#6d28d9",marginBottom:6}}>নতুন মডেলের নাম লিখুন</div>
-              <input value={newModelName} onChange={e=>setNewModelName(e.target.value)} placeholder="যেমন: 3 door cabinet 5ft" style={{...inp,marginBottom:8}} autoFocus/>
-              <div style={{display:"flex",gap:6}}>
-                <button onClick={()=>{setNi({...ni,varKey:""});setNewModelName("")}} style={{flex:1,background:"white",border:"1px solid #ddd",borderRadius:7,padding:"7px",fontSize:11}}>বাতিল</button>
-                <button onClick={createNewModel} style={{flex:2,background:"#6d28d9",color:"white",border:"none",borderRadius:7,padding:"7px",fontSize:11,fontWeight:700}}>তৈরি করুন</button>
-              </div>
-            </div>:
-            <div style={{position:"relative",marginBottom:10}}>
-              <button type="button" onClick={()=>setVarDropdownOpen(!varDropdownOpen)} style={{...inp,textAlign:"left",display:"flex",alignItems:"center",gap:8,cursor:"pointer",background:"white"}}>
-                {fVar?.coverImage&&<img src={fVar.coverImage} style={{width:22,height:22,objectFit:"cover",borderRadius:5,flexShrink:0}} alt=""/>}
-                <span style={{flex:1,color:fVar?"#000":"#999"}}>{fVar?`${isEmptyWood(fVar)?"⚠️ ":""}[${fVar.code}] ${fVar.bn}`:"-- নির্বাচন করুন --"}</span>
-                <span style={{color:"#888"}}>▾</span>
-              </button>
-              {varDropdownOpen&&<div style={{position:"absolute",top:"105%",left:0,right:0,background:"white",border:"1.5px solid #ddd",borderRadius:9,boxShadow:"0 4px 16px rgba(0,0,0,.12)",zIndex:20,maxHeight:260,overflowY:"auto"}}>
-                {Object.entries(fCat.variants).map(([k,v])=><div key={k} onClick={()=>{setNi({...ni,varKey:k});setVarDropdownOpen(false)}} style={{display:"flex",alignItems:"center",gap:8,padding:"8px 10px",cursor:"pointer",borderBottom:"1px solid #f5f5f5"}} onMouseEnter={e=>e.currentTarget.style.background="#f9f9f9"} onMouseLeave={e=>e.currentTarget.style.background="white"}>
-                  {v.coverImage?<img src={v.coverImage} style={{width:34,height:34,objectFit:"cover",borderRadius:6,flexShrink:0,border:"1px solid #eee"}} alt=""/>:<div style={{width:34,height:34,background:"#f3f4f6",borderRadius:6,flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,color:"#ccc"}}>🪑</div>}
-                  <span style={{fontSize:12,color:"#222"}}>{isEmptyWood(v)?"⚠️ ":""}[{v.code}] {v.bn}</span>
-                </div>)}
-                <div onClick={()=>{setNi({...ni,varKey:"__NEW__"});setVarDropdownOpen(false)}} style={{padding:"9px 10px",cursor:"pointer",color:"#6d28d9",fontWeight:700,fontSize:12}}>➕ নতুন মডেল যোগ করুন...</div>
-              </div>}
-            </div>}
-            {fVar&&isEmptyWood(fVar)&&<div style={{background:"#fef2f2",border:"1px solid #fecaca",borderRadius:8,padding:"7px 10px",marginBottom:10,fontSize:10,color:"#991b1b"}}>⚠️ এই মডেলের কাঠের মাপ এখনো যোগ করা হয়নি। অর্ডার কনফার্ম করার পর কার্পেন্টার স্লিপ থেকে যোগ করুন।</div>}
-            </>}
-          </>}
+          <div style={{fontWeight:700,fontSize:13,marginBottom:11}}>ফার্নিচার যোগ করুন</div>
+          <FurnitureCategoryModelPicker db={db} saveDb={saveDb} galleries={galleries} catKey={ni.catKey} varKey={ni.varKey} onSelect={(ck,vk)=>setNi({...ni,catKey:ck,varKey:vk})}/>
+          {fVar&&isEmptyWood(fVar)&&<div style={{background:"#fef2f2",border:"1px solid #fecaca",borderRadius:8,padding:"7px 10px",marginBottom:10,fontSize:10,color:"#991b1b"}}>⚠️ এই মডেলের কাঠের মাপ এখনো যোগ করা হয়নি। অর্ডার কনফার্ম করার পর কার্পেন্টার স্লিপ থেকে যোগ করুন।</div>}
           {lbl("কাঠের ধরন")}
           <select value={ni.wood} onChange={e=>setNi({...ni,wood:e.target.value})} style={{...inp,marginBottom:10}}>
             {Object.entries(WOOD).map(([k,v])=><option key={k} value={k}>{v.bn} ({v.en})</option>)}
@@ -2152,7 +2203,7 @@ function Form({onSave,onBack,db,saveDb}){
           {lbl("বিশেষ নির্দেশনা")}
           <textarea rows={2} value={ni.notes} onChange={e=>setNi({...ni,notes:e.target.value})} style={{...inp,resize:"vertical",marginBottom:11}}/>
           <div style={{display:"flex",gap:8}}>
-            <button onClick={()=>{setAdding(false);setNewCatMode(false)}} style={{flex:1,background:"#f3f4f6",border:"none",borderRadius:9,padding:"11px",fontSize:13}}>বাতিল</button>
+            <button onClick={()=>{setAdding(false)}} style={{flex:1,background:"#f3f4f6",border:"none",borderRadius:9,padding:"11px",fontSize:13}}>বাতিল</button>
             <button onClick={addItem} disabled={!fVar} style={{flex:2,background:fVar?RED:"#ccc",color:"white",border:"none",borderRadius:9,padding:"11px",fontSize:13,fontWeight:700}}>যোগ করুন</button>
           </div>
         </div>:<button onClick={()=>setAdding(true)} style={{width:"100%",background:"white",border:`2px dashed ${RED}`,color:RED,borderRadius:10,padding:"13px",fontSize:13,fontWeight:600,marginBottom:12}}>+ ফার্নিচার যোগ করুন</button>}
@@ -2163,7 +2214,7 @@ function Form({onSave,onBack,db,saveDb}){
 }
 
 /* ── PREVIEW (each slip prints independently now) ── */
-function Preview({order,onBack,slip,setSlip,onUpdate,onDelete,db,saveDb,carpenters,saveCarpenters}){
+function Preview({order,onBack,slip,setSlip,onUpdate,onDelete,db,saveDb,carpenters,saveCarpenters,galleries}){
   const totalPaid=(order.payments||[]).reduce((s,p)=>s+(parseFloat(p.amount)||0),0);
   const isFullyPaid=parseFloat(order.cust.total)>0&&totalPaid>=(parseFloat(order.cust.total)||0);
   const[addingPay,setAddingPay]=useState(false);
@@ -2249,7 +2300,7 @@ function Preview({order,onBack,slip,setSlip,onUpdate,onDelete,db,saveDb,carpente
     <div className="print-wrap" style={{padding:"12px",maxWidth:640,margin:"0 auto"}}>
       <div className="slip-card" style={{background:"white",borderRadius:10,overflow:"hidden",boxShadow:"0 2px 10px rgba(0,0,0,.1)"}}>
         {slip===0&&<S1 order={order} onPrint={logPrint}/>}
-        {slip===1&&<S2 order={order} onPrint={logPrint} db={db} saveDb={saveDb} onUpdateOrder={onUpdate}/>}
+        {slip===1&&<S2 order={order} onPrint={logPrint} db={db} saveDb={saveDb} galleries={galleries} onUpdateOrder={onUpdate}/>}
         {slip===2&&<S3 order={order} onPrint={logPrint} onUpdateOrder={onUpdate} carpenters={carpenters} saveCarpenters={saveCarpenters}/>}
         {slip===3&&<S4 order={order} onPrint={logPrint} db={db} saveDb={saveDb} onUpdateOrder={onUpdate}/>}
         {slip===4&&<S5 order={order} onPrint={logPrint}/>}
