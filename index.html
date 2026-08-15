@@ -69,7 +69,7 @@ function compressImage(file,maxDim=900,quality=0.72){
 /* ── FULL-RESOLUTION LOCAL FOLDER STORAGE (desktop Chrome/Edge/Brave only) ──
    Original, uncompressed images are saved as real files in a folder you choose
    on your computer. Only a small compressed thumbnail syncs to the cloud/mobile. */
-const BUILD_TAG="BUILD-2026-08-06-E";
+const BUILD_TAG="1.55";
 const FS_SUPPORTED=typeof window!=="undefined"&&"showDirectoryPicker" in window;
 function idbOpen(){
   return new Promise((resolve,reject)=>{
@@ -336,7 +336,7 @@ function FurnitureCategoryModelPicker({db,saveDb,galleries,catKey,varKey,onSelec
   </div>;
 }
 function IR({l,v}){if(!v)return null;return<div style={{display:"flex",gap:6,marginBottom:4,fontSize:11}}><span style={{color:"#888",flexShrink:0,minWidth:90}}>{l}:</span><span style={{fontWeight:600,color:"#222"}}>{v}</span></div>}
-function Hdr({title,sub,no,bg}){return<><div style={{background:bg,color:"white",padding:"10px 14px"}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}><div><div style={{fontSize:16,fontWeight:800}}>রূপালী ফার্নিচার</div><div style={{fontSize:9,opacity:.88}}>শেরে বাংলা ফজলুল হক রোড, ডুকু ব্রিজ ১ সংলগ্ন, সিরাজগঞ্জ | ☎ 01711-318070 | পরিচালক: সাদমান সাকিব</div></div><div style={{textAlign:"right"}}><div style={{fontSize:9,opacity:.7}}>অর্ডার নং</div><div style={{fontSize:11,fontWeight:800}}>{no}</div></div></div></div><div style={{background:"#111",color:"white",padding:"4px 14px",display:"flex",justifyContent:"space-between"}}><span style={{fontSize:11,fontWeight:700}}>{title}</span><span style={{fontSize:9,opacity:.6}}>{sub}</span></div></>}
+function Hdr({title,sub,no,bg}){return<><div style={{background:bg,color:"white",padding:"10px 14px"}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}><div><div style={{fontSize:16,fontWeight:800}}>রূপালী ফার্নিচার</div><div style={{fontSize:9,opacity:.88}}>শেরে বাংলা ফজলুল হক রোড, টুকু ব্রিজ ১ সংলগ্ন, সিরাজগঞ্জ | ☎ 01711-318070 | পরিচালক: সাদমান সাকিব</div></div><div style={{textAlign:"right"}}><div style={{fontSize:9,opacity:.7}}>অর্ডার নং</div><div style={{fontSize:11,fontWeight:800}}>{no}</div></div></div></div><div style={{background:"#111",color:"white",padding:"4px 14px",display:"flex",justifyContent:"space-between"}}><span style={{fontSize:11,fontWeight:700}}>{title}</span><span style={{fontSize:9,opacity:.6}}>{sub}</span></div></>}
 function PrintLog({log}){
   if(!log||log.length===0)return<div style={{fontSize:8,color:"#bbb",marginTop:6,fontStyle:"italic"}}>এখনো প্রিন্ট করা হয়নি</div>;
   return<div style={{fontSize:8,color:"#999",marginTop:6,fontStyle:"italic"}}>প্রিন্ট: {log.length} বার | সর্বশেষ: {fmtDate(log[log.length-1])}{log.length>1?` (মোট: ${log.map(fmtDate).join(", ")})`:""}</div>
@@ -378,36 +378,60 @@ function S1({order,onPrint}){
   const rem=(parseFloat(cust.total)||0)-totalPaid;
   const days=cust.delivery?daysBetween(cust.date,cust.delivery):null;
   const captureRef=useRef();
-  return<div style={{fontSize:11}}>
+  return<div style={{fontSize:12}}>
     <div className="no-print" style={{padding:"8px 14px",background:"#fff",borderBottom:"1px solid #eee",display:"flex",justifyContent:"flex-end",gap:8}}><WhatsAppSendBtn targetRef={captureRef} phone={cust.phone}/><PrintBtn onPrint={()=>onPrint("s1")}/></div>
     <div ref={captureRef}>
-    <Hdr title="গ্রাহকের কপি" sub="Customer Copy" no={no} bg={RED}/>
-    <div style={{padding:"10px 14px"}}>
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"3px 12px",background:"#fff8f8",borderRadius:7,padding:"8px",marginBottom:8}}>
-        <IR l="তারিখ" v={fmtDate(cust.date)}/><IR l="ডেলিভারি" v={cust.delivery?`${fmtDate(cust.delivery)} (${days} দিনে)`:""}/>
-        <IR l="গ্রাহকের নাম" v={cust.name}/><IR l="মোবাইল" v={cust.phone}/>
-        <IR l="ঠিকানা" v={cust.address}/>{cust.notes&&<IR l="মন্তব্য" v={cust.notes}/>}
+    <div style={{background:`linear-gradient(135deg, ${RED} 0%, #7a0018 100%)`,color:"white",padding:"20px 18px 16px",position:"relative",overflow:"hidden"}}>
+      <div style={{position:"absolute",top:-36,right:-36,width:110,height:110,borderRadius:"50%",background:"rgba(255,255,255,0.08)"}}></div>
+      <div style={{position:"absolute",bottom:-46,left:-24,width:130,height:130,borderRadius:"50%",background:"rgba(255,255,255,0.06)"}}></div>
+      <div style={{position:"relative",display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+        <div>
+          <div style={{width:46,height:46,background:"white",borderRadius:13,display:"flex",alignItems:"center",justifyContent:"center",marginBottom:9,boxShadow:"0 4px 12px rgba(0,0,0,0.25)"}}>
+            <span style={{color:RED,fontSize:24,fontWeight:900,fontFamily:"Georgia,serif"}}>R</span>
+          </div>
+          <div style={{fontSize:26,fontWeight:900,letterSpacing:0.3,lineHeight:1.1}}>রূপালী ফার্নিচার</div>
+          <div style={{fontSize:12,opacity:0.92,marginTop:3,fontStyle:"italic"}}>আপনার বিশ্বাসের আসবাবঘর</div>
+        </div>
+        <div style={{textAlign:"right",background:"rgba(255,255,255,0.16)",borderRadius:11,padding:"9px 13px"}}>
+          <div style={{fontSize:9,opacity:0.85}}>অর্ডার নং</div>
+          <div style={{fontSize:15,fontWeight:800}}>{no}</div>
+        </div>
       </div>
-      {images.length>0&&<div style={{marginBottom:8}}>
-        <div style={{fontSize:10,color:"#888",marginBottom:4,textAlign:"center"}}>গ্রাহকের রেফারেন্স ছবি:</div>
-        <div style={{display:"flex",flexWrap:"wrap",gap:6,justifyContent:"center"}}>
-          {images.map((img,i)=><div key={i} style={{textAlign:"center"}}><img src={img.src} className="ref-img" alt="ref" style={{maxHeight:100}}/><div style={{fontSize:8,color:"#888",marginTop:2}}>{img.caption}</div><FullImgBtn fileName={img.fileName}/></div>)}
+      <div style={{fontSize:11,opacity:0.9,marginTop:14,borderTop:"1px solid rgba(255,255,255,0.3)",paddingTop:9}}>
+        শেরে বাংলা ফজলুল হক রোড, টুকু ব্রিজ ১ সংলগ্ন, সিরাজগঞ্জ &nbsp;|&nbsp; ☎ 01711-318070
+      </div>
+    </div>
+    <div style={{background:"#111",color:"white",padding:"7px 16px",textAlign:"center",fontSize:13,fontWeight:800,letterSpacing:2}}>✦ গ্রাহকের কপি ✦</div>
+    <div style={{padding:"14px 16px"}}>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"7px 14px",background:"#fff8f8",borderRadius:10,padding:"13px",marginBottom:12,border:"1px solid #ffe0e0"}}>
+        <div><div style={{fontSize:10,color:"#999"}}>তারিখ</div><div style={{fontSize:14,fontWeight:700,color:"#222"}}>{fmtDate(cust.date)}</div></div>
+        <div><div style={{fontSize:10,color:"#999"}}>ডেলিভারি</div><div style={{fontSize:14,fontWeight:700,color:"#222"}}>{cust.delivery?`${fmtDate(cust.delivery)}`:""}{days!==null&&<span style={{fontSize:11,color:RED,fontWeight:600}}> ({days} দিনে)</span>}</div></div>
+        <div><div style={{fontSize:10,color:"#999"}}>গ্রাহকের নাম</div><div style={{fontSize:15,fontWeight:800,color:"#111"}}>{cust.name}</div></div>
+        <div><div style={{fontSize:10,color:"#999"}}>মোবাইল</div><div style={{fontSize:14,fontWeight:700,color:"#222"}}>{cust.phone}</div></div>
+        {cust.address&&<div style={{gridColumn:"1 / -1"}}><div style={{fontSize:10,color:"#999"}}>ঠিকানা</div><div style={{fontSize:13,fontWeight:600,color:"#333"}}>{cust.address}</div></div>}
+        {cust.notes&&<div style={{gridColumn:"1 / -1"}}><div style={{fontSize:10,color:"#999"}}>মন্তব্য</div><div style={{fontSize:13,fontWeight:600,color:"#333"}}>{cust.notes}</div></div>}
+      </div>
+      {images.length>0&&<div style={{marginBottom:10}}>
+        <div style={{fontSize:11,color:"#888",marginBottom:5,textAlign:"center",fontWeight:600}}>গ্রাহকের রেফারেন্স ছবি:</div>
+        <div style={{display:"flex",flexWrap:"wrap",gap:7,justifyContent:"center"}}>
+          {images.map((img,i)=><div key={i} style={{textAlign:"center"}}><img src={img.src} className="ref-img" alt="ref" style={{maxHeight:110}}/><div style={{fontSize:9,color:"#888",marginTop:2}}>{img.caption}</div><FullImgBtn fileName={img.fileName}/></div>)}
         </div>
       </div>}
-      <div style={{fontWeight:700,fontSize:10,color:RED,marginBottom:5}}>অর্ডারের বিবরণ</div>
-      {items.map((it,i)=><div key={i} style={{border:"1px solid #fcc",borderRadius:6,padding:"6px 9px",marginBottom:5,fontSize:10}}>
-        <div style={{fontWeight:700}}>[{it.code}] {it.variantBn}</div>
-        <div style={{color:"#555",marginTop:1}}>কাঠ: {it.woodBn} | পরিমাণ: {it.qty} পিস</div>
-        {it.notes&&<div style={{color:"#888",marginTop:1}}>⚙ {it.notes}</div>}
+      <div style={{fontWeight:800,fontSize:13,color:RED,marginBottom:7,letterSpacing:0.3}}>অর্ডারের বিবরণ</div>
+      {items.map((it,i)=><div key={i} style={{border:"1.5px solid #fbc4c4",borderRadius:9,padding:"9px 12px",marginBottom:7,fontSize:12}}>
+        <div style={{fontWeight:800,fontSize:13,color:"#222"}}>[{it.code}] {it.variantBn}</div>
+        <div style={{color:"#666",marginTop:2}}>কাঠ: {it.woodBn} | পরিমাণ: {it.qty} পিস</div>
+        {it.price&&<div style={{color:"#166534",fontWeight:800,marginTop:3,fontSize:13}}>মূল্য: {money(it.price)}</div>}
+        {it.notes&&<div style={{color:"#888",marginTop:2}}>⚙ {it.notes}</div>}
       </div>)}
-      <div style={{background:"#fff0f0",borderRadius:7,padding:"8px",marginTop:4}}>
-        <div style={{display:"flex",justifyContent:"space-between",fontSize:11,marginBottom:5}}><span style={{color:"#555"}}>মোট মূল্য:</span><span style={{fontWeight:700}}>{money(cust.total)}</span></div>
-        <div style={{fontWeight:700,fontSize:10,color:RED,marginBottom:4}}>পেমেন্টের বিবরণ</div>
-        {(payments||[]).map((p,i)=><div key={i} style={{display:"flex",justifyContent:"space-between",fontSize:10,marginBottom:2}}><span>{fmtDate(p.date)} — {p.note||"পেমেন্ট"}</span><span style={{fontWeight:700}}>{money(p.amount)}</span></div>)}
-        <div style={{display:"flex",justifyContent:"space-between",borderTop:"1px solid #fcc",paddingTop:5,marginTop:4}}><span style={{fontWeight:700,fontSize:11,color:RED}}>বাকি:</span><span style={{fontWeight:800,fontSize:12,color:RED}}>{money(rem)}</span></div>
+      <div style={{background:"#fff0f0",borderRadius:10,padding:"12px",marginTop:6,border:"1px solid #ffd6d6"}}>
+        <div style={{display:"flex",justifyContent:"space-between",fontSize:13,marginBottom:7}}><span style={{color:"#555"}}>মোট মূল্য:</span><span style={{fontWeight:800,fontSize:14}}>{money(cust.total)}</span></div>
+        <div style={{fontWeight:800,fontSize:11,color:RED,marginBottom:5}}>পেমেন্টের বিবরণ</div>
+        {(payments||[]).map((p,i)=><div key={i} style={{display:"flex",justifyContent:"space-between",fontSize:11,marginBottom:3}}><span>{fmtDate(p.date)} — {p.note||"পেমেন্ট"}</span><span style={{fontWeight:700}}>{money(p.amount)}</span></div>)}
+        <div style={{display:"flex",justifyContent:"space-between",borderTop:"1.5px solid #fbc4c4",paddingTop:7,marginTop:5}}><span style={{fontWeight:800,fontSize:13,color:RED}}>বাকি:</span><span style={{fontWeight:900,fontSize:15,color:RED}}>{money(rem)}</span></div>
       </div>
-      <div style={{marginTop:8,background:"#f0fdf4",borderRadius:6,padding:"6px 10px",fontSize:9,color:"#166534",textAlign:"center"}}>আজীবন ওয়ারেন্টি · লেকার স্প্রে ফিনিশ · প্রাকৃতিকভাবে সিজনড কাঠ</div>
-      <div style={{marginTop:16,display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>{["গ্রাহকের স্বাক্ষর","রূপালী ফার্নিচার"].map(t=><div key={t} style={{minHeight:52,display:"flex",flexDirection:"column",justifyContent:"flex-end"}}><div style={{borderTop:"1.5px solid #999",paddingTop:6,textAlign:"center",fontSize:10,color:"#666"}}>{t}</div></div>)}</div>
+      <div style={{marginTop:10,background:"#f0fdf4",borderRadius:8,padding:"9px 12px",fontSize:11,color:"#166534",textAlign:"center",fontWeight:600,border:"1px solid #bbf7d0"}}>✓ আজীবন ওয়ারেন্টি &nbsp;·&nbsp; লেকার স্প্রে ফিনিশ &nbsp;·&nbsp; প্রাকৃতিকভাবে সিজনড কাঠ</div>
+      <div style={{marginTop:20,display:"grid",gridTemplateColumns:"1fr 1fr",gap:18}}>{["গ্রাহকের স্বাক্ষর","রূপালী ফার্নিচার"].map(t=><div key={t} style={{minHeight:56,display:"flex",flexDirection:"column",justifyContent:"flex-end"}}><div style={{borderTop:"2px solid #999",paddingTop:7,textAlign:"center",fontSize:11,color:"#666",fontWeight:600}}>{t}</div></div>)}</div>
     </div>
     </div>
     <div className="no-print"><PrintLog log={printLogs?.s1}/></div>
@@ -426,28 +450,30 @@ function S2({order,onPrint,db,saveDb,galleries,onUpdateOrder}){
   const[editingImages,setEditingImages]=useState(false);
   const imgInputRef=useRef();
   const[addingNew,setAddingNew]=useState(false);
-  const[newItem,setNewItem]=useState({catKey:"",varKey:"",wood:"S",qty:1,notes:""});
+  const[newItem,setNewItem]=useState({catKey:"",varKey:"",wood:"S",qty:1,price:"",notes:""});
   const[newCatMode,setNewCatMode]=useState(false);
   const[newCatName,setNewCatName]=useState("");
   const[newCatVarName,setNewCatVarName]=useState("");
 
+  const recalcTotal=(newItems)=>newItems.reduce((s,it)=>s+(parseFloat(it.price)||0),0);
   const startEditItem=(i)=>{
     const it=items[i];
     setEditIdx(i);
-    setEditForm({catKey:it.catKey,varKey:it.varKey,wood:it.wood,qty:it.qty,notes:it.notes||""});
+    setEditForm({catKey:it.catKey,varKey:it.varKey,wood:it.wood,qty:it.qty,price:it.price||"",notes:it.notes||""});
   };
   const saveEditItem=()=>{
     const cat=db[editForm.catKey];
     const variant=cat.variants[editForm.varKey];
     const newItems=[...items];
     const keepSections=newItems[editIdx].varKey===editForm.varKey?newItems[editIdx].sections:JSON.parse(JSON.stringify(variant.sections));
-    newItems[editIdx]={...newItems[editIdx],catKey:editForm.catKey,varKey:editForm.varKey,variantBn:variant.bn,code:variant.code,wood:editForm.wood,woodBn:WOOD[editForm.wood].bn,qty:editForm.qty,notes:editForm.notes,sections:keepSections};
-    onUpdateOrder({...order,items:newItems});
+    newItems[editIdx]={...newItems[editIdx],catKey:editForm.catKey,varKey:editForm.varKey,variantBn:variant.bn,code:variant.code,wood:editForm.wood,woodBn:WOOD[editForm.wood].bn,qty:editForm.qty,price:editForm.price,notes:editForm.notes,sections:keepSections};
+    onUpdateOrder({...order,items:newItems,cust:{...cust,total:recalcTotal(newItems)}});
     setEditIdx(null);setEditForm(null);
   };
   const removeItem=(i)=>{
     if(!window.confirm("এই ফার্নিচারটি অর্ডার থেকে বাদ দিতে চান?"))return;
-    onUpdateOrder({...order,items:items.filter((_,j)=>j!==i)});
+    const newItems=items.filter((_,j)=>j!==i);
+    onUpdateOrder({...order,items:newItems,cust:{...cust,total:recalcTotal(newItems)}});
   };
   const createNewCategoryInline=()=>{
     const catName=newCatName.trim()||`নতুন ফার্নিচার ${Object.keys(db).length+1}`;
@@ -465,9 +491,10 @@ function S2({order,onPrint,db,saveDb,galleries,onUpdateOrder}){
     const cat=db[newItem.catKey];
     const variant=cat?.variants[newItem.varKey];
     if(!variant)return;
-    const item={catKey:newItem.catKey,varKey:newItem.varKey,variantBn:variant.bn,code:variant.code,wood:newItem.wood,woodBn:WOOD[newItem.wood].bn,qty:newItem.qty,notes:newItem.notes,sections:JSON.parse(JSON.stringify(variant.sections))};
-    onUpdateOrder({...order,items:[...items,item]});
-    setNewItem({catKey:"",varKey:"",wood:"S",qty:1,notes:""});setAddingNew(false);
+    const item={catKey:newItem.catKey,varKey:newItem.varKey,variantBn:variant.bn,code:variant.code,wood:newItem.wood,woodBn:WOOD[newItem.wood].bn,qty:newItem.qty,price:newItem.price,notes:newItem.notes,sections:JSON.parse(JSON.stringify(variant.sections))};
+    const newItems=[...items,item];
+    onUpdateOrder({...order,items:newItems,cust:{...cust,total:recalcTotal(newItems)}});
+    setNewItem({catKey:"",varKey:"",wood:"S",qty:1,price:"",notes:""});setAddingNew(false);
   };
   const addNewImages=async(e)=>{
     const files=Array.from(e.target.files||[]);
@@ -534,6 +561,7 @@ function S2({order,onPrint,db,saveDb,galleries,onUpdateOrder}){
             </select>
             <input type="number" min={1} value={editForm.qty} onChange={e=>setEditForm({...editForm,qty:parseInt(e.target.value)||1})} style={{border:"1px solid #ddd",borderRadius:6,padding:"6px 8px",fontSize:10}}/>
           </div>
+          <div style={{marginBottom:6}}><input type="number" value={editForm.price} onChange={e=>setEditForm({...editForm,price:e.target.value})} placeholder="মূল্য (৳)" style={{width:"100%",border:"1px solid #ddd",borderRadius:6,padding:"7px 8px",fontSize:11,fontWeight:700,color:"#166534",boxSizing:"border-box"}}/></div>
           <textarea rows={2} value={editForm.notes} onChange={e=>setEditForm({...editForm,notes:e.target.value})} placeholder="বিশেষ নির্দেশনা" style={{width:"100%",border:"1px solid #ddd",borderRadius:6,padding:"6px 8px",fontSize:10,marginBottom:6,resize:"vertical"}}/>
           <div style={{display:"flex",gap:6}}>
             <button onClick={()=>{setEditIdx(null);setEditForm(null)}} style={{flex:1,background:"white",border:"1px solid #ddd",borderRadius:6,padding:"7px",fontSize:10}}>বাতিল</button>
@@ -544,6 +572,7 @@ function S2({order,onPrint,db,saveDb,galleries,onUpdateOrder}){
             <div style={{flex:1}}>
               <div style={{fontWeight:700}}>[{it.code}] {it.variantBn}</div>
               <div style={{color:"#555",marginTop:1}}>কাঠ: {it.woodBn} ({it.wood}) | পরিমাণ: {it.qty} | CFT: {(totalCft(it.sections)*it.qty).toFixed(3)}</div>
+              {it.price&&<div style={{color:"#166534",fontWeight:700,marginTop:1}}>মূল্য: {money(it.price)}</div>}
               {it.notes&&<div style={{color:"#888",marginTop:1}}>⚙ {it.notes}</div>}
             </div>
             <div className="no-print" style={{display:"flex",gap:4,flexShrink:0}}>
@@ -563,6 +592,7 @@ function S2({order,onPrint,db,saveDb,galleries,onUpdateOrder}){
             </select>
             <input type="number" min={1} value={newItem.qty} onChange={e=>setNewItem({...newItem,qty:parseInt(e.target.value)||1})} style={{border:"1px solid #ddd",borderRadius:6,padding:"6px 8px",fontSize:10}}/>
           </div>
+          <div style={{marginBottom:6}}><input type="number" value={newItem.price} onChange={e=>setNewItem({...newItem,price:e.target.value})} placeholder="মূল্য (৳)" style={{width:"100%",border:"1px solid #ddd",borderRadius:6,padding:"7px 8px",fontSize:11,fontWeight:700,color:"#166534",boxSizing:"border-box"}}/></div>
           <textarea rows={2} value={newItem.notes} onChange={e=>setNewItem({...newItem,notes:e.target.value})} placeholder="বিশেষ নির্দেশনা" style={{width:"100%",border:"1px solid #ddd",borderRadius:6,padding:"6px 8px",fontSize:10,marginBottom:7,resize:"vertical"}}/>
           <div style={{display:"flex",gap:6}}>
             <button onClick={()=>{setAddingNew(false)}} style={{flex:1,background:"white",border:"1px solid #ddd",borderRadius:6,padding:"7px",fontSize:10}}>বাতিল</button>
@@ -1428,9 +1458,6 @@ function Home({orders,expenses,woodLots,db,onNew,onHist,onManage,onExpense,onWoo
                 <div style={{flex:1,minWidth:0}}>
                   <div style={{fontSize:12,fontWeight:700,color:"#222",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{o.cust.name} — {o.no}</div>
                   <div style={{fontSize:10,color:"#999",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",marginTop:1}}>{o.items.map(it=>it.variantBn).join(", ")}</div>
-                  <div style={{display:"flex",flexWrap:"wrap",gap:3,marginTop:2}}>
-                    {[...new Set(o.items.map(it=>(db&&it.catKey&&db[it.catKey])?db[it.catKey].bn:it.variantBn.split(" ")[0]))].map((cat,ci)=><span key={ci} style={{fontSize:9,background:"#f1f5f9",color:"#475569",borderRadius:10,padding:"1px 7px"}}>{cat}</span>)}
-                  </div>
                   {o.allWorkers&&o.allWorkers.length>0&&<div style={{fontSize:10,color:"#6d28d9",fontWeight:600,marginTop:2}}>👷 {o.allWorkers.join(", ")}</div>}
                   <div style={{display:"flex",alignItems:"center",gap:6,marginTop:4}}>
                     <a href={`tel:${o.cust.phone}`} onClick={e=>e.stopPropagation()} style={{background:"#eff6ff",color:"#1d4ed8",border:"none",borderRadius:6,padding:"2px 8px",fontSize:9,fontWeight:700,textDecoration:"none"}}>📱 কল</a>
@@ -2039,12 +2066,12 @@ function Form({onSave,onBack,db,saveDb,galleries}){
   const today=todayStr();
   const[orderNo]=useState(()=>genNo());
   const[step,setStep]=useState(1);
-  const[c,setC]=useState({name:"",phone:"",address:"",date:today,delivery:addDays(today,60),total:"",notes:""});
+  const[c,setC]=useState({name:"",phone:"",address:"",date:today,delivery:addDays(today,60),notes:""});
   const[emergency,setEmergency]=useState(false);
   const[payments,setPayments]=useState([{date:today,amount:"",note:"অগ্রিম"}]);
   const[items,setItems]=useState([]);
   const[adding,setAdding]=useState(false);
-  const[ni,setNi]=useState({catKey:"",varKey:"",wood:"S",qty:1,notes:""});
+  const[ni,setNi]=useState({catKey:"",varKey:"",wood:"S",qty:1,price:"",notes:""});
   const[refImgs,setRefImgs]=useState([]);
   const refInput=useRef();
   const[newCatMode,setNewCatMode]=useState(false);
@@ -2055,8 +2082,9 @@ function Form({onSave,onBack,db,saveDb,galleries}){
 
   const fCat=ni.catKey?db[ni.catKey]:null;
   const fVar=fCat&&ni.varKey&&ni.varKey!=="__NEW__"?fCat.variants[ni.varKey]:null;
+  const itemsTotal=items.reduce((s,it)=>s+(parseFloat(it.price)||0),0);
   const totalPaid=payments.reduce((s,p)=>s+(parseFloat(p.amount)||0),0);
-  const rem=(parseFloat(c.total)||0)-totalPaid;
+  const rem=itemsTotal-totalPaid;
   const inp={width:"100%",border:"1.5px solid #e0e0e0",borderRadius:9,padding:"10px 11px",fontSize:13,outline:"none"};
   const lbl=(t)=><div style={{fontSize:11,fontWeight:600,color:"#555",marginBottom:4}}>{t}</div>;
   const days=c.delivery?daysBetween(c.date,c.delivery):null;
@@ -2092,8 +2120,8 @@ function Form({onSave,onBack,db,saveDb,galleries}){
 
   const addItem=()=>{
     if(!fVar)return;
-    setItems(prev=>[...prev,{catKey:ni.catKey,varKey:ni.varKey,variantBn:fVar.bn,code:fVar.code,wood:ni.wood,woodBn:WOOD[ni.wood].bn,qty:ni.qty,notes:ni.notes,sections:JSON.parse(JSON.stringify(fVar.sections))}]);
-    setNi({catKey:"",varKey:"",wood:"S",qty:1,notes:""});setAdding(false);
+    setItems(prev=>[...prev,{catKey:ni.catKey,varKey:ni.varKey,variantBn:fVar.bn,code:fVar.code,wood:ni.wood,woodBn:WOOD[ni.wood].bn,qty:ni.qty,price:ni.price,notes:ni.notes,sections:JSON.parse(JSON.stringify(fVar.sections))}]);
+    setNi({catKey:"",varKey:"",wood:"S",qty:1,price:"",notes:""});setAdding(false);
   };
 
   const handleRefImg=async(e)=>{
@@ -2118,7 +2146,7 @@ function Form({onSave,onBack,db,saveDb,galleries}){
 
   const submit=()=>{
     if(!c.name||!c.phone||items.length===0)return;
-    onSave({no:orderNo,cust:c,items,payments,refImgs,printLogs:{},deptProgress:{},at:new Date().toISOString()});
+    onSave({no:orderNo,cust:{...c,total:itemsTotal},items,payments,refImgs,printLogs:{},deptProgress:{},at:new Date().toISOString()});
   };
 
   return<div style={{minHeight:"100vh",background:"#f8f8f8"}}>
@@ -2127,7 +2155,7 @@ function Form({onSave,onBack,db,saveDb,galleries}){
       <span style={{fontWeight:700,fontSize:15}}>নতুন অর্ডার</span>
     </div>
     <div style={{background:"white",display:"flex",borderBottom:"1px solid #eee"}}>
-      {[{id:1,l:"গ্রাহকের তথ্য"},{id:2,l:"পেমেন্ট"},{id:3,l:"ফার্নিচার ও ছবি"}].map(s=><button key={s.id} onClick={()=>setStep(s.id)} style={{flex:1,padding:"11px 4px",border:"none",background:"none",fontSize:12,fontWeight:step===s.id?700:400,color:step===s.id?RED:"#888",borderBottom:step===s.id?`3px solid ${RED}`:"3px solid transparent"}}>{s.l}</button>)}
+      {[{id:1,l:"গ্রাহকের তথ্য"},{id:2,l:"ফার্নিচার ও ছবি"},{id:3,l:"পেমেন্ট"}].map(s=><button key={s.id} onClick={()=>setStep(s.id)} style={{flex:1,padding:"11px 4px",border:"none",background:"none",fontSize:12,fontWeight:step===s.id?700:400,color:step===s.id?RED:"#888",borderBottom:step===s.id?`3px solid ${RED}`:"3px solid transparent"}}>{s.l}</button>)}
     </div>
     <div style={{padding:"16px",maxWidth:560,margin:"0 auto"}}>
       {step===1&&<>
@@ -2148,27 +2176,6 @@ function Form({onSave,onBack,db,saveDb,galleries}){
         <button onClick={()=>setStep(2)} style={{width:"100%",background:RED,color:"white",border:"none",borderRadius:10,padding:"14px",fontSize:14,fontWeight:700}}>পরবর্তী →</button>
       </>}
       {step===2&&<>
-        <div style={{marginBottom:14}}>{lbl("মোট মূল্য (৳)")}<input type="number" value={c.total} onChange={e=>setC({...c,total:e.target.value})} placeholder="0" style={{...inp,padding:"12px",fontSize:16,fontWeight:700}}/></div>
-        <div style={{fontWeight:700,fontSize:15,marginBottom:14}}>💵 পেমেন্টের তালিকা</div>
-        {payments.map((p,i)=><div key={i} style={{background:"white",borderRadius:12,padding:"14px",marginBottom:12,boxShadow:"0 2px 8px rgba(0,0,0,.08)",border:"1.5px solid #f0f0f0"}}>
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
-            <div>{lbl("তারিখ")}<DateInput value={p.date} onChange={v=>{const ps=[...payments];ps[i]={...ps[i],date:v};setPayments(ps)}} accent="#16a34a"/></div>
-            <div>{lbl("পরিমাণ (৳)")}<input type="number" value={p.amount} onChange={e=>{const ps=[...payments];ps[i]={...ps[i],amount:e.target.value};setPayments(ps)}} placeholder="0" style={{...inp,padding:"12px",fontSize:16,fontWeight:700,color:"#166534"}}/></div>
-          </div>
-          <div style={{display:"flex",gap:8,alignItems:"end"}}>
-            <div style={{flex:1}}>{lbl("নোট")}<input value={p.note} onChange={e=>{const ps=[...payments];ps[i]={...ps[i],note:e.target.value};setPayments(ps)}} placeholder="যেমন: অগ্রিম, ২য় কিস্তি" style={{...inp,padding:"12px",fontSize:13}}/></div>
-            <button onClick={()=>setPayments(payments.filter((_,j)=>j!==i))} style={{background:"#fee2e2",border:"none",borderRadius:9,padding:"12px 14px",color:RED,fontSize:14,fontWeight:700}}>✕</button>
-          </div>
-        </div>)}
-        <button onClick={()=>setPayments([...payments,{date:today,amount:"",note:"পেমেন্ট"}])} style={{width:"100%",background:"white",border:"2px dashed #16a34a",color:"#16a34a",borderRadius:12,padding:"14px",fontSize:14,fontWeight:700,marginBottom:16}}>+ আরো পেমেন্ট যোগ করুন</button>
-        {c.total&&<div style={{background:"#f0fdf4",borderRadius:12,padding:"16px",marginBottom:16,border:"1.5px solid #bbf7d0"}}>
-          <div style={{display:"flex",justifyContent:"space-between",fontSize:15,marginBottom:8}}><span>মোট মূল্য:</span><span style={{fontWeight:700}}>{money(c.total)}</span></div>
-          <div style={{display:"flex",justifyContent:"space-between",fontSize:15,marginBottom:8}}><span>মোট পরিশোধ:</span><span style={{fontWeight:700,color:"#166534"}}>{money(totalPaid)}</span></div>
-          <div style={{display:"flex",justifyContent:"space-between",fontSize:16,borderTop:"1.5px solid #bbf7d0",paddingTop:10}}><span style={{fontWeight:700}}>বাকি:</span><span style={{fontWeight:800,color:rem>0?RED:"#166534",fontSize:18}}>{money(rem)}</span></div>
-        </div>}
-        <button onClick={()=>setStep(3)} style={{width:"100%",background:RED,color:"white",border:"none",borderRadius:10,padding:"14px",fontSize:14,fontWeight:700}}>পরবর্তী →</button>
-      </>}
-      {step===3&&<>
         <div style={{background:"white",borderRadius:10,padding:"12px",marginBottom:12,boxShadow:"0 1px 4px rgba(0,0,0,.07)"}}>
           <div style={{fontWeight:700,fontSize:13,marginBottom:8}}>📷 রেফারেন্স ছবি (ঐচ্ছিক, একাধিক যোগ করা যাবে)</div>
           {refImgs.map((img,idx)=><div key={idx} style={{marginBottom:10,background:"#fafafa",borderRadius:8,padding:8}}>
@@ -2183,7 +2190,7 @@ function Form({onSave,onBack,db,saveDb,galleries}){
         </div>
         {items.map((it,i)=><div key={i} style={{background:"white",borderRadius:10,padding:"10px 12px",marginBottom:8,borderLeft:`4px solid ${RED}`,boxShadow:"0 1px 4px rgba(0,0,0,.07)"}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"start"}}>
-            <div><div style={{fontWeight:700,fontSize:13}}>[{it.code}] {it.variantBn}</div><div style={{fontSize:11,color:"#666",marginTop:2}}>কাঠ: {it.woodBn} | পরিমাণ: {it.qty} | CFT: {(totalCft(it.sections)*it.qty).toFixed(2)}</div>{it.notes&&<div style={{fontSize:10,color:"#888",marginTop:1}}>⚙ {it.notes}</div>}</div>
+            <div><div style={{fontWeight:700,fontSize:13}}>[{it.code}] {it.variantBn}</div><div style={{fontSize:11,color:"#666",marginTop:2}}>কাঠ: {it.woodBn} | পরিমাণ: {it.qty} | CFT: {(totalCft(it.sections)*it.qty).toFixed(2)}</div>{it.price&&<div style={{fontSize:12,color:"#166534",fontWeight:700,marginTop:2}}>মূল্য: {money(it.price)}</div>}{it.notes&&<div style={{fontSize:10,color:"#888",marginTop:1}}>⚙ {it.notes}</div>}</div>
             <button onClick={()=>setItems(items.filter((_,j)=>j!==i))} style={{background:"#fee2e2",border:"none",borderRadius:6,padding:"4px 8px",color:RED,fontSize:11}}>বাদ</button>
           </div>
         </div>)}
@@ -2195,10 +2202,11 @@ function Form({onSave,onBack,db,saveDb,galleries}){
           <select value={ni.wood} onChange={e=>setNi({...ni,wood:e.target.value})} style={{...inp,marginBottom:10}}>
             {Object.entries(WOOD).map(([k,v])=><option key={k} value={k}>{v.bn} ({v.en})</option>)}
           </select>
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:12}}>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:10}}>
             <div>{lbl("পরিমাণ")}<input type="number" min={1} value={ni.qty} onChange={e=>setNi({...ni,qty:parseInt(e.target.value)||1})} style={inp}/></div>
             <div style={{display:"flex",alignItems:"flex-end"}}>{fVar&&<div style={{background:"#f0fdf4",borderRadius:9,padding:"10px 11px",fontSize:12,fontWeight:700,color:"#166534",width:"100%"}}>CFT: {(totalCft(fVar.sections)*ni.qty).toFixed(2)}</div>}</div>
           </div>
+          <div style={{marginBottom:12}}>{lbl("এই ফার্নিচারের মূল্য (৳)")}<input type="number" value={ni.price} onChange={e=>setNi({...ni,price:e.target.value})} placeholder="0" style={{...inp,fontSize:16,fontWeight:700,color:"#166534"}}/></div>
           <div style={{background:"#eff6ff",borderRadius:8,padding:"8px 10px",marginBottom:11,fontSize:11,color:"#1d4ed8"}}>ℹ️ কাঠের বিস্তারিত মাপ পরিবর্তন করতে হলে অর্ডার কনফার্ম করার পর কার্পেন্টার স্লিপ থেকে এডিট করুন</div>
           {lbl("বিশেষ নির্দেশনা")}
           <textarea rows={2} value={ni.notes} onChange={e=>setNi({...ni,notes:e.target.value})} style={{...inp,resize:"vertical",marginBottom:11}}/>
@@ -2207,7 +2215,35 @@ function Form({onSave,onBack,db,saveDb,galleries}){
             <button onClick={addItem} disabled={!fVar} style={{flex:2,background:fVar?RED:"#ccc",color:"white",border:"none",borderRadius:9,padding:"11px",fontSize:13,fontWeight:700}}>যোগ করুন</button>
           </div>
         </div>:<button onClick={()=>setAdding(true)} style={{width:"100%",background:"white",border:`2px dashed ${RED}`,color:RED,borderRadius:10,padding:"13px",fontSize:13,fontWeight:600,marginBottom:12}}>+ ফার্নিচার যোগ করুন</button>}
-        {items.length>0&&!adding&&<button onClick={submit} style={{width:"100%",background:RED,color:"white",border:"none",borderRadius:10,padding:"15px",fontSize:14,fontWeight:700,boxShadow:`0 4px 12px ${RED}44`}}>অর্ডার নিশ্চিত করুন → স্লিপ দেখুন</button>}
+        {items.length>0&&!adding&&<div style={{background:"#f0fdf4",borderRadius:11,padding:"14px",marginBottom:14,border:"1.5px solid #bbf7d0",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+          <span style={{fontSize:13,color:"#166534",fontWeight:600}}>মোট মূল্য (সব ফার্নিচার মিলিয়ে):</span>
+          <span style={{fontSize:19,fontWeight:800,color:"#166534"}}>{money(itemsTotal)}</span>
+        </div>}
+        {items.length>0&&!adding&&<button onClick={()=>setStep(3)} style={{width:"100%",background:RED,color:"white",border:"none",borderRadius:10,padding:"15px",fontSize:14,fontWeight:700,boxShadow:`0 4px 12px ${RED}44`}}>পরবর্তী → পেমেন্ট</button>}
+      </>}
+      {step===3&&<>
+        <div style={{background:"#f0fdf4",borderRadius:11,padding:"14px",marginBottom:16,border:"1.5px solid #bbf7d0",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+          <span style={{fontSize:13,color:"#166534",fontWeight:600}}>ফার্নিচারের মোট মূল্য:</span>
+          <span style={{fontSize:19,fontWeight:800,color:"#166534"}}>{money(itemsTotal)}</span>
+        </div>
+        <div style={{fontWeight:700,fontSize:15,marginBottom:14}}>💵 পেমেন্টের তালিকা</div>
+        {payments.map((p,i)=><div key={i} style={{background:"white",borderRadius:12,padding:"14px",marginBottom:12,boxShadow:"0 2px 8px rgba(0,0,0,.08)",border:"1.5px solid #f0f0f0"}}>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
+            <div>{lbl("তারিখ")}<DateInput value={p.date} onChange={v=>{const ps=[...payments];ps[i]={...ps[i],date:v};setPayments(ps)}} accent="#16a34a"/></div>
+            <div>{lbl("পরিমাণ (৳)")}<input type="number" value={p.amount} onChange={e=>{const ps=[...payments];ps[i]={...ps[i],amount:e.target.value};setPayments(ps)}} placeholder="0" style={{...inp,padding:"12px",fontSize:16,fontWeight:700,color:"#166534"}}/></div>
+          </div>
+          <div style={{display:"flex",gap:8,alignItems:"end"}}>
+            <div style={{flex:1}}>{lbl("নোট")}<input value={p.note} onChange={e=>{const ps=[...payments];ps[i]={...ps[i],note:e.target.value};setPayments(ps)}} placeholder="যেমন: অগ্রিম, ২য় কিস্তি" style={{...inp,padding:"12px",fontSize:13}}/></div>
+            <button onClick={()=>setPayments(payments.filter((_,j)=>j!==i))} style={{background:"#fee2e2",border:"none",borderRadius:9,padding:"12px 14px",color:RED,fontSize:14,fontWeight:700}}>✕</button>
+          </div>
+        </div>)}
+        <button onClick={()=>setPayments([...payments,{date:today,amount:"",note:"পেমেন্ট"}])} style={{width:"100%",background:"white",border:"2px dashed #16a34a",color:"#16a34a",borderRadius:12,padding:"14px",fontSize:14,fontWeight:700,marginBottom:16}}>+ আরো পেমেন্ট যোগ করুন</button>
+        {itemsTotal>0&&<div style={{background:"#f0fdf4",borderRadius:12,padding:"16px",marginBottom:16,border:"1.5px solid #bbf7d0"}}>
+          <div style={{display:"flex",justifyContent:"space-between",fontSize:15,marginBottom:8}}><span>মোট মূল্য:</span><span style={{fontWeight:700}}>{money(itemsTotal)}</span></div>
+          <div style={{display:"flex",justifyContent:"space-between",fontSize:15,marginBottom:8}}><span>মোট পরিশোধ:</span><span style={{fontWeight:700,color:"#166534"}}>{money(totalPaid)}</span></div>
+          <div style={{display:"flex",justifyContent:"space-between",fontSize:16,borderTop:"1.5px solid #bbf7d0",paddingTop:10}}><span style={{fontWeight:700}}>বাকি:</span><span style={{fontWeight:800,color:rem>0?RED:"#166534",fontSize:18}}>{money(rem)}</span></div>
+        </div>}
+        <button onClick={submit} style={{width:"100%",background:RED,color:"white",border:"none",borderRadius:10,padding:"15px",fontSize:14,fontWeight:700,boxShadow:`0 4px 12px ${RED}44`}}>অর্ডার নিশ্চিত করুন → স্লিপ দেখুন</button>
       </>}
     </div>
   </div>
