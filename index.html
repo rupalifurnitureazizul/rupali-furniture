@@ -17,6 +17,7 @@ body{font-family:'Noto Sans Bengali',sans-serif;background:#f1f1f1;min-height:10
 input,select,textarea,button{font-family:'Noto Sans Bengali',sans-serif}
 button{cursor:pointer}
 ::-webkit-scrollbar{width:5px}::-webkit-scrollbar-thumb{background:#C41E3A55;border-radius:3px}
+.daywheel::-webkit-scrollbar{width:0;height:0;display:none}
 @media print{
   @page{size:A4 portrait;margin:10mm}
   .no-print{display:none!important}
@@ -36,6 +37,10 @@ button{cursor:pointer}
 <script type="text/babel">
 const {useState,useEffect,useRef,useMemo}=React;
 const RED="#C41E3A";
+const PAY="#0E7490";
+const PAY_DARK="#155E75";
+const PAY_LIGHT="#ECFEFF";
+const PAY_BORDER="#A5F3FC";
 
 /* ── STORAGE ── */
 const S={
@@ -69,7 +74,7 @@ function compressImage(file,maxDim=1200,quality=0.82){
 /* ── FULL-RESOLUTION LOCAL FOLDER STORAGE (desktop Chrome/Edge/Brave only) ──
    Original, uncompressed images are saved as real files in a folder you choose
    on your computer. Only a small compressed thumbnail syncs to the cloud/mobile. */
-const BUILD_TAG="1.70";
+const BUILD_TAG="1.78";
 const FS_SUPPORTED=typeof window!=="undefined"&&"showDirectoryPicker" in window;
 function idbOpen(){
   return new Promise((resolve,reject)=>{
@@ -177,6 +182,8 @@ const DAY_LABELS_BN=["শুক্র","শনি","রবি","সোম","ম�
 const attVal=(v)=>v===true?1:v===false||v===undefined||v===null?0:(parseFloat(v)||0);
 const getAttArray=(weekData,workerId)=>{let arr=(weekData.attendance||{})[workerId]||[];if(arr.length===6)arr=[0,...arr];return arr;}; // migrate old 6-day data
 const PAYROLL_DEPTS=["ছুতার","কারিগর","বার্নিশ","পরিবহন","অন্যান্য"];
+const DEPT_COLORS={"ছুতার":"#1d4ed8","কারিগর":"#166534","বার্নিশ":"#b45309","পরিবহন":"#6d28d9","অন্যান্য":"#57534e"};
+const deptColor=(d)=>DEPT_COLORS[d]||"#57534e";
 const daysBetween=(d1,d2)=>Math.round((parseISO(d2)-parseISO(d1))/(1000*60*60*24));
 const todayStr=()=>{const d=new Date();return`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`};
 const fmtDate=(d)=>{if(!d)return"";const dt=parseISO(String(d).slice(0,10));return`${String(dt.getUTCDate()).padStart(2,"0")}/${String(dt.getUTCMonth()+1).padStart(2,"0")}/${dt.getUTCFullYear()}`};
@@ -387,70 +394,39 @@ function S1({order,onPrint}){
   return<div style={{fontSize:12}}>
     <div className="no-print" style={{padding:"8px 14px",background:"#fff",borderBottom:"1px solid #eee",display:"flex",justifyContent:"flex-end",gap:8}}><WhatsAppSendBtn targetRef={captureRef} phone={cust.phone}/><PrintBtn onPrint={()=>onPrint("s1")}/></div>
     <div ref={captureRef}>
-    {/* ── বিলবোর্ড-অনুরূপ হেডার ── */}
-    <div style={{position:"relative",overflow:"hidden",background:"#C41E3A"}}>
-      {/* লাল শেডের ডান প্যানেল — ট্যাগলাইন ও ফার্নিচার সিলুয়েট */}
-      <div style={{position:"absolute",right:0,top:0,bottom:0,width:"52%",background:"linear-gradient(160deg,#D9455C 0%,#9A1B2C 100%)"}}>
-        <svg viewBox="0 0 150 100" preserveAspectRatio="none" style={{position:"absolute",inset:0,width:"100%",height:"100%",opacity:0.28}} aria-hidden="true">
-          {/* স্পটলাইট বিম */}
-          <path d="M64 0 L44 100 L92 100 Z" fill="#F5C542" opacity="0.5"/>
-          {/* আয়না/ড্রেসিং */}
-          <rect x="52" y="26" width="26" height="66" rx="4" fill="#fff" opacity="0.8"/>
-          {/* শেলফ */}
-          <rect x="24" y="34" width="22" height="58" rx="2" fill="none" stroke="#fff" strokeWidth="2"/>
-          <line x1="24" y1="52" x2="46" y2="52" stroke="#fff" strokeWidth="1.5"/>
-          <line x1="24" y1="70" x2="46" y2="70" stroke="#fff" strokeWidth="1.5"/>
-          {/* দরজা */}
-          <rect x="112" y="20" width="30" height="72" rx="2" fill="#3b1216" opacity="0.55"/>
-          <circle cx="127" cy="52" r="9" fill="none" stroke="#f0e2cd" strokeWidth="1.5"/>
-          {/* সোফা */}
-          <rect x="84" y="70" width="26" height="14" rx="3" fill="#3b1216" opacity="0.5"/>
-          <rect x="84" y="62" width="26" height="10" rx="4" fill="#3b1216" opacity="0.45"/>
-        </svg>
-        <div style={{position:"absolute",left:"32%",top:"50%",transform:"translateY(-50%)",zIndex:2,textAlign:"center",width:"52%"}}>
-          <div style={{fontSize:12,fontWeight:800,color:"#fff",lineHeight:1.45,textShadow:"0 1px 2px rgba(0,0,0,0.35)"}}>আপনার বিশ্বাসের<br/>আসবাবঘর</div>
-        </div>
-        {/* ছোট গাঢ় লোগো ব্যাজ */}
-        <div style={{position:"absolute",right:8,top:7,background:"#241d19",borderRadius:3,padding:"2px 5px",display:"flex",alignItems:"center",gap:3,zIndex:3}}>
-          <span style={{color:"white",fontSize:9,fontWeight:900,fontFamily:"Georgia,serif",lineHeight:1}}>R</span>
-          <span style={{color:"white",fontSize:5,fontWeight:700,letterSpacing:0.4,lineHeight:1.15}}>RUPALI<br/>FURNITURE</span>
+    {/* ── রেফারেন্স ইনভয়েসের হুবহু শেপ (SVG দিয়ে নির্ভুল) ── */}
+    <div style={{position:"relative",width:"100%",paddingBottom:"20.5%",overflow:"hidden"}}>
+      <svg viewBox="0 0 340 70" preserveAspectRatio="none" style={{position:"absolute",inset:0,width:"100%",height:"100%"}} aria-hidden="true">
+        <polygon points="0,0 340,0 340,55 186,55 154,70 0,70" fill="#E2172D"/>
+        <polygon points="222,0 246,0 190,55 166,55" fill="#A3111F"/>
+        <polygon points="246,0 268,0 212,55 190,55" fill="#C41429" opacity="0.55"/>
+      </svg>
+      <div style={{position:"absolute",left:"4%",top:"7%",right:"4%",zIndex:2}}>
+        <div style={{fontSize:6,color:"#f5d9dc",lineHeight:1.5}}>
+          প্রতিষ্ঠাতা ঃ মরহুম মো. আজিজুল হক সরকার<br/>
+          বর্তমান পরিচালকঃ সাদমান সাকিব
         </div>
       </div>
-      {/* গাঢ় কাঠরঙা বাম প্যানেল — তির্যক কাট */}
-      <div style={{position:"relative",zIndex:1,width:"66%",background:"linear-gradient(135deg,#3b302a 0%,#241d19 100%)",padding:"9px 12px 8px",clipPath:"polygon(0 0, 100% 0, 78% 100%, 0 100%)"}}>
-        <svg viewBox="0 0 200 90" preserveAspectRatio="none" style={{position:"absolute",inset:0,width:"100%",height:"100%",opacity:0.16}} aria-hidden="true">
-          <path d="M0 10 Q60 4 120 11 T200 8" fill="none" stroke="#c9a878" strokeWidth="1"/>
-          <path d="M0 26 Q60 20 120 27 T200 24" fill="none" stroke="#c9a878" strokeWidth="1"/>
-          <path d="M0 44 Q60 38 120 45 T200 42" fill="none" stroke="#c9a878" strokeWidth="1"/>
-          <path d="M0 62 Q60 56 120 63 T200 60" fill="none" stroke="#c9a878" strokeWidth="1"/>
-          <path d="M0 80 Q60 74 120 81 T200 78" fill="none" stroke="#c9a878" strokeWidth="1"/>
-        </svg>
-        <div style={{position:"relative",width:"80%"}}>
-          <div style={{fontSize:6,color:"#e8dcc8",lineHeight:1.5,marginBottom:5}}>
-            প্রতিষ্ঠাতা ঃ মরহুম মো. আজিজুল হক সরকার<br/>
-            বর্তমান পরিচালকঃ সাদমান সাকিব
-          </div>
-          <div style={{fontSize:24,fontWeight:900,color:"#F5C542",lineHeight:1,letterSpacing:0.3,textShadow:"1.5px 1.5px 0 #7a4a12, 2.5px 2.5px 0 rgba(0,0,0,0.45)"}}>রূপালী</div>
-          <div style={{fontSize:15,fontWeight:900,color:"#F5C542",lineHeight:1.1,marginLeft:32,marginTop:-2,letterSpacing:0.3,textShadow:"1.5px 1.5px 0 #7a4a12, 2.5px 2.5px 0 rgba(0,0,0,0.45)"}}>ফার্নিচার</div>
-          <div style={{fontSize:6.5,color:"#f0e6d6",lineHeight:1.6,marginTop:6}}>
-            শেরে বাংলা ফজলুল হক রোড, টুকু ব্রিজ ১ সংলগ্ন, সিরাজগঞ্জ<br/>
-            যোগাযোগ ০১৭১১-৩১৮০৭০
-          </div>
+      <div style={{position:"absolute",left:"4%",top:"31%",zIndex:2}}>
+        <div style={{fontSize:24,fontWeight:900,color:"#F5C542",lineHeight:1,letterSpacing:0.3,textShadow:"1.5px 1.5px 0 #7a4a12, 2.5px 2.5px 0 rgba(0,0,0,0.45)"}}>রূপালী</div>
+        <div style={{fontSize:15,fontWeight:900,color:"#F5C542",lineHeight:1.1,marginLeft:32,marginTop:-2,letterSpacing:0.3,textShadow:"1.5px 1.5px 0 #7a4a12, 2.5px 2.5px 0 rgba(0,0,0,0.45)"}}>ফার্নিচার</div>
+      </div>
+      <div style={{position:"absolute",left:"4%",bottom:"22%",zIndex:2}}>
+        <div style={{fontSize:6.5,color:"#f5d9dc",lineHeight:1.6}}>
+          শেরে বাংলা ফজলুল হক রোড, টুকু ব্রিজ ১ সংলগ্ন, সিরাজগঞ্জ<br/>
+          যোগাযোগ ০১৭১১-৩১৮০৭০
         </div>
       </div>
-      {/* নিচে কাঠের পাটাতনের স্ট্রিপ */}
-      <div style={{height:9,background:"linear-gradient(180deg,#d8bb8e 0%,#c2a173 100%)",position:"relative",zIndex:4}}>
-        <svg viewBox="0 0 200 9" preserveAspectRatio="none" style={{width:"100%",height:"100%",opacity:0.4}} aria-hidden="true">
-          <line x1="34" y1="0" x2="30" y2="9" stroke="#8a6b42" strokeWidth="0.8"/>
-          <line x1="76" y1="0" x2="72" y2="9" stroke="#8a6b42" strokeWidth="0.8"/>
-          <line x1="118" y1="0" x2="114" y2="9" stroke="#8a6b42" strokeWidth="0.8"/>
-          <line x1="160" y1="0" x2="156" y2="9" stroke="#8a6b42" strokeWidth="0.8"/>
-        </svg>
+      <div style={{position:"absolute",right:"4%",top:"22%",textAlign:"right",zIndex:2}}>
+        <div style={{fontSize:22,fontWeight:900,color:"#fff",letterSpacing:2,lineHeight:1}}>রশিদ</div>
+        <div style={{fontSize:6.5,color:"#f5d9dc",lineHeight:1.7,marginTop:5}}>
+          <span style={{fontWeight:700}}>অর্ডার নং:</span> {no}<br/>
+          <span style={{fontWeight:700}}>তারিখ:</span> {fmtDate(cust.date)}
+        </div>
       </div>
     </div>
-    <div style={{background:"#C41E3A",color:"white",padding:"6px 14px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-      <span style={{fontSize:12,fontWeight:800,letterSpacing:0.5}}>গ্রাহকের কপি</span>
-      <span style={{fontSize:10,fontWeight:700,background:"rgba(255,255,255,0.18)",borderRadius:4,padding:"2px 8px"}}>{no}</span>
+    <div style={{background:"#111",color:"white",padding:"6px 14px",textAlign:"center"}}>
+      <span style={{fontSize:12,fontWeight:800,letterSpacing:2}}>গ্রাহকের কপি</span>
     </div>
     <div style={{padding:"10px 14px"}}>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"3px 12px",background:"#fff8f8",borderRadius:7,padding:"8px",marginBottom:8}}>
@@ -1471,7 +1447,8 @@ function Home({orders,expenses,woodLots,db,onNew,onHist,onManage,onExpense,onWoo
     return{running:withDays,monthlyOrders,monthlyExpense,yoy,totalRevenue,totalExpense,catPie,thisMonthCount:thisMonthOrders.length,avgOrderValue,totalOutstanding,topCategoryRanked,yearly,bestMonthCompare,stockPie,expensePie};
   },[orders,expenses,db,woodLots]);
 
-  return<div style={{minHeight:"100vh",background:`linear-gradient(150deg,${RED} 0%,#8B0020 100%)`}}>
+  return<div style={{minHeight:"100vh",background:`linear-gradient(150deg,${RED} 0%,#8B0020 100%)`,position:"relative"}}>
+    <div style={{position:"absolute",top:8,right:10,fontSize:9,color:"rgba(255,255,255,0.55)",fontWeight:600,letterSpacing:0.3,zIndex:5}}>v{BUILD_TAG}</div>
     <div style={{padding:"24px 18px 18px",textAlign:"center",color:"white"}}>
       <div style={{width:52,height:52,background:"white",borderRadius:13,display:"inline-flex",alignItems:"center",justifyContent:"center",marginBottom:8,boxShadow:"0 4px 18px rgba(0,0,0,.3)"}}><span style={{color:RED,fontSize:26,fontWeight:800,fontFamily:"Georgia,serif"}}>R</span></div>
       <div style={{fontSize:20,fontWeight:800}}>রূপালী ফার্নিচার</div>
@@ -1485,7 +1462,7 @@ function Home({orders,expenses,woodLots,db,onNew,onHist,onManage,onExpense,onWoo
         <button onClick={onHist} style={{background:"white",color:RED,border:`2px solid ${RED}`,borderRadius:11,padding:"11px 8px",fontSize:12,fontWeight:700}}>অর্ডার ইতিহাস</button>
         <button onClick={onManage} style={{background:"white",color:"#6d28d9",border:"2px solid #6d28d9",borderRadius:11,padding:"11px 8px",fontSize:12,fontWeight:700}}>⚙ ডেটাবেস</button>
         <button onClick={onWoodStock} style={{background:"white",color:"#065f46",border:"2px solid #065f46",borderRadius:11,padding:"11px 8px",fontSize:12,fontWeight:700,gridColumn:"span 2"}}>🪵 কাঠের স্টক ব্যবস্থাপনা</button>
-        <button onClick={onPayroll} style={{background:"white",color:"#7c3aed",border:"2px solid #7c3aed",borderRadius:11,padding:"11px 8px",fontSize:12,fontWeight:700,gridColumn:"span 2"}}>👷 পে-রোল ব্যবস্থাপনা</button>
+        <button onClick={onPayroll} style={{background:PAY,color:"white",border:"none",borderRadius:11,padding:"13px 8px",fontSize:13,fontWeight:700,gridColumn:"span 2"}}>👷 পে-রোল ব্যবস্থাপনা</button>
       </div>
 
       {/* Quick Stats */}
@@ -1974,6 +1951,54 @@ function WoodStockPage({woodLots,saveWoodLots,onBack}){
 }
 
 /* ── PAYROLL PAGE ── */
+const DAY_OPTIONS=Array.from({length:22},(_,i)=>i*0.5); // 0, 0.5, ... 10.5
+function DayWheel({value,onChange,color}){
+  const ref=useRef(null);
+  const ITEM=34;
+  const settleRef=useRef(null);
+  const selfScrollRef=useRef(false);
+
+  useEffect(()=>{
+    const el=ref.current;
+    if(!el)return;
+    const idx=Math.max(0,DAY_OPTIONS.indexOf(parseFloat(value)||0));
+    const target=idx*ITEM;
+    if(Math.abs(el.scrollTop-target)>1){
+      selfScrollRef.current=true;
+      el.scrollTop=target;
+      setTimeout(()=>{selfScrollRef.current=false},60);
+    }
+  },[value]);
+
+  const onScroll=()=>{
+    if(selfScrollRef.current)return;
+    const el=ref.current;
+    if(!el)return;
+    clearTimeout(settleRef.current);
+    settleRef.current=setTimeout(()=>{
+      const idx=Math.round(el.scrollTop/ITEM);
+      const clamped=Math.min(Math.max(idx,0),DAY_OPTIONS.length-1);
+      const v=DAY_OPTIONS[clamped];
+      if(v!==(parseFloat(value)||0))onChange(v);
+      const target=clamped*ITEM;
+      if(Math.abs(el.scrollTop-target)>1){
+        selfScrollRef.current=true;
+        el.scrollTo({top:target,behavior:"smooth"});
+        setTimeout(()=>{selfScrollRef.current=false},320);
+      }
+    },110);
+  };
+
+  const cur=parseFloat(value)||0;
+  return<div style={{position:"relative",width:66,height:ITEM*3,flexShrink:0}}>
+    <div style={{position:"absolute",left:0,right:0,top:ITEM,height:ITEM,background:color+"18",borderTop:`1.5px solid ${color}`,borderBottom:`1.5px solid ${color}`,borderRadius:6,pointerEvents:"none",zIndex:2}}></div>
+    <div ref={ref} onScroll={onScroll} style={{height:"100%",overflowY:"scroll",scrollSnapType:"y mandatory",WebkitOverflowScrolling:"touch",scrollbarWidth:"none",msOverflowStyle:"none",position:"relative",zIndex:1}} className="daywheel">
+      <div style={{height:ITEM}}></div>
+      {DAY_OPTIONS.map(v=><div key={v} style={{height:ITEM,scrollSnapAlign:"start",display:"flex",alignItems:"center",justifyContent:"center",fontSize:v===cur?18:15,fontWeight:v===cur?800:500,color:v===cur?color:"#c9c9c9",transition:"font-size .12s,color .12s"}}>{v}</div>)}
+      <div style={{height:ITEM}}></div>
+    </div>
+  </div>
+}
 function PayrollPage({workers,saveWorker,deleteWorker,payrollWeeks,savePayrollWeek,onBack}){
   const today=todayStr();
   const[view,setView]=useState("week"); // week | workers
@@ -2049,12 +2074,12 @@ function PayrollPage({workers,saveWorker,deleteWorker,payrollWeeks,savePayrollWe
   const weekRangeLabel=`${fmtDate(days[0])} — ${fmtDate(days[6])}`;
 
   return<div className="print-bg" style={{minHeight:"100vh",background:"#f8f8f8"}}>
-    <div className="no-print" style={{background:"#7c3aed",color:"white",padding:"13px 16px",display:"flex",alignItems:"center",gap:11}}>
+    <div className="no-print" style={{background:PAY,color:"white",padding:"13px 16px",display:"flex",alignItems:"center",gap:11}}>
       <button onClick={onBack} style={{background:"rgba(255,255,255,.2)",border:"none",color:"white",borderRadius:8,padding:"7px 13px",fontSize:13}}>←</button>
       <span style={{fontWeight:700,fontSize:16}}>পে-রোল ব্যবস্থাপনা</span>
     </div>
     <div className="no-print" style={{background:"white",display:"flex",borderBottom:"1px solid #eee"}}>
-      {[{id:"week",l:"সাপ্তাহিক হাজিরা ও রিপোর্ট"},{id:"workers",l:"কর্মী তালিকা"}].map(t=><button key={t.id} onClick={()=>setView(t.id)} style={{flex:1,padding:"11px 6px",border:"none",background:"none",fontSize:12,fontWeight:view===t.id?700:400,color:view===t.id?"#7c3aed":"#888",borderBottom:view===t.id?"3px solid #7c3aed":"3px solid transparent"}}>{t.l}</button>)}
+      {[{id:"week",l:"সাপ্তাহিক হাজিরা ও রিপোর্ট"},{id:"workers",l:"কর্মী তালিকা"}].map(t=><button key={t.id} onClick={()=>setView(t.id)} style={{flex:1,padding:"11px 6px",border:"none",background:"none",fontSize:12,fontWeight:view===t.id?700:400,color:view===t.id?PAY:"#888",borderBottom:view===t.id?`3px solid ${PAY}`:"3px solid transparent"}}>{t.l}</button>)}
     </div>
 
     <div className="print-wrap" style={{padding:"16px",maxWidth:640,margin:"0 auto"}}>
@@ -2072,20 +2097,20 @@ function PayrollPage({workers,saveWorker,deleteWorker,payrollWeeks,savePayrollWe
             <div>{lbl("বিভাগ")}<select value={newWorker.department} onChange={e=>setNewWorker({...newWorker,department:e.target.value})} style={inp}>{PAYROLL_DEPTS.map(d=><option key={d} value={d}>{d}</option>)}</select></div>
             <div>{lbl("দৈনিক বেতন (৳) *")}<input type="number" value={newWorker.dailyRate} onChange={e=>setNewWorker({...newWorker,dailyRate:e.target.value})} placeholder="0" style={inp}/></div>
           </div>
-          <div style={{marginBottom:14,background:"#faf5ff",borderRadius:9,padding:10,border:"1px solid #e9d5ff"}}>
+          <div style={{marginBottom:14,background:PAY_LIGHT,borderRadius:9,padding:10,border:`1px solid ${PAY_BORDER}`}}>
             {lbl("🪪 আইডি কার্ডের ছবি (ভোটার আইডি / এনআইডি)")}
             {newWorker.idCardImg?<div style={{textAlign:"center"}}>
               <img src={newWorker.idCardImg} style={{maxWidth:"100%",maxHeight:150,objectFit:"contain",borderRadius:8,border:"1px solid #ddd",display:"block",margin:"0 auto 7px"}} alt="ID card"/>
               <div style={{display:"flex",gap:6}}>
-                <button onClick={()=>idCardInput.current.click()} style={{flex:1,background:"white",border:"1px solid #c4b5fd",color:"#6d28d9",borderRadius:7,padding:"7px",fontSize:11,fontWeight:600}}>ছবি বদলান</button>
+                <button onClick={()=>idCardInput.current.click()} style={{flex:1,background:"white",border:`1px solid ${PAY_BORDER}`,color:PAY_DARK,borderRadius:7,padding:"7px",fontSize:11,fontWeight:600}}>ছবি বদলান</button>
                 <button onClick={()=>setNewWorker({...newWorker,idCardImg:null,idCardFileName:null})} style={{background:"#fee2e2",border:"none",color:RED,borderRadius:7,padding:"7px 11px",fontSize:11,fontWeight:600}}>✕ সরান</button>
               </div>
-            </div>:<button onClick={()=>idCardInput.current.click()} style={{width:"100%",background:"white",border:"2px dashed #c4b5fd",color:"#6d28d9",borderRadius:8,padding:"11px",fontSize:12,fontWeight:600}}>📷 আইডি কার্ডের ছবি তুলুন বা বেছে নিন</button>}
+            </div>:<button onClick={()=>idCardInput.current.click()} style={{width:"100%",background:"white",border:`2px dashed ${PAY_BORDER}`,color:PAY_DARK,borderRadius:8,padding:"11px",fontSize:12,fontWeight:600}}>📷 আইডি কার্ডের ছবি তুলুন বা বেছে নিন</button>}
             <input ref={idCardInput} type="file" accept="image/*" onChange={handleIdCardImg} style={{display:"none"}}/>
           </div>
           <div style={{display:"flex",gap:8}}>
             {editingWorkerId&&<button onClick={()=>{setEditingWorkerId(null);setNewWorker(blankWorker)}} style={{flex:1,background:"#f3f4f6",border:"none",borderRadius:9,padding:"12px",fontSize:13}}>বাতিল</button>}
-            <button onClick={editingWorkerId?saveEditWorker:saveNewWorker} style={{flex:2,background:"#7c3aed",color:"white",border:"none",borderRadius:9,padding:"12px",fontSize:13,fontWeight:700}}>{editingWorkerId?"সংরক্ষণ করুন":"যোগ করুন"}</button>
+            <button onClick={editingWorkerId?saveEditWorker:saveNewWorker} style={{flex:2,background:PAY,color:"white",border:"none",borderRadius:9,padding:"12px",fontSize:13,fontWeight:700}}>{editingWorkerId?"সংরক্ষণ করুন":"যোগ করুন"}</button>
           </div>
         </div>
         <div style={{fontWeight:700,fontSize:14,marginBottom:10}}>কর্মী তালিকা ({workers.length})</div>
@@ -2095,16 +2120,16 @@ function PayrollPage({workers,saveWorker,deleteWorker,payrollWeeks,savePayrollWe
             {w.idCardImg&&<img src={w.idCardImg} onClick={()=>setViewingIdCard(w)} style={{width:44,height:34,objectFit:"cover",borderRadius:6,border:"1px solid #ddd",flexShrink:0,cursor:"pointer"}} alt="ID"/>}
             <div style={{flex:1,minWidth:0}}>
               <div style={{fontWeight:700,fontSize:14}}>{w.name}{w.active===false&&<span style={{fontSize:10,color:"#999",fontWeight:400}}> (নিষ্ক্রিয়)</span>}</div>
-              <div style={{fontSize:11,color:"#888",marginTop:2}}>{w.department} · দৈনিক {money(w.dailyRate)}</div>
+              <div style={{fontSize:11,color:"#888",marginTop:2,display:"flex",alignItems:"center",gap:5}}><span style={{width:8,height:8,borderRadius:"50%",background:deptColor(w.department),display:"inline-block",flexShrink:0}}></span>{w.department} · দৈনিক {money(w.dailyRate)}</div>
               {w.voterId&&<div style={{fontSize:11,color:"#888",marginTop:1}}>ভোটার আইডি: {w.voterId}</div>}
               <div style={{display:"flex",gap:8,marginTop:4,flexWrap:"wrap"}}>
                 {w.phone1&&<a href={`tel:${w.phone1}`} style={{fontSize:11,color:"#1d4ed8",textDecoration:"none",fontWeight:600,background:"#eff6ff",borderRadius:6,padding:"2px 8px"}}>📱 {w.phone1}</a>}
                 {w.phone2&&<a href={`tel:${w.phone2}`} style={{fontSize:11,color:"#1d4ed8",textDecoration:"none",fontWeight:600,background:"#eff6ff",borderRadius:6,padding:"2px 8px"}}>📱 {w.phone2}</a>}
-                {w.idCardImg&&<button onClick={()=>setViewingIdCard(w)} style={{fontSize:11,color:"#6d28d9",fontWeight:600,background:"#f5f3ff",border:"none",borderRadius:6,padding:"2px 8px"}}>🪪 আইডি কার্ড</button>}
+                {w.idCardImg&&<button onClick={()=>setViewingIdCard(w)} style={{fontSize:11,color:PAY_DARK,fontWeight:600,background:PAY_LIGHT,border:"none",borderRadius:6,padding:"2px 8px"}}>🪪 আইডি কার্ড</button>}
               </div>
             </div>
             <div style={{display:"flex",gap:5,flexShrink:0}}>
-              <button onClick={()=>startEditWorker(w)} style={{background:"#f5f3ff",border:"none",borderRadius:6,padding:"5px 8px",color:"#6d28d9",fontSize:10,fontWeight:600}}>✏️</button>
+              <button onClick={()=>startEditWorker(w)} style={{background:PAY_LIGHT,border:"none",borderRadius:6,padding:"5px 8px",color:PAY_DARK,fontSize:10,fontWeight:600}}>✏️</button>
               <button onClick={()=>toggleActive(w)} style={{background:w.active===false?"#f0fdf4":"#fffbeb",border:"none",borderRadius:6,padding:"5px 8px",color:w.active===false?"#166534":"#92400e",fontSize:10,fontWeight:600}}>{w.active===false?"সক্রিয় করুন":"নিষ্ক্রিয়"}</button>
               <button onClick={()=>confirmDeleteWorker(w)} style={{background:"#fee2e2",border:"none",borderRadius:6,padding:"5px 8px",color:RED,fontSize:10,fontWeight:600}}>🗑</button>
             </div>
@@ -2122,48 +2147,65 @@ function PayrollPage({workers,saveWorker,deleteWorker,payrollWeeks,savePayrollWe
 
       {view==="week"&&<>
         <div className="no-print" style={{display:"flex",alignItems:"center",justifyContent:"space-between",background:"white",borderRadius:11,padding:"10px 14px",marginBottom:14,boxShadow:"0 1px 4px rgba(0,0,0,.07)"}}>
-          <button onClick={()=>setWeekEnd(addDays(weekEnd,-7))} style={{background:"#f5f3ff",border:"none",borderRadius:8,padding:"8px 12px",color:"#6d28d9",fontWeight:700,fontSize:13}}>◀</button>
+          <button onClick={()=>setWeekEnd(addDays(weekEnd,-7))} style={{background:PAY_LIGHT,border:"none",borderRadius:8,padding:"8px 12px",color:PAY_DARK,fontWeight:700,fontSize:13}}>◀</button>
           <div style={{textAlign:"center"}}>
             <div style={{fontSize:13,fontWeight:700,color:"#222"}}>{weekRangeLabel}</div>
             <div style={{fontSize:10,color:"#888"}}>শুক্র – বৃহস্পতি</div>
           </div>
-          <button onClick={()=>setWeekEnd(addDays(weekEnd,7))} style={{background:"#f5f3ff",border:"none",borderRadius:8,padding:"8px 12px",color:"#6d28d9",fontWeight:700,fontSize:13}}>▶</button>
+          <button onClick={()=>setWeekEnd(addDays(weekEnd,7))} style={{background:PAY_LIGHT,border:"none",borderRadius:8,padding:"8px 12px",color:PAY_DARK,fontWeight:700,fontSize:13}}>▶</button>
         </div>
 
-        <div className="no-print" style={{background:"white",borderRadius:11,padding:14,marginBottom:14,boxShadow:"0 1px 4px rgba(0,0,0,.07)"}}>
-          <div style={{fontWeight:700,fontSize:13,marginBottom:4,color:"#6d28d9"}}>সাপ্তাহিক হাজিরা (এটেন্ডেন্স ডিভাইস দেখে লিখুন)</div>
-          <div style={{fontSize:10,color:"#888",marginBottom:12}}>প্রতিটি কর্মীর জন্য এই সপ্তাহে মোট কত দিন কাজ হয়েছে লিখুন। স্বাভাবিক ১ দিন, ওভারটাইম হলে ১.৫ দিন করে ধরে মোট দিন লিখবেন (সর্বোচ্চ ১০.৫)।</div>
-          <div>
-            {activeWorkers.length===0?<div style={{textAlign:"center",color:"#aaa",padding:16,fontSize:12}}>কোনো সক্রিয় কর্মী নেই</div>:
-            activeWorkers.map((w,i)=><div key={w.id} style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,padding:"9px 4px",borderTop:i>0?"1px solid #f2f2f2":"none"}}>
-              <div style={{fontWeight:600,fontSize:13}}>{w.name}<span style={{fontSize:10,color:"#999",fontWeight:400}}> · {w.department}</span></div>
-              <input type="number" step="0.5" min="0" max="10.5" value={daysPresent(w.id)||""} onChange={e=>setWorkerDays(w.id,e.target.value)} placeholder="0" style={{width:74,textAlign:"center",border:"1.5px solid #e0e0e0",borderRadius:8,padding:"8px 6px",fontSize:14,fontWeight:700,color:"#6d28d9"}}/>
-            </div>)}
-          </div>
-          <div style={{fontSize:9,color:"#999",marginTop:10}}>সর্বোচ্চ সম্ভাব্য হাজিরা: ১০.৫ দিন/সপ্তাহ (সব দিন ওভারটাইম হলে)</div>
-        </div>
-
-        <div className="no-print" style={{background:"white",borderRadius:11,padding:14,marginBottom:14,boxShadow:"0 1px 4px rgba(0,0,0,.07)"}}>
-          <div style={{fontWeight:700,fontSize:13,marginBottom:10,color:"#6d28d9"}}>অগ্রিম (এডভান্স) যোগ করুন</div>
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
-            <div>{lbl("তারিখ")}<DateInput value={newAdv.date} onChange={v=>setNewAdv({...newAdv,date:v})} accent="#6d28d9"/></div>
-            <div>{lbl("কর্মী")}<select value={newAdv.workerId} onChange={e=>setNewAdv({...newAdv,workerId:e.target.value})} style={inp}>
+        <div className="no-print" style={{background:"white",borderRadius:13,padding:16,marginBottom:14,boxShadow:"0 2px 10px rgba(0,0,0,.09)",border:`1.5px solid ${PAY_BORDER}`}}>
+          <div style={{fontWeight:800,fontSize:15,marginBottom:12,color:PAY_DARK}}>💰 অগ্রিম (এডভান্স) যোগ করুন</div>
+          <div style={{marginBottom:10}}>
+            {lbl("কর্মী")}
+            <select value={newAdv.workerId} onChange={e=>setNewAdv({...newAdv,workerId:e.target.value})} style={{...inp,padding:"12px 11px",fontSize:14,fontWeight:600}}>
               <option value="">-- নির্বাচন করুন --</option>
-              {activeWorkers.map(w=><option key={w.id} value={w.id}>{w.name}</option>)}
-            </select></div>
+              {activeWorkers.map(w=><option key={w.id} value={w.id} style={{color:deptColor(w.department)}}>{w.name} — {w.department}</option>)}
+            </select>
           </div>
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:10}}>
-            <div>{lbl("পরিমাণ (৳)")}<input type="number" value={newAdv.amount} onChange={e=>setNewAdv({...newAdv,amount:e.target.value})} placeholder="0" style={inp}/></div>
+          <div style={{marginBottom:10}}>
+            {lbl("পরিমাণ (৳)")}
+            <input type="number" value={newAdv.amount} onChange={e=>setNewAdv({...newAdv,amount:e.target.value})} placeholder="0" style={{...inp,padding:"14px 12px",fontSize:20,fontWeight:800,color:"#166534"}}/>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:14}}>
+            <div>{lbl("তারিখ")}<DateInput value={newAdv.date} onChange={v=>setNewAdv({...newAdv,date:v})} accent={PAY}/></div>
             <div>{lbl("নোট")}<input value={newAdv.note} onChange={e=>setNewAdv({...newAdv,note:e.target.value})} placeholder="ঐচ্ছিক" style={inp}/></div>
           </div>
-          <button onClick={addAdvance} style={{width:"100%",background:"#6d28d9",color:"white",border:"none",borderRadius:9,padding:"11px",fontSize:13,fontWeight:700,marginBottom:10}}>+ অগ্রিম যোগ করুন</button>
-          {(weekData.advances||[]).map(a=>{
-            const w=workers.find(w=>w.id===a.workerId);
-            return<div key={a.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",fontSize:11,padding:"6px 0",borderTop:"1px dashed #eee"}}>
-              <span>{fmtDate(a.date)} — {w?w.name:"?"}{a.note?` (${a.note})`:""}</span>
-              <span style={{display:"flex",alignItems:"center",gap:6}}><strong>{money(a.amount)}</strong><button onClick={()=>removeAdvance(a.id)} style={{background:"#fee2e2",border:"none",borderRadius:5,padding:"2px 6px",color:RED,fontSize:10}}>✕</button></span>
-            </div>
-          })}
+          <button onClick={addAdvance} disabled={!newAdv.workerId||!newAdv.amount} style={{width:"100%",background:(!newAdv.workerId||!newAdv.amount)?"#ccc":"#16a34a",color:"white",border:"none",borderRadius:11,padding:"16px",fontSize:16,fontWeight:800,boxShadow:(!newAdv.workerId||!newAdv.amount)?"none":"0 4px 12px rgba(22,163,74,0.35)"}}>✓ জমা করুন</button>
+          {(weekData.advances||[]).length>0&&<div style={{marginTop:14,paddingTop:12,borderTop:"1px solid #f0f0f0"}}>
+            {(weekData.advances||[]).map(a=>{
+              const w=workers.find(w=>w.id===a.workerId);
+              return<div key={a.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",fontSize:12,padding:"7px 0",borderTop:"1px dashed #eee"}}>
+                <span style={{display:"flex",alignItems:"center",gap:6}}>
+                  {w&&<span style={{width:8,height:8,borderRadius:"50%",background:deptColor(w.department),display:"inline-block",flexShrink:0}}></span>}
+                  {fmtDate(a.date)} — {w?w.name:"?"}{a.note?` (${a.note})`:""}
+                </span>
+                <span style={{display:"flex",alignItems:"center",gap:6}}><strong>{money(a.amount)}</strong><button onClick={()=>removeAdvance(a.id)} style={{background:"#fee2e2",border:"none",borderRadius:5,padding:"2px 6px",color:RED,fontSize:10}}>✕</button></span>
+              </div>
+            })}
+          </div>}
+        </div>
+
+        <div className="no-print" style={{background:"white",borderRadius:11,padding:14,marginBottom:14,boxShadow:"0 1px 4px rgba(0,0,0,.07)"}}>
+          <div style={{fontWeight:700,fontSize:13,marginBottom:4,color:PAY_DARK}}>সাপ্তাহিক হাজিরা (এটেন্ডেন্স ডিভাইস দেখে লিখুন)</div>
+          <div style={{fontSize:10,color:"#888",marginBottom:14}}>প্রতিটি কর্মীর পাশের চাকা উপরে/নিচে টেনে এই সপ্তাহের মোট দিন নির্বাচন করুন — স্বাভাবিক ১ দিন, ওভারটাইম হলে ১.৫ দিন করে ধরে মোট (সর্বোচ্চ ১০.৫)।</div>
+          <div>
+            {activeWorkers.length===0?<div style={{textAlign:"center",color:"#aaa",padding:16,fontSize:12}}>কোনো সক্রিয় কর্মী নেই</div>:
+            activeWorkers.map((w,i)=>{
+              const c=deptColor(w.department);
+              const val=daysPresent(w.id);
+              return<div key={w.id} style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,padding:"10px 4px 10px 10px",borderTop:i>0?"1px solid #f2f2f2":"none",borderLeft:`3px solid ${c}`}}>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontWeight:700,fontSize:13}}>{w.name}</div>
+                  <div style={{fontSize:10,color:c,fontWeight:600,marginTop:1}}>{w.department}</div>
+                  <div style={{fontSize:10,color:"#999",marginTop:2}}>দৈনিক {money(w.dailyRate)} · মোট {money(val*(parseFloat(w.dailyRate)||0))}</div>
+                </div>
+                <DayWheel value={val} onChange={v=>setWorkerDays(w.id,v)} color={c}/>
+              </div>
+            })}
+          </div>
+          <div style={{fontSize:9,color:"#999",marginTop:10}}>সর্বোচ্চ সম্ভাব্য হাজিরা: ১০.৫ দিন/সপ্তাহ (সব দিন ওভারটাইম হলে)</div>
         </div>
 
         <div style={{background:"white",borderRadius:11,padding:16,boxShadow:"0 1px 4px rgba(0,0,0,.07)"}} id="payroll-report">
@@ -2179,9 +2221,9 @@ function PayrollPage({workers,saveWorker,deleteWorker,payrollWeeks,savePayrollWe
               {["কর্মীর নাম","বিভাগ","উপস্থিত দিন","দৈনিক হার","মোট আয়","অগ্রিম","প্রাপ্য"].map(h=><th key={h} style={{padding:"7px 6px",textAlign:"left",fontWeight:700,fontSize:11}}>{h}</th>)}
             </tr></thead>
             <tbody>
-              {activeWorkers.map((w,i)=><tr key={w.id} style={{background:i%2===0?"#f3f4f6":"white",borderBottom:"1px solid #e5e7eb"}}>
+              {activeWorkers.map((w,i)=><tr key={w.id} style={{background:i%2===0?"#f3f4f6":"white",borderBottom:"1px solid #e5e7eb",borderLeft:`3px solid ${deptColor(w.department)}`}}>
                 <td style={{padding:"7px 6px",fontWeight:600}}>{w.name}</td>
-                <td style={{padding:"7px 6px",fontSize:11,color:"#666"}}>{w.department}</td>
+                <td style={{padding:"7px 6px",fontSize:11,color:deptColor(w.department),fontWeight:600}}>{w.department}</td>
                 <td style={{padding:"7px 6px",textAlign:"center"}}>{daysPresent(w.id)}</td>
                 <td style={{padding:"7px 6px"}}>{money(w.dailyRate)}</td>
                 <td style={{padding:"7px 6px"}}>{money(grossPay(w))}</td>
