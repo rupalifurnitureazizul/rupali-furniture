@@ -69,7 +69,7 @@ function compressImage(file,maxDim=1200,quality=0.82){
 /* ── FULL-RESOLUTION LOCAL FOLDER STORAGE (desktop Chrome/Edge/Brave only) ──
    Original, uncompressed images are saved as real files in a folder you choose
    on your computer. Only a small compressed thumbnail syncs to the cloud/mobile. */
-const BUILD_TAG="1.68";
+const BUILD_TAG="1.70";
 const FS_SUPPORTED=typeof window!=="undefined"&&"showDirectoryPicker" in window;
 function idbOpen(){
   return new Promise((resolve,reject)=>{
@@ -388,30 +388,30 @@ function S1({order,onPrint}){
     <div className="no-print" style={{padding:"8px 14px",background:"#fff",borderBottom:"1px solid #eee",display:"flex",justifyContent:"flex-end",gap:8}}><WhatsAppSendBtn targetRef={captureRef} phone={cust.phone}/><PrintBtn onPrint={()=>onPrint("s1")}/></div>
     <div ref={captureRef}>
     {/* ── বিলবোর্ড-অনুরূপ হেডার ── */}
-    <div style={{position:"relative",overflow:"hidden",background:"#8FBFBA"}}>
-      {/* টিল ডান প্যানেল — ট্যাগলাইন ও ফার্নিচার সিলুয়েট */}
-      <div style={{position:"absolute",right:0,top:0,bottom:0,width:"52%",background:"linear-gradient(160deg,#9CC7C2 0%,#7FADA8 100%)"}}>
+    <div style={{position:"relative",overflow:"hidden",background:"#C41E3A"}}>
+      {/* লাল শেডের ডান প্যানেল — ট্যাগলাইন ও ফার্নিচার সিলুয়েট */}
+      <div style={{position:"absolute",right:0,top:0,bottom:0,width:"52%",background:"linear-gradient(160deg,#D9455C 0%,#9A1B2C 100%)"}}>
         <svg viewBox="0 0 150 100" preserveAspectRatio="none" style={{position:"absolute",inset:0,width:"100%",height:"100%",opacity:0.28}} aria-hidden="true">
           {/* স্পটলাইট বিম */}
-          <path d="M64 0 L44 100 L92 100 Z" fill="#F5C542" opacity="0.55"/>
+          <path d="M64 0 L44 100 L92 100 Z" fill="#F5C542" opacity="0.5"/>
           {/* আয়না/ড্রেসিং */}
-          <rect x="52" y="26" width="26" height="66" rx="4" fill="#fff" opacity="0.75"/>
+          <rect x="52" y="26" width="26" height="66" rx="4" fill="#fff" opacity="0.8"/>
           {/* শেলফ */}
-          <rect x="24" y="34" width="22" height="58" rx="2" fill="none" stroke="#4a3b2f" strokeWidth="2"/>
-          <line x1="24" y1="52" x2="46" y2="52" stroke="#4a3b2f" strokeWidth="1.5"/>
-          <line x1="24" y1="70" x2="46" y2="70" stroke="#4a3b2f" strokeWidth="1.5"/>
+          <rect x="24" y="34" width="22" height="58" rx="2" fill="none" stroke="#fff" strokeWidth="2"/>
+          <line x1="24" y1="52" x2="46" y2="52" stroke="#fff" strokeWidth="1.5"/>
+          <line x1="24" y1="70" x2="46" y2="70" stroke="#fff" strokeWidth="1.5"/>
           {/* দরজা */}
-          <rect x="112" y="20" width="30" height="72" rx="2" fill="#7a5c3e" opacity="0.8"/>
+          <rect x="112" y="20" width="30" height="72" rx="2" fill="#3b1216" opacity="0.55"/>
           <circle cx="127" cy="52" r="9" fill="none" stroke="#f0e2cd" strokeWidth="1.5"/>
           {/* সোফা */}
-          <rect x="84" y="70" width="26" height="14" rx="3" fill="#6b4a2f" opacity="0.85"/>
-          <rect x="84" y="62" width="26" height="10" rx="4" fill="#8a6242" opacity="0.85"/>
+          <rect x="84" y="70" width="26" height="14" rx="3" fill="#3b1216" opacity="0.5"/>
+          <rect x="84" y="62" width="26" height="10" rx="4" fill="#3b1216" opacity="0.45"/>
         </svg>
-        <div style={{position:"absolute",left:"6%",top:"50%",transform:"translateY(-50%)",zIndex:2,textAlign:"center",width:"56%"}}>
-          <div style={{fontSize:12,fontWeight:800,color:"#2b2320",lineHeight:1.45,textShadow:"0 1px 0 rgba(255,255,255,0.45)"}}>আপনার বিশ্বাসের<br/>আসবাবঘর</div>
+        <div style={{position:"absolute",left:"32%",top:"50%",transform:"translateY(-50%)",zIndex:2,textAlign:"center",width:"52%"}}>
+          <div style={{fontSize:12,fontWeight:800,color:"#fff",lineHeight:1.45,textShadow:"0 1px 2px rgba(0,0,0,0.35)"}}>আপনার বিশ্বাসের<br/>আসবাবঘর</div>
         </div>
-        {/* ছোট লাল লোগো ব্যাজ */}
-        <div style={{position:"absolute",right:8,top:7,background:"#C41E3A",borderRadius:3,padding:"2px 5px",display:"flex",alignItems:"center",gap:3,zIndex:3}}>
+        {/* ছোট গাঢ় লোগো ব্যাজ */}
+        <div style={{position:"absolute",right:8,top:7,background:"#241d19",borderRadius:3,padding:"2px 5px",display:"flex",alignItems:"center",gap:3,zIndex:3}}>
           <span style={{color:"white",fontSize:9,fontWeight:900,fontFamily:"Georgia,serif",lineHeight:1}}>R</span>
           <span style={{color:"white",fontSize:5,fontWeight:700,letterSpacing:0.4,lineHeight:1.15}}>RUPALI<br/>FURNITURE</span>
         </div>
@@ -2015,14 +2015,13 @@ function PayrollPage({workers,saveWorker,deleteWorker,payrollWeeks,savePayrollWe
   const toggleActive=(w)=>saveWorker({...w,active:w.active===false?true:false});
   const confirmDeleteWorker=(w)=>{if(window.confirm(`"${w.name}" কে স্থায়ীভাবে মুছে ফেলতে চান? এর সাথে যুক্ত পুরনো হাজিরার তথ্য অক্ষত থাকবে, শুধু কর্মীর প্রোফাইল মুছে যাবে।`))deleteWorker(w.id)};
 
-  // Attendance cycles through: 0 (absent) → 1 (present) → 1.5 (overtime) → 0
-  const toggleAttendance=(workerId,dayIdx)=>{
-    const att=JSON.parse(JSON.stringify(weekData.attendance||{}));
-    const arr=getAttArray(weekData,workerId).map(attVal);
-    while(arr.length<7)arr.push(0);
-    const cur=arr[dayIdx];
-    arr[dayIdx]=cur===0?1:cur===1?1.5:0;
-    att[workerId]=arr;
+  // Attendance: single "total days this week" number per worker (read from external attendance device)
+  const setWorkerDays=(workerId,val)=>{
+    let n=parseFloat(val);
+    if(isNaN(n))n=0;
+    if(n<0)n=0;
+    if(n>10.5)n=10.5;
+    const att={...(weekData.attendance||{}),[workerId]:n};
     savePayrollWeek(weekEnd,{...weekData,attendance:att});
   };
   const addAdvance=()=>{
@@ -2035,7 +2034,11 @@ function PayrollPage({workers,saveWorker,deleteWorker,payrollWeeks,savePayrollWe
     savePayrollWeek(weekEnd,{...weekData,advances:(weekData.advances||[]).filter(a=>a.id!==advId)});
   };
 
-  const daysPresent=(workerId)=>getAttArray(weekData,workerId).reduce((s,v)=>s+attVal(v),0);
+  const daysPresent=(workerId)=>{
+    const v=(weekData.attendance||{})[workerId];
+    if(Array.isArray(v))return v.reduce((s,x)=>s+attVal(x),0); // পুরনো দিন-ভিত্তিক তথ্য থাকলে যোগফল
+    return parseFloat(v)||0;
+  };
   const advanceTotal=(workerId)=>(weekData.advances||[]).filter(a=>a.workerId===workerId).reduce((s,a)=>s+(parseFloat(a.amount)||0),0);
   const grossPay=(w)=>daysPresent(w.id)*(parseFloat(w.dailyRate)||0);
   const netPay=(w)=>grossPay(w)-advanceTotal(w.id);
@@ -2127,39 +2130,17 @@ function PayrollPage({workers,saveWorker,deleteWorker,payrollWeeks,savePayrollWe
           <button onClick={()=>setWeekEnd(addDays(weekEnd,7))} style={{background:"#f5f3ff",border:"none",borderRadius:8,padding:"8px 12px",color:"#6d28d9",fontWeight:700,fontSize:13}}>▶</button>
         </div>
 
-        <div className="no-print" style={{background:"white",borderRadius:11,padding:14,marginBottom:14,boxShadow:"0 1px 4px rgba(0,0,0,.07)",overflowX:"auto"}}>
-          <div style={{fontWeight:700,fontSize:13,marginBottom:4,color:"#6d28d9"}}>হাজিরা (ট্যাপ করুন: — → উপস্থিত → ওভারটাইম)</div>
-          <div style={{display:"flex",gap:10,marginBottom:10,fontSize:9,color:"#666"}}>
-            <span style={{display:"flex",alignItems:"center",gap:3}}><span style={{width:12,height:12,borderRadius:4,background:"#f1f5f9",display:"inline-block"}}></span>অনুপস্থিত (0)</span>
-            <span style={{display:"flex",alignItems:"center",gap:3}}><span style={{width:12,height:12,borderRadius:4,background:"#16a34a",display:"inline-block"}}></span>উপস্থিত (১ দিন)</span>
-            <span style={{display:"flex",alignItems:"center",gap:3}}><span style={{width:12,height:12,borderRadius:4,background:"#7c3aed",display:"inline-block"}}></span>ওভারটাইম (১.৫ দিন)</span>
+        <div className="no-print" style={{background:"white",borderRadius:11,padding:14,marginBottom:14,boxShadow:"0 1px 4px rgba(0,0,0,.07)"}}>
+          <div style={{fontWeight:700,fontSize:13,marginBottom:4,color:"#6d28d9"}}>সাপ্তাহিক হাজিরা (এটেন্ডেন্স ডিভাইস দেখে লিখুন)</div>
+          <div style={{fontSize:10,color:"#888",marginBottom:12}}>প্রতিটি কর্মীর জন্য এই সপ্তাহে মোট কত দিন কাজ হয়েছে লিখুন। স্বাভাবিক ১ দিন, ওভারটাইম হলে ১.৫ দিন করে ধরে মোট দিন লিখবেন (সর্বোচ্চ ১০.৫)।</div>
+          <div>
+            {activeWorkers.length===0?<div style={{textAlign:"center",color:"#aaa",padding:16,fontSize:12}}>কোনো সক্রিয় কর্মী নেই</div>:
+            activeWorkers.map((w,i)=><div key={w.id} style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,padding:"9px 4px",borderTop:i>0?"1px solid #f2f2f2":"none"}}>
+              <div style={{fontWeight:600,fontSize:13}}>{w.name}<span style={{fontSize:10,color:"#999",fontWeight:400}}> · {w.department}</span></div>
+              <input type="number" step="0.5" min="0" max="10.5" value={daysPresent(w.id)||""} onChange={e=>setWorkerDays(w.id,e.target.value)} placeholder="0" style={{width:74,textAlign:"center",border:"1.5px solid #e0e0e0",borderRadius:8,padding:"8px 6px",fontSize:14,fontWeight:700,color:"#6d28d9"}}/>
+            </div>)}
           </div>
-          <table style={{width:"100%",borderCollapse:"collapse",fontSize:11,minWidth:460}}>
-            <thead><tr>
-              <th style={{textAlign:"left",padding:"5px 6px",color:"#888",fontWeight:600}}>কর্মী</th>
-              {DAY_LABELS_BN.map((d,i)=><th key={i} style={{padding:"5px 4px",color:i===0?"#c2410c":"#888",fontWeight:600,fontSize:9}}>{d}{i===0?" (ছুটি)":""}</th>)}
-              <th style={{padding:"5px 4px",color:"#6d28d9",fontWeight:700,fontSize:9}}>মোট</th>
-            </tr></thead>
-            <tbody>
-              {activeWorkers.map(w=>{
-                const arr=getAttArray(weekData,w.id);
-                return<tr key={w.id} style={{borderTop:"1px solid #f2f2f2"}}>
-                  <td style={{padding:"6px 6px",fontWeight:600,whiteSpace:"nowrap"}}>{w.name}</td>
-                  {days.map((d,di)=>{
-                    const val=attVal(arr[di]);
-                    const bg=val===1.5?"#7c3aed":val===1?"#16a34a":"#f1f5f9";
-                    const fg=val>0?"white":"#94a3b8";
-                    const label=val===1.5?"1.5":val===1?"✓":"—";
-                    return<td key={di} style={{padding:"4px 3px",textAlign:"center"}}>
-                      <button onClick={()=>toggleAttendance(w.id,di)} style={{width:28,height:28,borderRadius:7,border:"none",background:bg,color:fg,fontWeight:700,fontSize:11}}>{label}</button>
-                    </td>
-                  })}
-                  <td style={{padding:"4px 6px",textAlign:"center",fontWeight:800,color:"#6d28d9"}}>{daysPresent(w.id)}</td>
-                </tr>
-              })}
-            </tbody>
-          </table>
-          <div style={{fontSize:9,color:"#999",marginTop:8}}>সর্বোচ্চ সম্ভাব্য হাজিরা: ১০.৫ দিন/সপ্তাহ (৬ কার্যদিবস + শুক্রবার, সবগুলো ওভারটাইম হলে)</div>
+          <div style={{fontSize:9,color:"#999",marginTop:10}}>সর্বোচ্চ সম্ভাব্য হাজিরা: ১০.৫ দিন/সপ্তাহ (সব দিন ওভারটাইম হলে)</div>
         </div>
 
         <div className="no-print" style={{background:"white",borderRadius:11,padding:14,marginBottom:14,boxShadow:"0 1px 4px rgba(0,0,0,.07)"}}>
@@ -2187,18 +2168,18 @@ function PayrollPage({workers,saveWorker,deleteWorker,payrollWeeks,savePayrollWe
 
         <div style={{background:"white",borderRadius:11,padding:16,boxShadow:"0 1px 4px rgba(0,0,0,.07)"}} id="payroll-report">
           <div className="no-print" style={{display:"flex",justifyContent:"flex-end",marginBottom:10}}>
-            <button onClick={()=>window.print()} style={{background:"#7c3aed",color:"white",border:"none",borderRadius:8,padding:"9px 16px",fontWeight:700,fontSize:12}}>🖨️ রিপোর্ট প্রিন্ট করুন</button>
+            <button onClick={()=>window.print()} style={{background:"#4b5563",color:"white",border:"none",borderRadius:8,padding:"9px 16px",fontWeight:700,fontSize:12}}>🖨️ রিপোর্ট প্রিন্ট করুন</button>
           </div>
           <div style={{textAlign:"center",marginBottom:12}}>
             <div style={{fontSize:16,fontWeight:800,color:"#111"}}>রূপালী ফার্নিচার — সাপ্তাহিক পে-রোল রিপোর্ট</div>
             <div style={{fontSize:12,color:"#666",marginTop:2}}>সপ্তাহ: {weekRangeLabel} (শুক্র – বৃহস্পতি)</div>
           </div>
           <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
-            <thead><tr style={{background:"#7c3aed",color:"white"}}>
+            <thead><tr style={{background:"#4b5563",color:"white"}}>
               {["কর্মীর নাম","বিভাগ","উপস্থিত দিন","দৈনিক হার","মোট আয়","অগ্রিম","প্রাপ্য"].map(h=><th key={h} style={{padding:"7px 6px",textAlign:"left",fontWeight:700,fontSize:11}}>{h}</th>)}
             </tr></thead>
             <tbody>
-              {activeWorkers.map((w,i)=><tr key={w.id} style={{background:i%2===0?"#faf5ff":"white",borderBottom:"1px solid #ede9fe"}}>
+              {activeWorkers.map((w,i)=><tr key={w.id} style={{background:i%2===0?"#f3f4f6":"white",borderBottom:"1px solid #e5e7eb"}}>
                 <td style={{padding:"7px 6px",fontWeight:600}}>{w.name}</td>
                 <td style={{padding:"7px 6px",fontSize:11,color:"#666"}}>{w.department}</td>
                 <td style={{padding:"7px 6px",textAlign:"center"}}>{daysPresent(w.id)}</td>
