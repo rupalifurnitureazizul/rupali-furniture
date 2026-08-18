@@ -74,7 +74,7 @@ function compressImage(file,maxDim=1200,quality=0.82){
 /* ── FULL-RESOLUTION LOCAL FOLDER STORAGE (desktop Chrome/Edge/Brave only) ──
    Original, uncompressed images are saved as real files in a folder you choose
    on your computer. Only a small compressed thumbnail syncs to the cloud/mobile. */
-const BUILD_TAG="1.78";
+const BUILD_TAG="1.90";
 const FS_SUPPORTED=typeof window!=="undefined"&&"showDirectoryPicker" in window;
 function idbOpen(){
   return new Promise((resolve,reject)=>{
@@ -182,6 +182,12 @@ const DAY_LABELS_BN=["শুক্র","শনি","রবি","সোম","ম�
 const attVal=(v)=>v===true?1:v===false||v===undefined||v===null?0:(parseFloat(v)||0);
 const getAttArray=(weekData,workerId)=>{let arr=(weekData.attendance||{})[workerId]||[];if(arr.length===6)arr=[0,...arr];return arr;}; // migrate old 6-day data
 const PAYROLL_DEPTS=["ছুতার","কারিগর","বার্নিশ","পরিবহন","অন্যান্য"];
+const deptRank=(d)=>{const i=PAYROLL_DEPTS.indexOf(d);return i===-1?PAYROLL_DEPTS.length:i};
+const sortByDept=(list)=>[...list].sort((a,b)=>{
+  const r=deptRank(a.department)-deptRank(b.department);
+  if(r!==0)return r;
+  return (a.name||"").localeCompare((b.name||""),"bn");
+});
 const DEPT_COLORS={"ছুতার":"#1d4ed8","কারিগর":"#166534","বার্নিশ":"#b45309","পরিবহন":"#6d28d9","অন্যান্য":"#57534e"};
 const deptColor=(d)=>DEPT_COLORS[d]||"#57534e";
 const daysBetween=(d1,d2)=>Math.round((parseISO(d2)-parseISO(d1))/(1000*60*60*24));
@@ -349,7 +355,7 @@ function FurnitureCategoryModelPicker({db,saveDb,galleries,catKey,varKey,onSelec
   </div>;
 }
 function IR({l,v}){if(!v)return null;return<div style={{display:"flex",gap:6,marginBottom:4,fontSize:11}}><span style={{color:"#888",flexShrink:0,minWidth:90}}>{l}:</span><span style={{fontWeight:600,color:"#222"}}>{v}</span></div>}
-function Hdr({title,sub,no,bg}){return<><div style={{background:bg,color:"white",padding:"10px 14px"}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}><div><div style={{fontSize:16,fontWeight:800}}>রূপালী ফার্নিচার</div><div style={{fontSize:9,opacity:.88}}>শেরে বাংলা ফজলুল হক রোড, টুকু ব্রিজ ১ সংলগ্ন, সিরাজগঞ্জ | ☎ 01711-318070 | পরিচালক: সাদমান সাকিব</div></div><div style={{textAlign:"right"}}><div style={{fontSize:9,opacity:.7}}>অর্ডার নং</div><div style={{fontSize:11,fontWeight:800}}>{no}</div></div></div></div><div style={{background:"#111",color:"white",padding:"4px 14px",display:"flex",justifyContent:"space-between"}}><span style={{fontSize:11,fontWeight:700}}>{title}</span><span style={{fontSize:9,opacity:.6}}>{sub}</span></div></>}
+function Hdr({title,sub,no,bg,tagline}){return<><div style={{background:bg,color:"white",padding:"10px 14px"}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}><div><div style={{fontSize:16,fontWeight:800}}>রূপালী ফার্নিচার</div>{tagline&&<div style={{fontSize:9,opacity:.85,fontStyle:"italic",marginTop:1}}>{tagline}</div>}<div style={{fontSize:9,opacity:.88,marginTop:tagline?2:0}}>শেরে বাংলা ফজলুল হক রোড, টুকু ব্রিজ ১ সংলগ্ন, সিরাজগঞ্জ | ☎ 01711-318070 | পরিচালক: সাদমান সাকিব</div></div><div style={{textAlign:"right"}}><div style={{fontSize:9,opacity:.7}}>অর্ডার নং</div><div style={{fontSize:11,fontWeight:800}}>{no}</div></div></div></div><div style={{background:"#111",color:"white",padding:"4px 14px",display:"flex",justifyContent:"space-between"}}><span style={{fontSize:11,fontWeight:700}}>{title}</span><span style={{fontSize:9,opacity:.6}}>{sub}</span></div></>}
 function PrintLog({log}){
   if(!log||log.length===0)return<div style={{fontSize:8,color:"#bbb",marginTop:6,fontStyle:"italic"}}>এখনো প্রিন্ট করা হয়নি</div>;
   return<div style={{fontSize:8,color:"#999",marginTop:6,fontStyle:"italic"}}>প্রিন্ট: {log.length} বার | সর্বশেষ: {fmtDate(log[log.length-1])}{log.length>1?` (মোট: ${log.map(fmtDate).join(", ")})`:""}</div>
@@ -394,40 +400,7 @@ function S1({order,onPrint}){
   return<div style={{fontSize:12}}>
     <div className="no-print" style={{padding:"8px 14px",background:"#fff",borderBottom:"1px solid #eee",display:"flex",justifyContent:"flex-end",gap:8}}><WhatsAppSendBtn targetRef={captureRef} phone={cust.phone}/><PrintBtn onPrint={()=>onPrint("s1")}/></div>
     <div ref={captureRef}>
-    {/* ── রেফারেন্স ইনভয়েসের হুবহু শেপ (SVG দিয়ে নির্ভুল) ── */}
-    <div style={{position:"relative",width:"100%",paddingBottom:"20.5%",overflow:"hidden"}}>
-      <svg viewBox="0 0 340 70" preserveAspectRatio="none" style={{position:"absolute",inset:0,width:"100%",height:"100%"}} aria-hidden="true">
-        <polygon points="0,0 340,0 340,55 186,55 154,70 0,70" fill="#E2172D"/>
-        <polygon points="222,0 246,0 190,55 166,55" fill="#A3111F"/>
-        <polygon points="246,0 268,0 212,55 190,55" fill="#C41429" opacity="0.55"/>
-      </svg>
-      <div style={{position:"absolute",left:"4%",top:"7%",right:"4%",zIndex:2}}>
-        <div style={{fontSize:6,color:"#f5d9dc",lineHeight:1.5}}>
-          প্রতিষ্ঠাতা ঃ মরহুম মো. আজিজুল হক সরকার<br/>
-          বর্তমান পরিচালকঃ সাদমান সাকিব
-        </div>
-      </div>
-      <div style={{position:"absolute",left:"4%",top:"31%",zIndex:2}}>
-        <div style={{fontSize:24,fontWeight:900,color:"#F5C542",lineHeight:1,letterSpacing:0.3,textShadow:"1.5px 1.5px 0 #7a4a12, 2.5px 2.5px 0 rgba(0,0,0,0.45)"}}>রূপালী</div>
-        <div style={{fontSize:15,fontWeight:900,color:"#F5C542",lineHeight:1.1,marginLeft:32,marginTop:-2,letterSpacing:0.3,textShadow:"1.5px 1.5px 0 #7a4a12, 2.5px 2.5px 0 rgba(0,0,0,0.45)"}}>ফার্নিচার</div>
-      </div>
-      <div style={{position:"absolute",left:"4%",bottom:"22%",zIndex:2}}>
-        <div style={{fontSize:6.5,color:"#f5d9dc",lineHeight:1.6}}>
-          শেরে বাংলা ফজলুল হক রোড, টুকু ব্রিজ ১ সংলগ্ন, সিরাজগঞ্জ<br/>
-          যোগাযোগ ০১৭১১-৩১৮০৭০
-        </div>
-      </div>
-      <div style={{position:"absolute",right:"4%",top:"22%",textAlign:"right",zIndex:2}}>
-        <div style={{fontSize:22,fontWeight:900,color:"#fff",letterSpacing:2,lineHeight:1}}>রশিদ</div>
-        <div style={{fontSize:6.5,color:"#f5d9dc",lineHeight:1.7,marginTop:5}}>
-          <span style={{fontWeight:700}}>অর্ডার নং:</span> {no}<br/>
-          <span style={{fontWeight:700}}>তারিখ:</span> {fmtDate(cust.date)}
-        </div>
-      </div>
-    </div>
-    <div style={{background:"#111",color:"white",padding:"6px 14px",textAlign:"center"}}>
-      <span style={{fontSize:12,fontWeight:800,letterSpacing:2}}>গ্রাহকের কপি</span>
-    </div>
+    <Hdr title="গ্রাহক কপি" sub="Customer Copy" no={no} bg={RED} tagline="আপনার বিশ্বাসের আসবাবঘর"/>
     <div style={{padding:"10px 14px"}}>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"3px 12px",background:"#fff8f8",borderRadius:7,padding:"8px",marginBottom:8}}>
         <IR l="তারিখ" v={fmtDate(cust.date)}/><IR l="ডেলিভারি" v={cust.delivery?`${fmtDate(cust.delivery)} (${days} দিনে)`:""}/>
@@ -472,7 +445,7 @@ function S1({order,onPrint}){
 }
 
 /* ── SLIP 2: ORDER BOOK ── */
-function S2({order,onPrint,db,saveDb,galleries,onUpdateOrder}){
+function S2({order,onPrint,db,saveDb,galleries,onUpdateOrder,woodSettings}){
   const{cust,items,payments,refImg,refImgs,no,printLogs}=order;
   const images=refImgs&&refImgs.length?refImgs:(refImg?[{src:refImg,caption:"রেফারেন্স ছবি"}]:[]);
   const totalPaid=(payments||[]).reduce((s,p)=>s+(parseFloat(p.amount)||0),0);
@@ -606,6 +579,16 @@ function S2({order,onPrint,db,saveDb,galleries,onUpdateOrder}){
               <div style={{fontWeight:700}}>[{it.code}] {it.variantBn}</div>
               <div style={{color:"#555",marginTop:1}}>কাঠ: {it.woodBn} ({it.wood}) | পরিমাণ: {it.qty} | CFT: {(totalCft(it.sections)*it.qty).toFixed(3)}</div>
               {it.price&&<div style={{color:"#166534",fontWeight:700,marginTop:1}}>মূল্য: {money(it.price)}</div>}
+              {(()=>{
+                const rate=woodSettings&&woodSettings[it.wood]&&woodSettings[it.wood].finalAvgRate;
+                if(!rate)return null;
+                const cft=totalCft(it.sections)*it.qty;
+                const woodCost=cft*rate;
+                const profit=it.price?(parseFloat(it.price)||0)-woodCost:null;
+                return<div className="no-print" style={{fontSize:9,color:"#777",marginTop:2,background:"#f9fafb",borderRadius:5,padding:"3px 6px",display:"inline-block"}}>
+                  কাঠের আনুমানিক খরচ: {money(woodCost.toFixed(0))}{profit!==null&&<span style={{marginLeft:6,color:profit>=0?"#166534":RED,fontWeight:700}}>| লাভ: {money(profit.toFixed(0))}</span>}
+                </div>
+              })()}
               {it.notes&&<div style={{color:"#888",marginTop:1}}>⚙ {it.notes}</div>}
             </div>
             <div className="no-print" style={{display:"flex",gap:4,flexShrink:0}}>
@@ -847,10 +830,11 @@ function S5({order,onPrint}){
 }
 
 /* ── SLIP 6: DELIVERY RECEIPT ── */
-function S6({order,onPrint,onUpdateOrder}){
+function S6({order,onPrint,onUpdateOrder,onPhotoChange}){
   const{cust,items,payments,no,deliveryImg,printLogs}=order;
   const totalPaid=(payments||[]).reduce((s,p)=>s+(parseFloat(p.amount)||0),0);
   const captureRef=useRef();
+  const photoInput=useRef();
   const markDelivered=()=>{
     if(window.confirm("এই অর্ডারটি ডেলিভারি সম্পন্ন হয়েছে বলে চিহ্নিত করতে চান? এটি 'চলমান অর্ডার' লিস্ট থেকে সরে 'ডেলিভারড' তালিকায় যাবে।")){
       onUpdateOrder({...order,delivered:true,deliveredAt:todayStr()});
@@ -872,7 +856,14 @@ function S6({order,onPrint,onUpdateOrder}){
         <div style={{fontWeight:700}}>[{it.code}] {it.variantBn}</div>
         <div style={{color:"#555",marginTop:1}}>কাঠ: {it.woodBn} | পরিমাণ: {it.qty}</div>
       </div>)}
-      {deliveryImg&&<div style={{marginBottom:10,textAlign:"center"}}><div style={{fontSize:10,color:"#888",marginBottom:3}}>সম্পন্ন ফার্নিচারের ছবি:</div><img src={deliveryImg} style={{maxWidth:"100%",maxHeight:160,objectFit:"contain",borderRadius:8,border:"1px solid #99f6e4"}} alt="delivery"/></div>}
+      <input ref={photoInput} type="file" accept="image/*" onChange={onPhotoChange} style={{display:"none"}} className="no-print"/>
+      {deliveryImg?<div className="delivery-photo-block" style={{marginBottom:10,textAlign:"center"}}>
+        <div style={{fontSize:10,color:"#888",marginBottom:3}}>সম্পন্ন ফার্নিচারের ছবি:</div>
+        <img src={deliveryImg} style={{maxWidth:"100%",maxHeight:160,objectFit:"contain",borderRadius:8,border:"1px solid #99f6e4"}} alt="delivery"/>
+        <div className="no-print"><button onClick={()=>photoInput.current.click()} style={{marginTop:6,background:"white",border:"1.5px solid #0f766e",color:"#0f766e",borderRadius:8,padding:"7px 14px",fontSize:11,fontWeight:600}}>📷 ছবি বদলান</button></div>
+      </div>:<div className="no-print" style={{marginBottom:10}}>
+        <button onClick={()=>photoInput.current.click()} style={{width:"100%",background:"#f0fdfa",border:"2px dashed #0f766e",borderRadius:9,padding:"12px",fontSize:12,color:"#0f766e",fontWeight:600}}>📷 সম্পন্ন ফার্নিচারের ছবি যোগ করুন</button>
+      </div>}
       <div style={{background:"#f0fdfa",borderRadius:7,padding:"9px",marginBottom:12}}>
         <div style={{display:"flex",justifyContent:"space-between",fontSize:11,marginBottom:3}}><span>মোট মূল্য:</span><span style={{fontWeight:700}}>{money(cust.total)}</span></div>
         <div style={{display:"flex",justifyContent:"space-between",fontSize:11,color:"#166534",fontWeight:700}}><span>সম্পূর্ণ পরিশোধ:</span><span>{money(totalPaid)}</span></div>
@@ -1101,6 +1092,7 @@ function App({firebaseConfig,onResetConfig}){
   const[retryKey,setRetryKey]=useState(0);
   const[folderStatus,setFolderStatus]=useState({supported:FS_SUPPORTED,connected:false,name:""});
   const[galleries,setGalleries]=useState({});
+  const[woodSettings,setWoodSettings]=useState({});
   const fsRef=useRef(null);
 
   useEffect(()=>{
@@ -1130,6 +1122,10 @@ function App({firebaseConfig,onResetConfig}){
     const key=`${catKey}__${varKey}`;
     setGalleries(prev=>({...prev,[key]:data}));
     if(fsRef.current)fsRef.current.collection("galleries").doc(key).set(data).catch(err=>alert("⚠️ ছবি সেভ করতে সমস্যা হয়েছে: "+err.message));
+  };
+  const saveWoodSettings=(newSettings)=>{
+    setWoodSettings(newSettings);
+    if(fsRef.current)fsRef.current.doc("meta/woodSettings").set(newSettings).catch(err=>alert("⚠️ কাঠের সেটিংস সেভ করতে সমস্যা হয়েছে: "+err.message));
   };
 
   useEffect(()=>{
@@ -1202,6 +1198,10 @@ function App({firebaseConfig,onResetConfig}){
         setGalleries(map);
       },err=>{});
 
+      const unsubWoodSettings=firestore.doc("meta/woodSettings").onSnapshot(snap=>{
+        setWoodSettings(snap.exists?snap.data():{});
+      },err=>{});
+
       const unsubCarp=firestore.doc("meta/carpenters").onSnapshot(snap=>{
         setCarpenters(snap.exists?(snap.data().list||[]):[]);
       },err=>setConnError(err.message));
@@ -1229,7 +1229,7 @@ function App({firebaseConfig,onResetConfig}){
         localStorage.setItem("rf_migrated_to_cloud","true");
       })();
 
-      return()=>{clearTimeout(timer);unsubOrders();unsubExpenses();unsubLots();unsubDb();unsubGalleries();unsubCarp();unsubWorkers();unsubPayroll()};
+      return()=>{clearTimeout(timer);unsubOrders();unsubExpenses();unsubLots();unsubDb();unsubGalleries();unsubWoodSettings();unsubCarp();unsubWorkers();unsubPayroll()};
     }catch(e){
       clearTimeout(timer);
       setConnError(e.message);
@@ -1306,11 +1306,11 @@ function App({firebaseConfig,onResetConfig}){
     </div>;
     return<div style={{padding:40,textAlign:"center"}}><div style={{fontSize:9,color:"#ccc",marginBottom:10}}>{BUILD_TAG}</div>সিঙ্ক হচ্ছে...</div>;
   }
-  if(page==="preview")return<Preview order={viewed||draft} onBack={()=>{setViewed(null);setPage(viewed?"history":"home")}} slip={slip} setSlip={setSlip} onUpdate={updateOrder} onDelete={deleteOrderPermanently} db={db} saveDb={saveDb} carpenters={carpenters} saveCarpenters={saveCarpenters} galleries={galleries}/>;
+  if(page==="preview")return<Preview order={viewed||draft} onBack={()=>{setViewed(null);setPage(viewed?"history":"home")}} slip={slip} setSlip={setSlip} onUpdate={updateOrder} onDelete={deleteOrderPermanently} db={db} saveDb={saveDb} carpenters={carpenters} saveCarpenters={saveCarpenters} galleries={galleries} saveGalleryEntry={saveGalleryEntry} woodSettings={woodSettings}/>;
   if(page==="form")return<Form onSave={saveOrder} onBack={()=>setPage("home")} db={db} saveDb={saveDb} galleries={galleries}/>;
   if(page==="history")return<Hist orders={orders} onBack={()=>setPage("home")} onView={o=>{setViewed(o);setSlip(0);setPage("preview")}}/>;
   if(page==="manage")return<ManageDB db={db} saveDb={saveDb} galleries={galleries} saveGalleryEntry={saveGalleryEntry} onBack={()=>setPage("home")}/>;
-  if(page==="woodstock")return<WoodStockPage woodLots={woodLots} saveWoodLots={saveWoodLots} onBack={()=>setPage("home")}/>;
+  if(page==="woodstock")return<WoodStockPage woodLots={woodLots} saveWoodLots={saveWoodLots} woodSettings={woodSettings} saveWoodSettings={saveWoodSettings} onBack={()=>setPage("home")}/>;
   if(page==="expense")return<ExpensePage expenses={expenses} onSave={saveExpense} onBack={()=>setPage("home")}/>;
   if(page==="payroll")return<PayrollPage workers={workers} saveWorker={saveWorker} deleteWorker={deleteWorker} payrollWeeks={payrollWeeks} savePayrollWeek={savePayrollWeek} onBack={()=>setPage("home")}/>;
   return<Home orders={orders} expenses={expenses} woodLots={woodLots} db={db} onNew={()=>setPage("form")} onHist={()=>setPage("history")} onManage={()=>setPage("manage")} onExpense={()=>setPage("expense")} onWoodStock={()=>setPage("woodstock")} onPayroll={()=>setPage("payroll")} onView={o=>{setViewed(o);setSlip(0);setPage("preview")}} online={online} connError={connError} onResetConfig={onResetConfig} folderStatus={folderStatus} connectFolder={connectFolder}/>;
@@ -1722,23 +1722,25 @@ function ExpensePage({expenses,onSave,onBack}){
 }
 
 /* ── WOOD STOCK PAGE ── */
-function WoodStockPage({woodLots,saveWoodLots,onBack}){
+function WoodStockPage({woodLots,saveWoodLots,woodSettings,saveWoodSettings,onBack}){
   const today=todayStr();
-  const[view,setView]=useState("list"); // list | new | detail
+  const[view,setView]=useState("list"); // list | new | detail | rates
   const[selLotId,setSelLotId]=useState(null);
   const[newLot,setNewLot]=useState({woodType:"S",supplier:"",supplierPhone:"",supplierAddress:"",date:today,ratePerCft:""});
   const[newLog,setNewLog]=useState({lengthFt:"",diameterIn:""});
   const[newPay,setNewPay]=useState({date:today,amount:""});
   const[sellingLogId,setSellingLogId]=useState(null);
   const[sellPrice,setSellPrice]=useState("");
+  const[newMilling,setNewMilling]=useState({date:today,cft:"",billAmount:"",note:""});
   const inp={width:"100%",border:"1.5px solid #e0e0e0",borderRadius:9,padding:"10px 11px",fontSize:13,outline:"none"};
   const lbl=(t)=><div style={{fontSize:11,fontWeight:600,color:"#555",marginBottom:4}}>{t}</div>;
 
   const selLot=woodLots.find(l=>l.id===selLotId);
+  const wSettings=(woodType)=>(woodSettings&&woodSettings[woodType])||{wastagePercent:0,finalAvgRate:0};
 
   const createLot=()=>{
     if(!newLot.supplier)return;
-    const lot={id:"lot_"+Date.now(),...newLot,logs:[],payments:[]};
+    const lot={id:"lot_"+Date.now(),...newLot,logs:[],payments:[],millingEntries:[],transportCost:0,otherCost:0};
     saveWoodLots([lot,...woodLots]);
     setSelLotId(lot.id);setView("detail");
     setNewLot({woodType:"S",supplier:"",supplierPhone:"",supplierAddress:"",date:today,ratePerCft:""});
@@ -1807,15 +1809,55 @@ function WoodStockPage({woodLots,saveWoodLots,onBack}){
     return adjustedCost/availCft;
   };
 
+  // ── কাটাই/মিলিং সংক্রান্ত হিসাব ──
+  const lotMillingTotal=(lot)=>(lot.millingEntries||[]).reduce((s,m)=>s+(parseFloat(m.billAmount)||0),0);
+  const lotUsableCft=(lot)=>{
+    const raw=lotCutCft(lot);
+    const wastage=wSettings(lot.woodType).wastagePercent||0;
+    return raw*(1-wastage/100);
+  };
+  const lotRealCostPerCft=(lot)=>{
+    const raw=lotCutCft(lot);
+    const usable=lotUsableCft(lot);
+    if(raw<=0||usable<=0)return 0;
+    const totalLotCft=lotTotalCft(lot);
+    const proportionalPurchase=totalLotCft>0?(raw/totalLotCft)*lotTotalCost(lot):0;
+    const extra=lotMillingTotal(lot)+(parseFloat(lot.transportCost)||0)+(parseFloat(lot.otherCost)||0);
+    return(proportionalPurchase+extra)/usable;
+  };
+  const cftCutOnDate=(lot,date)=>lot.logs.filter(l=>l.cut&&!l.sold&&l.cutDate===date).reduce((s,l)=>s+l.cft,0);
+  const addMillingEntry=()=>{
+    const bill=parseFloat(newMilling.billAmount);
+    if(!bill||bill<=0)return;
+    const entry={id:"mill_"+Date.now(),date:newMilling.date,cft:parseFloat(newMilling.cft)||0,billAmount:bill,note:newMilling.note};
+    updateLot({...selLot,millingEntries:[...(selLot.millingEntries||[]),entry]});
+    setNewMilling({date:today,cft:"",billAmount:"",note:""});
+  };
+  const removeMillingEntry=(entryId)=>{
+    updateLot({...selLot,millingEntries:(selLot.millingEntries||[]).filter(m=>m.id!==entryId)});
+  };
+
+  // ── কাঠের ধরন অনুযায়ী প্রস্তাবিত গড় দাম (সব লট মিলিয়ে ওয়েটেড এভারেজ) ──
+  const suggestedRate=(woodType)=>{
+    const relevant=woodLots.filter(l=>l.woodType===woodType&&lotUsableCft(l)>0);
+    const totalUsable=relevant.reduce((s,l)=>s+lotUsableCft(l),0);
+    if(totalUsable<=0)return 0;
+    const weightedSum=relevant.reduce((s,l)=>s+lotRealCostPerCft(l)*lotUsableCft(l),0);
+    return weightedSum/totalUsable;
+  };
+
   return<div style={{minHeight:"100vh",background:"#f8f8f8"}}>
     <div style={{background:"#065f46",color:"white",padding:"13px 16px",display:"flex",alignItems:"center",gap:11}}>
       <button onClick={()=>view==="list"?onBack():setView("list")} style={{background:"rgba(255,255,255,.2)",border:"none",color:"white",borderRadius:8,padding:"7px 13px",fontSize:13}}>←</button>
-      <span style={{fontWeight:700,fontSize:16}}>{view==="list"?"কাঠের স্টক":view==="new"?"নতুন লট":selLot?.supplier}</span>
+      <span style={{fontWeight:700,fontSize:16}}>{view==="list"?"কাঠের স্টক":view==="new"?"নতুন লট":view==="rates"?"গড় দাম নির্ধারণ":selLot?.supplier}</span>
     </div>
     <div style={{padding:"18px 16px",maxWidth:600,margin:"0 auto"}}>
 
       {view==="list"&&<>
-        <button onClick={()=>setView("new")} style={{width:"100%",background:"#065f46",color:"white",border:"none",borderRadius:12,padding:"15px",fontSize:14,fontWeight:700,marginBottom:16}}>+ নতুন লট কিনুন</button>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:16}}>
+          <button onClick={()=>setView("new")} style={{background:"#065f46",color:"white",border:"none",borderRadius:12,padding:"15px 8px",fontSize:13,fontWeight:700}}>+ নতুন লট কিনুন</button>
+          <button onClick={()=>setView("rates")} style={{background:"white",color:"#065f46",border:"2px solid #065f46",borderRadius:12,padding:"13px 8px",fontSize:12,fontWeight:700}}>🧮 কাঠের গড় দাম নির্ধারণ</button>
+        </div>
         {woodLots.length===0?<div style={{textAlign:"center",color:"#aaa",padding:30,fontSize:13}}>এখনো কোনো লট যোগ করা হয়নি</div>:
         woodLots.map(lot=>{
           const tCft=lotTotalCft(lot),tCost=lotTotalCost(lot),paid=lotTotalPaid(lot),rem=lotRemaining(lot);
@@ -1834,6 +1876,28 @@ function WoodStockPage({woodLots,saveWoodLots,onBack}){
           </div>
         })}
       </>}
+
+      {view==="rates"&&<div>
+        <div style={{background:"white",borderRadius:12,padding:14,marginBottom:14,boxShadow:"0 1px 4px rgba(0,0,0,.07)"}}>
+          <div style={{fontWeight:700,fontSize:13,marginBottom:6,color:"#065f46"}}>কাঠভেদে অপচয় হার ও চূড়ান্ত গড় দাম</div>
+          <div style={{fontSize:11,color:"#888",lineHeight:1.6}}>গুড়ি কেনার পর স'মিলে কেটে ব্যবহারযোগ্য কাঠ কতটা কমে যায় (%) বসান। সিস্টেম আপনার লটগুলোর প্রকৃত খরচ থেকে একটা প্রস্তাবিত গড় দাম দেখাবে — সেটা দেখে চূড়ান্ত দামটা বসিয়ে দিন। এই চূড়ান্ত দামই সব অর্ডারের কাঠের খরচ হিসাবে ব্যবহার হবে।</div>
+        </div>
+        {Object.entries(WOOD).map(([wKey,wInfo])=>{
+          const s=wSettings(wKey);
+          const suggested=suggestedRate(wKey);
+          return<div key={wKey} style={{background:"white",borderRadius:12,padding:14,marginBottom:12,boxShadow:"0 1px 4px rgba(0,0,0,.07)"}}>
+            <div style={{fontWeight:800,fontSize:14,marginBottom:10,color:"#111"}}>{wInfo.bn} <span style={{fontSize:11,color:"#999",fontWeight:400}}>({wInfo.en})</span></div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
+              <div>{lbl("অপচয় হার (%)")}<input type="number" min="0" max="90" value={s.wastagePercent||""} onChange={e=>saveWoodSettings({...woodSettings,[wKey]:{...s,wastagePercent:parseFloat(e.target.value)||0}})} placeholder="0" style={inp}/></div>
+              <div>{lbl("চূড়ান্ত গড় দাম (৳/CFT)")}<input type="number" value={s.finalAvgRate||""} onChange={e=>saveWoodSettings({...woodSettings,[wKey]:{...s,finalAvgRate:parseFloat(e.target.value)||0}})} placeholder="0" style={{...inp,fontWeight:700,color:"#065f46"}}/></div>
+            </div>
+            <div style={{background:suggested>0?"#f0fdf4":"#f8fafc",borderRadius:8,padding:"8px 11px",fontSize:11,color:suggested>0?"#166534":"#999"}}>
+              {suggested>0?<>📊 প্রস্তাবিত গড় দাম (আপনার কাটা লটগুলো থেকে): <strong>{money(suggested.toFixed(2))}/CFT</strong></>:"এখনো কোনো লটে যথেষ্ট কাটা কাঠ নেই — প্রস্তাব দেখানো যাচ্ছে না"}
+            </div>
+          </div>
+        })}
+        <button onClick={()=>setView("list")} style={{width:"100%",background:"#f3f4f6",border:"none",borderRadius:10,padding:"12px",fontSize:13,fontWeight:600,marginTop:4}}>← তালিকায় ফিরে যান</button>
+      </div>}
 
       {view==="new"&&<div style={{background:"white",borderRadius:13,padding:16,boxShadow:"0 2px 8px rgba(0,0,0,.08)"}}>
         <div style={{fontWeight:700,fontSize:14,marginBottom:12}}>নতুন কাঠের লট</div>
@@ -1910,6 +1974,56 @@ function WoodStockPage({woodLots,saveWoodLots,onBack}){
           </div>
         </div>
 
+        {/* Milling / সেমিল কাটাই খরচ */}
+        <div style={{background:"white",borderRadius:11,padding:14,marginBottom:14,boxShadow:"0 1px 4px rgba(0,0,0,.07)"}}>
+          <div style={{fontWeight:700,fontSize:12,marginBottom:4,color:"#065f46"}}>স'মিল কাটাই খরচ (দফায় দফায়)</div>
+          <div style={{fontSize:10,color:"#888",marginBottom:10}}>যেদিন যতটুকু গুড়ি কাটবেন, সেদিনের মোট বিল এখানে যোগ করুন। CFT ঘরে সেদিন কাটা গুড়ির মোট CFT অটো বসে যাবে (প্রয়োজনে বদলাতে পারবেন)।</div>
+          {(selLot.millingEntries||[]).length>0&&<div style={{marginBottom:10}}>
+            {(selLot.millingEntries||[]).map(m=><div key={m.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",fontSize:11,padding:"7px 0",borderBottom:"1px dashed #eee"}}>
+              <span>{fmtDate(m.date)} — {m.cft?`${m.cft} CFT`:""}{m.note?` (${m.note})`:""}</span>
+              <span style={{display:"flex",alignItems:"center",gap:6}}><strong>{money(m.billAmount)}</strong><button onClick={()=>removeMillingEntry(m.id)} style={{background:"#fee2e2",border:"none",borderRadius:5,padding:"2px 6px",color:RED,fontSize:10}}>✕</button></span>
+            </div>)}
+          </div>}
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
+            <div>{lbl("তারিখ")}<DateInput value={newMilling.date} onChange={v=>setNewMilling({...newMilling,date:v,cft:cftCutOnDate(selLot,v)?String(cftCutOnDate(selLot,v).toFixed(2)):newMilling.cft})} accent="#065f46"/></div>
+            <div>{lbl("CFT")}<input type="number" step="0.1" value={newMilling.cft} onChange={e=>setNewMilling({...newMilling,cft:e.target.value})} placeholder="0" style={inp}/></div>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:10}}>
+            <div>{lbl("মোট বিল (৳)")}<input type="number" value={newMilling.billAmount} onChange={e=>setNewMilling({...newMilling,billAmount:e.target.value})} placeholder="0" style={inp}/></div>
+            <div>{lbl("নোট (ঐচ্ছিক)")}<input value={newMilling.note} onChange={e=>setNewMilling({...newMilling,note:e.target.value})} placeholder="ট্রলি/চা-পানি ইত্যাদি" style={inp}/></div>
+          </div>
+          <button onClick={addMillingEntry} style={{width:"100%",background:"#065f46",color:"white",border:"none",borderRadius:9,padding:"11px",fontSize:13,fontWeight:700}}>+ কাটাই বিল যোগ করুন</button>
+        </div>
+
+        {/* Transport & other costs */}
+        <div style={{background:"white",borderRadius:11,padding:14,marginBottom:14,boxShadow:"0 1px 4px rgba(0,0,0,.07)"}}>
+          <div style={{fontWeight:700,fontSize:12,marginBottom:8,color:"#065f46"}}>পরিবহন ও অন্যান্য খরচ</div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
+            <div>{lbl("পরিবহন খরচ (৳)")}<input type="number" value={selLot.transportCost||""} onChange={e=>updateLot({...selLot,transportCost:e.target.value})} placeholder="0" style={inp}/></div>
+            <div>{lbl("অন্যান্য খরচ (৳)")}<input type="number" value={selLot.otherCost||""} onChange={e=>updateLot({...selLot,otherCost:e.target.value})} placeholder="0" style={inp}/></div>
+          </div>
+          <div style={{background:"#fffbeb",borderRadius:8,padding:"8px 11px",fontSize:10,color:"#92400e"}}>⚠️ নিজের পরিবহন কর্মী দিয়ে আনলে এখানে ০ রাখুন (তাদের বেতন আগে থেকেই পে-রোলে যোগ হচ্ছে) — শুধু ভাড়া করা ভ্যান বা জ্বালানির খরচ থাকলে বসান।</div>
+        </div>
+
+        {/* Real cost per CFT */}
+        <div style={{background:"white",borderRadius:11,padding:14,marginBottom:14,boxShadow:"0 1px 4px rgba(0,0,0,.07)"}}>
+          <div style={{fontWeight:700,fontSize:12,marginBottom:8,color:"#065f46"}}>প্রকৃত খরচ/CFT (অপচয় ও যাবতীয় খরচ ধরে)</div>
+          {(()=>{
+            const wt=selLot.woodType;
+            const s=wSettings(wt);
+            const raw=lotCutCft(selLot);
+            const usable=lotUsableCft(selLot);
+            const real=lotRealCostPerCft(selLot);
+            if(raw<=0)return<div style={{textAlign:"center",color:"#aaa",fontSize:12,padding:10}}>এখনো কোনো গুড়ি কাটা হয়নি — কাটা শুরু হলে এখানে প্রকৃত খরচ দেখাবে</div>;
+            return<div style={{background:"#f0fdf4",borderRadius:9,padding:"11px 12px"}}>
+              <div style={{display:"flex",justifyContent:"space-between",fontSize:11,marginBottom:4}}><span>কাটা হয়েছে (কাঁচা):</span><span style={{fontWeight:700}}>{raw.toFixed(2)} CFT</span></div>
+              <div style={{display:"flex",justifyContent:"space-between",fontSize:11,marginBottom:4}}><span>অপচয় হার ({wt&&WOOD[wt].bn}):</span><span style={{fontWeight:700}}>{s.wastagePercent||0}%</span></div>
+              <div style={{display:"flex",justifyContent:"space-between",fontSize:11,marginBottom:8}}><span>ব্যবহারযোগ্য CFT:</span><span style={{fontWeight:700}}>{usable.toFixed(2)} CFT</span></div>
+              <div style={{display:"flex",justifyContent:"space-between",fontSize:15,fontWeight:800,color:"#166534",borderTop:"1.5px solid #bbf7d0",paddingTop:8}}><span>প্রকৃত খরচ/CFT:</span><span>{money(real.toFixed(2))}</span></div>
+            </div>
+          })()}
+        </div>
+
         {/* Buy / Sell / Current stock value summary */}
         <div style={{background:"white",borderRadius:11,padding:14,marginBottom:14,boxShadow:"0 1px 4px rgba(0,0,0,.07)"}}>
           <div style={{fontWeight:700,fontSize:12,marginBottom:8,color:"#065f46"}}>ক্রয়-বিক্রয় সারসংক্ষেপ</div>
@@ -1952,6 +2066,12 @@ function WoodStockPage({woodLots,saveWoodLots,onBack}){
 
 /* ── PAYROLL PAGE ── */
 const DAY_OPTIONS=Array.from({length:22},(_,i)=>i*0.5); // 0, 0.5, ... 10.5
+function WorkerAvatar({worker,size=36}){
+  const c=deptColor(worker.department);
+  const initial=(worker.name||"?").trim().charAt(0);
+  if(worker.photoImg)return<img src={worker.photoImg} alt="" style={{width:size,height:size,borderRadius:"50%",objectFit:"cover",border:`2px solid ${c}`,flexShrink:0}}/>;
+  return<div style={{width:size,height:size,borderRadius:"50%",background:c+"22",border:`2px solid ${c}`,color:c,display:"flex",alignItems:"center",justifyContent:"center",fontSize:size*0.42,fontWeight:800,flexShrink:0}}>{initial}</div>
+}
 function DayWheel({value,onChange,color}){
   const ref=useRef(null);
   const ITEM=34;
@@ -2003,25 +2123,35 @@ function PayrollPage({workers,saveWorker,deleteWorker,payrollWeeks,savePayrollWe
   const today=todayStr();
   const[view,setView]=useState("week"); // week | workers
   const[weekEnd,setWeekEnd]=useState(()=>weekEndThursday(today));
-  const[newWorker,setNewWorker]=useState({name:"",voterId:"",phone1:"",phone2:"",department:PAYROLL_DEPTS[0],dailyRate:"",idCardImg:null,idCardFileName:null});
+  const[newWorker,setNewWorker]=useState({name:"",voterId:"",phone1:"",phone2:"",department:PAYROLL_DEPTS[0],dailyRate:"",idCardImg:null,idCardFileName:null,photoImg:null});
   const[editingWorkerId,setEditingWorkerId]=useState(null);
   const[newAdv,setNewAdv]=useState({date:today,workerId:"",amount:"",note:""});
   const idCardInput=useRef();
+  const photoInput=useRef();
+  const[advPickerOpen,setAdvPickerOpen]=useState(false);
   const[viewingIdCard,setViewingIdCard]=useState(null);
   const inp={width:"100%",border:"1.5px solid #e0e0e0",borderRadius:9,padding:"10px 11px",fontSize:13,outline:"none"};
   const lbl=(t)=><div style={{fontSize:11,fontWeight:600,color:"#555",marginBottom:4}}>{t}</div>;
 
-  const activeWorkers=workers.filter(w=>w.active!==false);
+  const activeWorkers=sortByDept(workers.filter(w=>w.active!==false));
   const days=weekWorkDays(weekEnd);
   const weekData=payrollWeeks[weekEnd]||{attendance:{},advances:[]};
 
-  const blankWorker={name:"",voterId:"",phone1:"",phone2:"",department:PAYROLL_DEPTS[0],dailyRate:"",idCardImg:null,idCardFileName:null};
+  const blankWorker={name:"",voterId:"",phone1:"",phone2:"",department:PAYROLL_DEPTS[0],dailyRate:"",idCardImg:null,idCardFileName:null,photoImg:null};
   const saveNewWorker=()=>{
     if(!newWorker.name.trim()||!newWorker.dailyRate)return;
     saveWorker({...newWorker,dailyRate:parseFloat(newWorker.dailyRate)||0,active:true});
     setNewWorker(blankWorker);
   };
-  const startEditWorker=(w)=>{setEditingWorkerId(w.id);setNewWorker({name:w.name,voterId:w.voterId||"",phone1:w.phone1||"",phone2:w.phone2||"",department:w.department||PAYROLL_DEPTS[0],dailyRate:String(w.dailyRate),idCardImg:w.idCardImg||null,idCardFileName:w.idCardFileName||null})};
+  const startEditWorker=(w)=>{setEditingWorkerId(w.id);setNewWorker({name:w.name,voterId:w.voterId||"",phone1:w.phone1||"",phone2:w.phone2||"",department:w.department||PAYROLL_DEPTS[0],dailyRate:String(w.dailyRate),idCardImg:w.idCardImg||null,idCardFileName:w.idCardFileName||null,photoImg:w.photoImg||null})};
+  const handlePhotoImg=async(e)=>{
+    const file=e.target.files[0];
+    e.target.value="";
+    if(!file)return;
+    const compressed=await compressImage(file,400,0.78);
+    if(!compressed){alert("ছবিটি পড়া যায়নি।");return}
+    setNewWorker(prev=>({...prev,photoImg:compressed}));
+  };
   const saveEditWorker=()=>{
     saveWorker({id:editingWorkerId,...newWorker,dailyRate:parseFloat(newWorker.dailyRate)||0,active:true});
     setEditingWorkerId(null);setNewWorker(blankWorker);
@@ -2087,6 +2217,18 @@ function PayrollPage({workers,saveWorker,deleteWorker,payrollWeeks,savePayrollWe
       {view==="workers"&&<div className="no-print">
         <div style={{background:"white",borderRadius:12,padding:16,marginBottom:16,boxShadow:"0 1px 4px rgba(0,0,0,.07)"}}>
           <div style={{fontWeight:700,fontSize:14,marginBottom:12}}>{editingWorkerId?"কর্মীর তথ্য পরিবর্তন করুন":"নতুন কর্মী যোগ করুন"}</div>
+          <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:12,background:PAY_LIGHT,borderRadius:9,padding:10,border:`1px solid ${PAY_BORDER}`}}>
+            {newWorker.photoImg?<img src={newWorker.photoImg} style={{width:60,height:60,borderRadius:"50%",objectFit:"cover",border:`2px solid ${PAY}`,flexShrink:0}} alt=""/>
+            :<div style={{width:60,height:60,borderRadius:"50%",background:"white",border:`2px dashed ${PAY_BORDER}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:24,color:PAY_BORDER,flexShrink:0}}>👤</div>}
+            <div style={{flex:1}}>
+              <div style={{fontSize:11,fontWeight:600,color:PAY_DARK,marginBottom:5}}>প্রোফাইল ছবি</div>
+              <div style={{display:"flex",gap:6}}>
+                <button onClick={()=>photoInput.current.click()} style={{background:"white",border:`1px solid ${PAY_BORDER}`,color:PAY_DARK,borderRadius:7,padding:"7px 11px",fontSize:11,fontWeight:600}}>{newWorker.photoImg?"বদলান":"📷 ছবি যোগ করুন"}</button>
+                {newWorker.photoImg&&<button onClick={()=>setNewWorker({...newWorker,photoImg:null})} style={{background:"#fee2e2",border:"none",color:RED,borderRadius:7,padding:"7px 11px",fontSize:11,fontWeight:600}}>✕ সরান</button>}
+              </div>
+            </div>
+            <input ref={photoInput} type="file" accept="image/*" onChange={handlePhotoImg} style={{display:"none"}}/>
+          </div>
           <div style={{marginBottom:10}}>{lbl("নাম *")}<input value={newWorker.name} onChange={e=>setNewWorker({...newWorker,name:e.target.value})} placeholder="পূর্ণ নাম" style={inp}/></div>
           <div style={{marginBottom:10}}>{lbl("ভোটার আইডি নম্বর")}<input value={newWorker.voterId} onChange={e=>setNewWorker({...newWorker,voterId:e.target.value})} placeholder="ভোটার আইডি" style={inp}/></div>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
@@ -2115,8 +2257,9 @@ function PayrollPage({workers,saveWorker,deleteWorker,payrollWeeks,savePayrollWe
         </div>
         <div style={{fontWeight:700,fontSize:14,marginBottom:10}}>কর্মী তালিকা ({workers.length})</div>
         {workers.length===0?<div style={{textAlign:"center",color:"#aaa",padding:30,fontSize:13}}>এখনো কোনো কর্মী যোগ করা হয়নি</div>:
-        workers.map(w=><div key={w.id} style={{background:"white",borderRadius:11,padding:"12px 14px",marginBottom:9,boxShadow:"0 1px 4px rgba(0,0,0,.07)",opacity:w.active===false?0.6:1}}>
+        sortByDept(workers).map(w=><div key={w.id} style={{background:"white",borderRadius:11,padding:"12px 14px",marginBottom:9,boxShadow:"0 1px 4px rgba(0,0,0,.07)",opacity:w.active===false?0.6:1}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"start",gap:10}}>
+            <WorkerAvatar worker={w} size={40}/>
             {w.idCardImg&&<img src={w.idCardImg} onClick={()=>setViewingIdCard(w)} style={{width:44,height:34,objectFit:"cover",borderRadius:6,border:"1px solid #ddd",flexShrink:0,cursor:"pointer"}} alt="ID"/>}
             <div style={{flex:1,minWidth:0}}>
               <div style={{fontWeight:700,fontSize:14}}>{w.name}{w.active===false&&<span style={{fontSize:10,color:"#999",fontWeight:400}}> (নিষ্ক্রিয়)</span>}</div>
@@ -2159,10 +2302,32 @@ function PayrollPage({workers,saveWorker,deleteWorker,payrollWeeks,savePayrollWe
           <div style={{fontWeight:800,fontSize:15,marginBottom:12,color:PAY_DARK}}>💰 অগ্রিম (এডভান্স) যোগ করুন</div>
           <div style={{marginBottom:10}}>
             {lbl("কর্মী")}
-            <select value={newAdv.workerId} onChange={e=>setNewAdv({...newAdv,workerId:e.target.value})} style={{...inp,padding:"12px 11px",fontSize:14,fontWeight:600}}>
-              <option value="">-- নির্বাচন করুন --</option>
-              {activeWorkers.map(w=><option key={w.id} value={w.id} style={{color:deptColor(w.department)}}>{w.name} — {w.department}</option>)}
-            </select>
+            {(()=>{
+              const sel=activeWorkers.find(w=>w.id===newAdv.workerId);
+              return<div style={{position:"relative"}}>
+                <button type="button" onClick={()=>setAdvPickerOpen(!advPickerOpen)} style={{...inp,padding:"10px 11px",fontSize:14,fontWeight:600,textAlign:"left",display:"flex",alignItems:"center",gap:9,cursor:"pointer",background:"white"}}>
+                  {sel?<WorkerAvatar worker={sel} size={32}/>:<div style={{width:32,height:32,borderRadius:"50%",background:"#f3f4f6",display:"flex",alignItems:"center",justifyContent:"center",fontSize:15,color:"#bbb",flexShrink:0}}>👤</div>}
+                  <span style={{flex:1,minWidth:0,color:sel?"#111":"#999",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                    {sel?sel.name:"-- নির্বাচন করুন --"}
+                    {sel&&<span style={{fontSize:10,color:deptColor(sel.department),fontWeight:600}}> · {sel.department}</span>}
+                  </span>
+                  <span style={{color:"#888"}}>▾</span>
+                </button>
+                {advPickerOpen&&<div style={{position:"absolute",top:"105%",left:0,right:0,background:"white",border:`1.5px solid ${PAY_BORDER}`,borderRadius:10,boxShadow:"0 6px 20px rgba(0,0,0,.14)",zIndex:30,maxHeight:260,overflowY:"auto"}}>
+                  {activeWorkers.length===0?<div style={{padding:12,fontSize:12,color:"#aaa",textAlign:"center"}}>কোনো সক্রিয় কর্মী নেই</div>:
+                  PAYROLL_DEPTS.filter(d=>activeWorkers.some(w=>w.department===d)).map(d=><div key={d}>
+                    <div style={{padding:"5px 11px",fontSize:10,fontWeight:700,color:deptColor(d),background:deptColor(d)+"14"}}>{d}</div>
+                    {activeWorkers.filter(w=>w.department===d).map(w=><div key={w.id} onClick={()=>{setNewAdv({...newAdv,workerId:w.id});setAdvPickerOpen(false)}} style={{display:"flex",alignItems:"center",gap:9,padding:"8px 11px",cursor:"pointer",borderBottom:"1px solid #f5f5f5",background:newAdv.workerId===w.id?PAY_LIGHT:"white"}}>
+                      <WorkerAvatar worker={w} size={32}/>
+                      <div style={{flex:1,minWidth:0}}>
+                        <div style={{fontSize:13,fontWeight:600,color:"#111"}}>{w.name}</div>
+                        <div style={{fontSize:10,color:"#999"}}>দৈনিক {money(w.dailyRate)}</div>
+                      </div>
+                    </div>)}
+                  </div>)}
+                </div>}
+              </div>;
+            })()}
           </div>
           <div style={{marginBottom:10}}>
             {lbl("পরিমাণ (৳)")}
@@ -2177,9 +2342,9 @@ function PayrollPage({workers,saveWorker,deleteWorker,payrollWeeks,savePayrollWe
             {(weekData.advances||[]).map(a=>{
               const w=workers.find(w=>w.id===a.workerId);
               return<div key={a.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",fontSize:12,padding:"7px 0",borderTop:"1px dashed #eee"}}>
-                <span style={{display:"flex",alignItems:"center",gap:6}}>
-                  {w&&<span style={{width:8,height:8,borderRadius:"50%",background:deptColor(w.department),display:"inline-block",flexShrink:0}}></span>}
-                  {fmtDate(a.date)} — {w?w.name:"?"}{a.note?` (${a.note})`:""}
+                <span style={{display:"flex",alignItems:"center",gap:7,minWidth:0}}>
+                  {w?<WorkerAvatar worker={w} size={26}/>:null}
+                  <span style={{minWidth:0,overflow:"hidden",textOverflow:"ellipsis"}}>{fmtDate(a.date)} — {w?w.name:"?"}{a.note?` (${a.note})`:""}</span>
                 </span>
                 <span style={{display:"flex",alignItems:"center",gap:6}}><strong>{money(a.amount)}</strong><button onClick={()=>removeAdvance(a.id)} style={{background:"#fee2e2",border:"none",borderRadius:5,padding:"2px 6px",color:RED,fontSize:10}}>✕</button></span>
               </div>
@@ -2195,7 +2360,8 @@ function PayrollPage({workers,saveWorker,deleteWorker,payrollWeeks,savePayrollWe
             activeWorkers.map((w,i)=>{
               const c=deptColor(w.department);
               const val=daysPresent(w.id);
-              return<div key={w.id} style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,padding:"10px 4px 10px 10px",borderTop:i>0?"1px solid #f2f2f2":"none",borderLeft:`3px solid ${c}`}}>
+              return<div key={w.id} style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,padding:"10px 4px 10px 10px",borderTop:i>0?"1px solid #f2f2f2":"none",borderLeft:`3px solid ${c}`}}>
+                <WorkerAvatar worker={w} size={38}/>
                 <div style={{flex:1,minWidth:0}}>
                   <div style={{fontWeight:700,fontSize:13}}>{w.name}</div>
                   <div style={{fontSize:10,color:c,fontWeight:600,marginTop:1}}>{w.department}</div>
@@ -2612,7 +2778,7 @@ function Form({onSave,onBack,db,saveDb,galleries}){
 }
 
 /* ── PREVIEW (each slip prints independently now) ── */
-function Preview({order,onBack,slip,setSlip,onUpdate,onDelete,db,saveDb,carpenters,saveCarpenters,galleries}){
+function Preview({order,onBack,slip,setSlip,onUpdate,onDelete,db,saveDb,carpenters,saveCarpenters,galleries,saveGalleryEntry,woodSettings}){
   const totalPaid=(order.payments||[]).reduce((s,p)=>s+(parseFloat(p.amount)||0),0);
   const isFullyPaid=parseFloat(order.cust.total)>0&&totalPaid>=(parseFloat(order.cust.total)||0);
   const[addingPay,setAddingPay]=useState(false);
@@ -2630,6 +2796,21 @@ function Preview({order,onBack,slip,setSlip,onUpdate,onDelete,db,saveDb,carpente
       const fileName=genImgFileName(`${order.no}_delivery`,1,file);
       const savedFull=await saveFullResImage(file,fileName);
       onUpdate({...order,deliveryImg:compressed,deliveryImgFileName:savedFull?fileName:null});
+      // এই ছবিটি অর্ডারে থাকা প্রতিটা ফার্নিচার মডেলের গ্যালারিতেও যুক্ত করুন,
+      // যাতে পরবর্তীতে সেই মডেল সিলেক্ট করলে ডেলিভারি দেওয়া আসল পণ্যের ছবি দেখা যায়
+      if(saveGalleryEntry&&order.items){
+        const seen=new Set();
+        order.items.forEach(it=>{
+          if(!it.catKey||!it.varKey)return;
+          const key=`${it.catKey}__${it.varKey}`;
+          if(seen.has(key))return;
+          seen.add(key);
+          const existing=(galleries&&galleries[key])||{gallery:[],coverImage:null};
+          if((existing.gallery||[]).includes(compressed))return; // আগে থেকেই থাকলে দ্বিতীয়বার যোগ হবে না
+          const updatedGallery=[...(existing.gallery||[]),compressed];
+          saveGalleryEntry(it.catKey,it.varKey,{gallery:updatedGallery,coverImage:existing.coverImage||compressed});
+        });
+      }
     }
   };
   const addPayment=()=>{
@@ -2688,21 +2869,17 @@ function Preview({order,onBack,slip,setSlip,onUpdate,onDelete,db,saveDb,carpente
         </div>
       </div>}
     </div>
-    {slip===5&&isFullyPaid&&<div className="no-print" style={{background:"white",padding:"10px 14px",borderBottom:"1px solid #eee"}}>
-      <input ref={delInput} type="file" accept="image/*" onChange={handleDeliveryImg} style={{display:"none"}}/>
-      <button onClick={()=>delInput.current.click()} style={{width:"100%",background:"#f0fdfa",border:"2px dashed #0f766e",borderRadius:9,padding:"10px",fontSize:12,color:"#0f766e",fontWeight:600}}>📷 সম্পন্ন ফার্নিচারের ছবি যোগ করুন</button>
-    </div>}
     <div className="no-print" style={{background:"white",display:"flex",overflowX:"auto",borderBottom:"1px solid #eee"}}>
       {tabs.map(t=><button key={t.id} onClick={()=>!t.locked&&setSlip(t.id)} style={{flexShrink:0,padding:"10px 11px",border:"none",background:"none",fontSize:11,fontWeight:slip===t.id?700:400,color:t.locked?"#ccc":slip===t.id?t.c:"#888",borderBottom:slip===t.id?`3px solid ${t.c}`:"3px solid transparent",cursor:t.locked?"not-allowed":"pointer"}}>{t.l}</button>)}
     </div>
     <div className="print-wrap" style={{padding:"12px",maxWidth:640,margin:"0 auto"}}>
       <div className="slip-card" style={{background:"white",borderRadius:10,overflow:"hidden",boxShadow:"0 2px 10px rgba(0,0,0,.1)"}}>
         {slip===0&&<S1 order={order} onPrint={logPrint}/>}
-        {slip===1&&<S2 order={order} onPrint={logPrint} db={db} saveDb={saveDb} galleries={galleries} onUpdateOrder={onUpdate}/>}
+        {slip===1&&<S2 order={order} onPrint={logPrint} db={db} saveDb={saveDb} galleries={galleries} onUpdateOrder={onUpdate} woodSettings={woodSettings}/>}
         {slip===2&&<S3 order={order} onPrint={logPrint} onUpdateOrder={onUpdate} carpenters={carpenters} saveCarpenters={saveCarpenters}/>}
         {slip===3&&<S4 order={order} onPrint={logPrint} db={db} saveDb={saveDb} onUpdateOrder={onUpdate}/>}
         {slip===4&&<S5 order={order} onPrint={logPrint}/>}
-        {slip===5&&isFullyPaid&&<S6 order={{...order,deliveryImg}} onPrint={logPrint} onUpdateOrder={onUpdate}/>}
+        {slip===5&&isFullyPaid&&<S6 order={{...order,deliveryImg}} onPrint={logPrint} onUpdateOrder={onUpdate} onPhotoChange={handleDeliveryImg}/>}
         {slip===5&&!isFullyPaid&&<div style={{padding:40,textAlign:"center",color:"#aaa"}}><div style={{fontSize:40,marginBottom:10}}>🔒</div><div style={{fontSize:14}}>সম্পূর্ণ পেমেন্টের পরে আনলক হবে</div></div>}
       </div>
     </div>
