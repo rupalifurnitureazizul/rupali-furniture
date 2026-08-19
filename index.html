@@ -74,7 +74,7 @@ function compressImage(file,maxDim=1200,quality=0.82){
 /* ── FULL-RESOLUTION LOCAL FOLDER STORAGE (desktop Chrome/Edge/Brave only) ──
    Original, uncompressed images are saved as real files in a folder you choose
    on your computer. Only a small compressed thumbnail syncs to the cloud/mobile. */
-const BUILD_TAG="2.09";
+const BUILD_TAG="2.10";
 const FS_SUPPORTED=typeof window!=="undefined"&&"showDirectoryPicker" in window;
 function idbOpen(){
   return new Promise((resolve,reject)=>{
@@ -1942,21 +1942,6 @@ function WoodStockPage({woodLots,saveWoodLots,woodSettings,saveWoodSettings,labo
     const weightedSum=relevant.reduce((s,l)=>s+lotRealCostPerCft(l)*lotUsableCft(l),0);
     return weightedSum/totalUsable;
   };
-
-  // ── শ্রম হারের প্রস্তাব: এ পর্যন্ত মোট মজুরি ÷ এ পর্যন্ত ডেলিভারি হওয়া মোট CFT ──
-  const suggestedLaborRate=()=>{
-    let totalWages=0;
-    Object.values(payrollWeeks||{}).forEach(wd=>{
-      Object.entries(wd.attendance||{}).forEach(([wid,d])=>{
-        const w=(workers||[]).find(w=>w.id===wid);
-        if(w)totalWages+=(parseFloat(d)||0)*(parseFloat(w.dailyRate)||0);
-      });
-    });
-    const deliveredCft=(orders||[]).filter(o=>!o.cancelled&&o.delivered).reduce((s,o)=>s+orderTotalCft(o),0);
-    if(deliveredCft<=0)return 0;
-    return totalWages/deliveredCft;
-  };
-  const[laborRateDraft,setLaborRateDraft]=useState({from:"",rate:""});
 
   return<div style={{minHeight:"100vh",background:"#f8f8f8"}}>
     <div style={{background:"#065f46",color:"white",padding:"13px 16px",display:"flex",alignItems:"center",gap:11}}>
