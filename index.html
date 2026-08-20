@@ -74,7 +74,7 @@ function compressImage(file,maxDim=1200,quality=0.82){
 /* ── FULL-RESOLUTION LOCAL FOLDER STORAGE (desktop Chrome/Edge/Brave only) ──
    Original, uncompressed images are saved as real files in a folder you choose
    on your computer. Only a small compressed thumbnail syncs to the cloud/mobile. */
-const BUILD_TAG="2.10";
+const BUILD_TAG="2.13";
 const FS_SUPPORTED=typeof window!=="undefined"&&"showDirectoryPicker" in window;
 function idbOpen(){
   return new Promise((resolve,reject)=>{
@@ -844,8 +844,8 @@ function S4({order,onPrint,db,saveDb,onUpdateOrder}){
               {sec.pieces.map((p,pi)=><div key={pi} style={{background:"white",border:"1px solid #f0e0c0",borderRadius:6,padding:6,marginBottom:5}}>
                 <input value={p.bn} onChange={e=>updatePiece(si,pi,"bn",e.target.value)} placeholder="কাঠের নাম" style={{width:"100%",fontSize:11,border:"1px solid #e5e5e5",borderRadius:4,padding:"5px 7px",marginBottom:4,boxSizing:"border-box"}}/>
                 <div style={{display:"flex",gap:4,alignItems:"center",flexWrap:"wrap"}}>
-                  {["pc","h","l","w"].map((f,fi)=><div key={f} style={{display:"flex",alignItems:"center",gap:2,flex:"1 1 21%",minWidth:44}}>
-                    <span style={{fontSize:8,color:"#92400e",flexShrink:0}}>{["পিস","H","L","W"][fi]}</span>
+                  {["h","l","w","pc"].map((f,fi)=><div key={f} style={{display:"flex",alignItems:"center",gap:2,flex:"1 1 21%",minWidth:44}}>
+                    <span style={{fontSize:8,color:"#92400e",flexShrink:0}}>{["H","L","W","পিস"][fi]}</span>
                     <input type="number" step="0.25" value={p[f]} onChange={e=>updatePiece(si,pi,f,e.target.value)} style={{width:"100%",fontSize:11,border:"1px solid #e5e5e5",borderRadius:4,padding:"5px 3px",minWidth:0,boxSizing:"border-box"}}/>
                   </div>)}
                   <button onClick={()=>removePiece(si,pi)} style={{background:"#fee2e2",border:"none",borderRadius:5,color:RED,fontSize:12,padding:"6px 9px",flexShrink:0}}>✕</button>
@@ -859,7 +859,7 @@ function S4({order,onPrint,db,saveDb,onUpdateOrder}){
             </div>
           </>:it.sections.map((sec,j)=><div key={j} style={{marginBottom:7}}>
             <div style={{fontWeight:700,fontSize:9,color:"#92400e",borderBottom:"1px solid #fde68a",paddingBottom:2,marginBottom:3}}>{sec.name}</div>
-            {sec.pieces.map((p,k)=><div key={k} style={{display:"flex",justifyContent:"space-between",fontSize:9,padding:"2px 0",borderBottom:"1px dotted #f0f0f0"}}><span>{p.bn} × {p.pc}</span><span style={{color:"#555",fontFamily:"monospace"}}>{p.h}″×{p.l}″×{p.w}″</span></div>)}
+            {sec.pieces.map((p,k)=><div key={k} style={{display:"flex",justifyContent:"space-between",fontSize:9,padding:"2px 0",borderBottom:"1px dotted #f0f0f0"}}><span>{p.bn}</span><span style={{color:"#555",fontFamily:"monospace"}}>{p.h}″×{p.l}″×{p.w}″ × {p.pc}</span></div>)}
           </div>)}
           {editIdx!==i&&<div style={{background:"#fef3c7",borderRadius:5,padding:"5px 8px",fontSize:9,marginTop:4}}>মোট CFT: <strong>{(totalCft(it.sections)*it.qty).toFixed(3)}</strong></div>}
         </div>
@@ -1149,7 +1149,42 @@ function Root(){
 
 /* ── APP (Firestore-backed, syncs automatically across devices) ── */
 function App({firebaseConfig,onResetConfig}){
-  const[page,setPage]=useState("home");
+  // ── নেভিগেশন স্ট্যাক: ফোনের ব্যাক বাটন প্রতিবার ঠিক একধাপ পেছাবে, একদম হোমে লাফ দেবে না ──
+  const[navStack,setNavStack]=useState([{page:"home"}]);
+  const curScreen=navStack[navStack.length-1];
+  const page=curScreen.page;
+  const[highlightNo,setHighlightNo]=useState(null); // ব্যাক করে ফিরলে যে অর্ডার/লট থেকে বের হলাম সেটা হালকা আকাশী রঙে হাইলাইট
+  const navigate=(screen)=>{
+    setNavStack(prev=>[...prev,screen]);
+    window.history.pushState({depth:navStack.length+1},"");
+  };
+  const replaceTop=(screen)=>{
+    setNavStack(prev=>[...prev.slice(0,-1),screen]);
+  };
+  const goBack=()=>{
+    if(navStack.length<=1)return; // হোমে থাকলে ফিজিক্যাল ব্যাক বাটনের স্বাভাবিক আচরণ (অ্যাপ থেকে বেরিয়ে যাওয়া) হতে দিন
+    window.history.back();
+  };
+  useEffect(()=>{
+    window.history.replaceState({depth:1},"");
+    const onPop=()=>{
+      setNavStack(prev=>{
+        if(prev.length<=1)return prev;
+        const popped=prev[prev.length-1];
+        if(popped.page==="preview"&&popped.orderNo){
+          setHighlightNo(popped.orderNo);
+          setTimeout(()=>setHighlightNo(n=>n===popped.orderNo?null:n),3000);
+        }
+        if(popped.page==="woodstock"&&popped.view==="detail"&&popped.lotId){
+          setHighlightNo("lot:"+popped.lotId);
+          setTimeout(()=>setHighlightNo(n=>n===("lot:"+popped.lotId)?null:n),3000);
+        }
+        return prev.slice(0,-1);
+      });
+    };
+    window.addEventListener("popstate",onPop);
+    return()=>window.removeEventListener("popstate",onPop);
+  },[]);
   const[orders,setOrders]=useState([]);
   const[expenses,setExpenses]=useState([]);
   const[woodLots,setWoodLots]=useState([]);
@@ -1158,8 +1193,9 @@ function App({firebaseConfig,onResetConfig}){
   const[db,setDb]=useState(null);
   const[carpenters,setCarpenters]=useState([]);
   const[draft,setDraft]=useState(null);
-  const[viewed,setViewed]=useState(null);
-  const[slip,setSlip]=useState(0);
+  const viewed=page==="preview"&&curScreen.orderNo?(orders.find(o=>o.no===curScreen.orderNo)||(draft&&draft.no===curScreen.orderNo?draft:null)):null;
+  const slip=curScreen.slip||0;
+  const setSlip=(s)=>replaceTop({...curScreen,slip:typeof s==="function"?s(curScreen.slip||0):s});
   const[online,setOnline]=useState(navigator.onLine);
   const[connError,setConnError]=useState(null);
   const[timedOut,setTimedOut]=useState(false);
@@ -1324,16 +1360,18 @@ function App({firebaseConfig,onResetConfig}){
     if(fsRef.current)fsRef.current.doc("meta/db").set(newDb).catch(err=>alert("⚠️ ক্লাউডে সেভ করতে সমস্যা হয়েছে: "+err.message));
   };
   const saveOrder=(o)=>{
-    setDraft(o);setSlip(0);setPage("preview");
+    setDraft(o);
+    navigate({page:"preview",orderNo:o.no,slip:0,from:"home"});
     if(fsRef.current)fsRef.current.collection("orders").doc(o.no).set(o).catch(err=>alert("⚠️ অর্ডার সিঙ্ক করতে সমস্যা হয়েছে: "+err.message+" — ইন্টারনেট সংযোগ ফিরে আসলে এটি নিজে থেকেই সিঙ্ক হবে।"));
   };
   const updateOrder=(updated)=>{
-    setViewed(updated);if(draft&&draft.no===updated.no)setDraft(updated);
+    if(draft&&draft.no===updated.no)setDraft(updated);
     if(fsRef.current)fsRef.current.collection("orders").doc(updated.no).set(updated).catch(err=>alert("⚠️ পরিবর্তন সিঙ্ক করতে সমস্যা হয়েছে: "+err.message));
   };
   const deleteOrderPermanently=(orderNo)=>{
     if(fsRef.current)fsRef.current.collection("orders").doc(orderNo).delete().catch(err=>alert("⚠️ ডিলিট করতে সমস্যা হয়েছে: "+err.message));
-    setViewed(null);setDraft(null);setPage("history");
+    setDraft(null);
+    goBack();
   };
   const saveExpense=(exp)=>{
     const id=exp.id||("exp_"+Date.now());
@@ -1389,19 +1427,19 @@ function App({firebaseConfig,onResetConfig}){
     </div>;
     return<div style={{padding:40,textAlign:"center"}}><div style={{fontSize:9,color:"#ccc",marginBottom:10}}>{BUILD_TAG}</div>সিঙ্ক হচ্ছে...</div>;
   }
-  if(page==="preview")return<Preview order={viewed||draft} onBack={()=>{setViewed(null);setPage(viewed?"history":"home")}} slip={slip} setSlip={setSlip} onUpdate={updateOrder} onDelete={deleteOrderPermanently} db={db} saveDb={saveDb} carpenters={carpenters} saveCarpenters={saveCarpenters} galleries={galleries} saveGalleryEntry={saveGalleryEntry} woodSettings={woodSettings} laborSettings={laborSettings} workers={workers}/>;
-  if(page==="form")return<Form onSave={saveOrder} onBack={()=>setPage("home")} db={db} saveDb={saveDb} galleries={galleries} woodSettings={woodSettings} laborSettings={laborSettings}/>;
-  if(page==="history")return<Hist orders={orders} onBack={()=>setPage("home")} onView={o=>{setViewed(o);setSlip(0);setPage("preview")}}/>;
-  if(page==="manage")return<ManageDB db={db} saveDb={saveDb} galleries={galleries} saveGalleryEntry={saveGalleryEntry} onBack={()=>setPage("home")}/>;
-  if(page==="woodstock")return<WoodStockPage woodLots={woodLots} saveWoodLots={saveWoodLots} woodSettings={woodSettings} saveWoodSettings={saveWoodSettings} laborSettings={laborSettings} saveLaborSettings={saveLaborSettings} payrollWeeks={payrollWeeks} workers={workers} orders={orders} onBack={()=>setPage("home")}/>;
-  if(page==="expense")return<ExpensePage expenses={expenses} onSave={saveExpense} onBack={()=>setPage("home")}/>;
-  if(page==="payroll")return<PayrollPage workers={workers} saveWorker={saveWorker} deleteWorker={deleteWorker} payrollWeeks={payrollWeeks} savePayrollWeek={savePayrollWeek} onBack={()=>setPage("home")}/>;
-  if(page==="plreport")return<PLReportPage orders={orders} expenses={expenses} workers={workers} payrollWeeks={payrollWeeks} woodLots={woodLots} woodSettings={woodSettings} laborSettings={laborSettings} onBack={()=>setPage("home")}/>;
-  return<Home orders={orders} expenses={expenses} woodLots={woodLots} db={db} onNew={()=>setPage("form")} onHist={()=>setPage("history")} onManage={()=>setPage("manage")} onExpense={()=>setPage("expense")} onWoodStock={()=>setPage("woodstock")} onPayroll={()=>setPage("payroll")} onPLReport={()=>setPage("plreport")} onView={o=>{setViewed(o);setSlip(0);setPage("preview")}} online={online} connError={connError} onResetConfig={onResetConfig} folderStatus={folderStatus} connectFolder={connectFolder}/>;
+  if(page==="preview")return<Preview order={viewed||draft} onBack={goBack} slip={slip} setSlip={setSlip} onUpdate={updateOrder} onDelete={deleteOrderPermanently} db={db} saveDb={saveDb} carpenters={carpenters} saveCarpenters={saveCarpenters} galleries={galleries} saveGalleryEntry={saveGalleryEntry} woodSettings={woodSettings} laborSettings={laborSettings} workers={workers}/>;
+  if(page==="form")return<Form onSave={saveOrder} onBack={goBack} db={db} saveDb={saveDb} galleries={galleries} woodSettings={woodSettings} laborSettings={laborSettings}/>;
+  if(page==="history")return<Hist orders={orders} onBack={goBack} onView={o=>navigate({page:"preview",orderNo:o.no,slip:0})} highlightNo={highlightNo}/>;
+  if(page==="manage")return<ManageDB db={db} saveDb={saveDb} galleries={galleries} saveGalleryEntry={saveGalleryEntry} onBack={goBack}/>;
+  if(page==="woodstock")return<WoodStockPage woodLots={woodLots} saveWoodLots={saveWoodLots} woodSettings={woodSettings} saveWoodSettings={saveWoodSettings} laborSettings={laborSettings} saveLaborSettings={saveLaborSettings} payrollWeeks={payrollWeeks} workers={workers} orders={orders} onBack={goBack} view={curScreen.view||"list"} lotId={curScreen.lotId||null} onOpenList={()=>navigate({page:"woodstock",view:"list"})} onOpenDetail={lotId=>navigate({page:"woodstock",view:"detail",lotId})} onOpenNew={()=>navigate({page:"woodstock",view:"new"})} onOpenRates={()=>navigate({page:"woodstock",view:"rates"})} highlightNo={highlightNo}/>;
+  if(page==="expense")return<ExpensePage expenses={expenses} onSave={saveExpense} onBack={goBack}/>;
+  if(page==="payroll")return<PayrollPage workers={workers} saveWorker={saveWorker} deleteWorker={deleteWorker} payrollWeeks={payrollWeeks} savePayrollWeek={savePayrollWeek} onBack={goBack}/>;
+  if(page==="plreport")return<PLReportPage orders={orders} expenses={expenses} workers={workers} payrollWeeks={payrollWeeks} woodLots={woodLots} woodSettings={woodSettings} laborSettings={laborSettings} onBack={goBack}/>;
+  return<Home orders={orders} expenses={expenses} woodLots={woodLots} db={db} onNew={()=>navigate({page:"form"})} onHist={()=>navigate({page:"history"})} onManage={()=>navigate({page:"manage"})} onExpense={()=>navigate({page:"expense"})} onWoodStock={()=>navigate({page:"woodstock",view:"list"})} onPayroll={()=>navigate({page:"payroll"})} onPLReport={()=>navigate({page:"plreport"})} onView={o=>navigate({page:"preview",orderNo:o.no,slip:0})} online={online} connError={connError} onResetConfig={onResetConfig} folderStatus={folderStatus} connectFolder={connectFolder} highlightNo={highlightNo}/>;
 }
 
 /* ── HOME / DASHBOARD ── */
-function Home({orders,expenses,woodLots,db,onNew,onHist,onManage,onExpense,onWoodStock,onPayroll,onPLReport,onView,online,connError,onResetConfig,folderStatus,connectFolder}){
+function Home({orders,expenses,woodLots,db,onNew,onHist,onManage,onExpense,onWoodStock,onPayroll,onPLReport,onView,online,connError,onResetConfig,folderStatus,connectFolder,highlightNo}){
   const now=new Date();
   const stats=useMemo(()=>{
     // Running orders (not fully paid = not delivered typically, but we track by payment completion as proxy + delivery date)
@@ -1609,7 +1647,8 @@ function Home({orders,expenses,woodLots,db,onNew,onHist,onManage,onExpense,onWoo
             const urgent=o.daysLeft<=3;
             const warn=o.daysLeft>3&&o.daysLeft<=7;
             const refThumb=(o.refImgs&&o.refImgs.length&&o.refImgs[0].src)||o.refImg||null;
-            return<div key={i} onClick={()=>onView(o)} style={{padding:"10px 12px",borderBottom:i<stats.running.length-1?"1px solid #f2f2f2":"none",cursor:"pointer",background:urgent?"#fef2f2":"white"}}>
+            const isHighlighted=highlightNo===o.no;
+            return<div key={i} onClick={()=>onView(o)} style={{padding:"10px 12px",borderBottom:i<stats.running.length-1?"1px solid #f2f2f2":"none",cursor:"pointer",background:isHighlighted?"#e0f2fe":urgent?"#fef2f2":"white",transition:"background .4s"}}>
               <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:7}}>
                 <div style={{width:26,height:26,borderRadius:"50%",background:urgent?RED:warn?"#f97316":"#94a3b8",color:"white",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:800,flexShrink:0}}>{i+1}</div>
                 {refThumb&&<img src={refThumb} style={{width:34,height:34,objectFit:"cover",borderRadius:7,border:"1px solid #eee",flexShrink:0}} alt=""/>}
@@ -1817,10 +1856,11 @@ function ExpensePage({expenses,onSave,onBack}){
 }
 
 /* ── WOOD STOCK PAGE ── */
-function WoodStockPage({woodLots,saveWoodLots,woodSettings,saveWoodSettings,laborSettings,saveLaborSettings,payrollWeeks,workers,orders,onBack}){
+function WoodStockPage({woodLots,saveWoodLots,woodSettings,saveWoodSettings,laborSettings,saveLaborSettings,payrollWeeks,workers,orders,onBack,view,lotId,onOpenList,onOpenDetail,onOpenNew,onOpenRates,highlightNo}){
   const today=todayStr();
-  const[view,setView]=useState("list"); // list | new | detail | rates
-  const[selLotId,setSelLotId]=useState(null);
+  const setView=(v)=>{if(v==="list")onOpenList();else if(v==="new")onOpenNew();else if(v==="rates")onOpenRates()}; // পুরনো কল-সাইটের সাথে সামঞ্জস্যের জন্য
+  const setSelLotId=(id)=>onOpenDetail(id);
+  const selLotId=lotId;
   const[newLot,setNewLot]=useState({woodType:"S",supplier:"",supplierPhone:"",supplierAddress:"",date:today,ratePerCft:""});
   const[newLog,setNewLog]=useState({lengthFt:"",diameterIn:""});
   const[newPay,setNewPay]=useState({date:today,amount:""});
@@ -1835,11 +1875,12 @@ function WoodStockPage({woodLots,saveWoodLots,woodSettings,saveWoodSettings,labo
   const selLot=woodLots.find(l=>l.id===selLotId);
   const wSettings=(woodType)=>(woodSettings&&woodSettings[woodType])||{wastagePercent:0,finalAvgRate:0};
 
+
   const createLot=()=>{
     if(!newLot.supplier)return;
     const lot={id:"lot_"+Date.now(),...newLot,logs:[],payments:[],millingEntries:[],transportCost:0,otherCost:0};
     saveWoodLots([lot,...woodLots]);
-    setSelLotId(lot.id);setView("detail");
+    onOpenDetail(lot.id);
     setNewLot({woodType:"S",supplier:"",supplierPhone:"",supplierAddress:"",date:today,ratePerCft:""});
   };
 
@@ -1886,7 +1927,7 @@ function WoodStockPage({woodLots,saveWoodLots,woodSettings,saveWoodSettings,labo
   const deleteLot=(lotId)=>{
     if(window.confirm("এই লটটি মুছে ফেলতে চান?")){
       saveWoodLots(woodLots.filter(l=>l.id!==lotId));
-      setView("list");setSelLotId(null);
+      onOpenList();
     }
   };
 
@@ -1945,7 +1986,7 @@ function WoodStockPage({woodLots,saveWoodLots,woodSettings,saveWoodSettings,labo
 
   return<div style={{minHeight:"100vh",background:"#f8f8f8"}}>
     <div style={{background:"#065f46",color:"white",padding:"13px 16px",display:"flex",alignItems:"center",gap:11}}>
-      <button onClick={()=>view==="list"?onBack():setView("list")} style={{background:"rgba(255,255,255,.2)",border:"none",color:"white",borderRadius:8,padding:"7px 13px",fontSize:13}}>←</button>
+      <button onClick={onBack} style={{background:"rgba(255,255,255,.2)",border:"none",color:"white",borderRadius:8,padding:"7px 13px",fontSize:13}}>←</button>
       <span style={{fontWeight:700,fontSize:16}}>{view==="list"?"কাঠের স্টক":view==="new"?"নতুন লট":view==="rates"?"গড় দাম নির্ধারণ":selLot?.supplier}</span>
     </div>
     <div style={{padding:"18px 16px",maxWidth:600,margin:"0 auto"}}>
@@ -1959,7 +2000,8 @@ function WoodStockPage({woodLots,saveWoodLots,woodSettings,saveWoodSettings,labo
         woodLots.map(lot=>{
           const tCft=lotTotalCft(lot),tCost=lotTotalCost(lot),paid=lotTotalPaid(lot),rem=lotRemaining(lot);
           const uncut=lot.logs.filter(l=>!l.cut).length;
-          return<div key={lot.id} onClick={()=>{setSelLotId(lot.id);setView("detail")}} style={{background:"white",borderRadius:11,padding:"13px",marginBottom:10,boxShadow:"0 1px 4px rgba(0,0,0,.08)",borderLeft:`4px solid #065f46`,cursor:"pointer"}}>
+          const isHighlighted=highlightNo==="lot:"+lot.id;
+          return<div key={lot.id} onClick={()=>onOpenDetail(lot.id)} style={{background:isHighlighted?"#e0f2fe":"white",borderRadius:11,padding:"13px",marginBottom:10,boxShadow:"0 1px 4px rgba(0,0,0,.08)",borderLeft:`4px solid ${isHighlighted?"#0ea5e9":"#065f46"}`,cursor:"pointer",transition:"background .4s"}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"start"}}>
               <div>
                 <div style={{fontWeight:700,fontSize:14}}>{WOOD[lot.woodType].bn} — {lot.supplier}</div>
@@ -2858,12 +2900,12 @@ function ManageDB({db,saveDb,galleries,saveGalleryEntry,onBack}){
           <div style={{padding:"8px 12px"}}>
             {sec.pieces.map((p,pi)=><div key={pi} style={{display:"flex",gap:4,alignItems:"center",marginBottom:4,fontSize:10}}>
               <span style={{flex:2,color:"#333"}}>{p.bn}</span>
-              <span style={{fontFamily:"monospace",color:"#555",flexShrink:0}}>{p.pc}pc {p.h}×{p.l}×{p.w}</span>
+              <span style={{fontFamily:"monospace",color:"#555",flexShrink:0}}>{p.h}×{p.l}×{p.w} × {p.pc}pc</span>
               <button onClick={()=>removePiece(si,pi)} style={{background:"#fee2e2",border:"none",borderRadius:4,padding:"2px 6px",color:RED,fontSize:10,cursor:"pointer"}}>✕</button>
             </div>)}
             <div style={{display:"grid",gridTemplateColumns:"2fr 1fr 1fr 1fr 1fr auto",gap:4,marginTop:6}}>
               <input placeholder="কাঠের নাম" value={newPiece.sectionIdx===si?newPiece.bn:""} onChange={e=>setNewPiece({...newPiece,sectionIdx:si,bn:e.target.value})} style={{...inp,padding:"5px 7px",fontSize:10}} onFocus={()=>setNewPiece(p=>({...p,sectionIdx:si}))}/>
-              {[{k:"pc",p:"পিস"},{k:"h",p:"H\""},{k:"l",p:"L\""},{k:"w",p:"W\""}].map(f=><input key={f.k} type="number" step="0.25" placeholder={f.p} value={newPiece.sectionIdx===si?newPiece[f.k]:""} onChange={e=>setNewPiece({...newPiece,sectionIdx:si,[f.k]:e.target.value})} style={{...inp,padding:"5px 4px",fontSize:10}}/>)}
+              {[{k:"h",p:"H\""},{k:"l",p:"L\""},{k:"w",p:"W\""},{k:"pc",p:"পিস"}].map(f=><input key={f.k} type="number" step="0.25" placeholder={f.p} value={newPiece.sectionIdx===si?newPiece[f.k]:""} onChange={e=>setNewPiece({...newPiece,sectionIdx:si,[f.k]:e.target.value})} style={{...inp,padding:"5px 4px",fontSize:10}}/>)}
               <button onClick={addPiece} style={{background:"#6d28d9",color:"white",border:"none",borderRadius:6,padding:"5px 8px",fontSize:11}}>+</button>
             </div>
           </div>
@@ -3198,7 +3240,7 @@ function Preview({order,onBack,slip,setSlip,onUpdate,onDelete,db,saveDb,carpente
 }
 
 /* ── HISTORY (with search) ── */
-function Hist({orders,onBack,onView}){
+function Hist({orders,onBack,onView,highlightNo}){
   const[q,setQ]=useState("");
   const filtered=useMemo(()=>{
     let list=orders;
@@ -3222,9 +3264,9 @@ function Hist({orders,onBack,onView}){
       :filtered.map((o,i)=>{
         const paid=(o.payments||[]).reduce((s,p)=>s+(parseFloat(p.amount)||0),0);
         const full=parseFloat(o.cust.total)>0&&paid>=(parseFloat(o.cust.total)||0);
-        const bg=o.cancelled?"#fafafa":o.delivered?"#f0fdf4":"white";
-        const borderColor=o.cancelled?"#999":o.delivered?"#0f766e":full?"#16a34a":RED;
-        return<div key={i} onClick={()=>onView(o)} style={{background:bg,borderRadius:11,padding:"12px",marginBottom:9,boxShadow:"0 1px 4px rgba(0,0,0,.08)",border:o.delivered?"1px solid #99f6e4":"none",borderLeft:`4px solid ${borderColor}`,cursor:"pointer",opacity:o.cancelled?0.65:1}}>
+        const bg=highlightNo===o.no?"#e0f2fe":o.cancelled?"#fafafa":o.delivered?"#f0fdf4":"white";
+        const borderColor=highlightNo===o.no?"#0ea5e9":o.cancelled?"#999":o.delivered?"#0f766e":full?"#16a34a":RED;
+        return<div key={i} onClick={()=>onView(o)} style={{background:bg,borderRadius:11,padding:"12px",marginBottom:9,boxShadow:"0 1px 4px rgba(0,0,0,.08)",border:o.delivered?"1px solid #99f6e4":"none",borderLeft:`4px solid ${borderColor}`,cursor:"pointer",opacity:o.cancelled?0.65:1,transition:"background .4s"}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"start"}}>
             <div>
               <div style={{fontWeight:700,fontSize:14,textDecoration:o.cancelled?"line-through":"none"}}>{o.cust.name}</div>
