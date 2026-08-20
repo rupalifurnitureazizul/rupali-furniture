@@ -74,7 +74,7 @@ function compressImage(file,maxDim=1200,quality=0.82){
 /* ── FULL-RESOLUTION LOCAL FOLDER STORAGE (desktop Chrome/Edge/Brave only) ──
    Original, uncompressed images are saved as real files in a folder you choose
    on your computer. Only a small compressed thumbnail syncs to the cloud/mobile. */
-const BUILD_TAG="2.13";
+const BUILD_TAG="2.23";
 const FS_SUPPORTED=typeof window!=="undefined"&&"showDirectoryPicker" in window;
 function idbOpen(){
   return new Promise((resolve,reject)=>{
@@ -229,6 +229,18 @@ function orderLabourRate(order,laborSettings){
   return laborRateOn(laborSettings,order.cust?order.cust.date:null);
 }
 const deptRank=(d)=>{const i=PAYROLL_DEPTS.indexOf(d);return i===-1?PAYROLL_DEPTS.length:i};
+// ── পুরনো (এক-আইটেম-ভিত্তিক) ট্র্যাকিং ডেটার সাথে সামঞ্জস্য ──
+// আগে deptProgress পুরো অর্ডারের জন্য একটাই ছিল; এখন প্রতিটা ফার্নিচারের জন্য আলাদা itemProgress।
+// itemProgress এখনো ফাঁকা কিন্তু পুরনো deptProgress এ ডেটা থাকলে, সেটা প্রথম ফার্নিচারের সাথে যুক্ত করে দেখানো হয় —
+// পুরনো অর্ডারের অগ্রগতি হারিয়ে যাওয়ার বদলে দেখা যাবে।
+function effectiveItemProgress(order){
+  const ip=order.itemProgress||{};
+  if(Object.keys(ip).length>0)return ip;
+  const legacy=order.deptProgress||{};
+  if(Object.keys(legacy).length===0)return ip;
+  const firstKey=(order.items&&order.items[0]&&(order.items[0].itemId||"idx_0"))||"idx_0";
+  return{[firstKey]:legacy};
+}
 const sortByDept=(list)=>[...list].sort((a,b)=>{
   const r=deptRank(a.department)-deptRank(b.department);
   if(r!==0)return r;
@@ -390,7 +402,7 @@ function FurnitureCategoryModelPicker({db,saveDb,galleries,catKey,varKey,onSelec
           <span style={{color:"#888"}}>▾</span>
         </button>
         {dropdownOpen&&<div style={{position:"absolute",top:"105%",left:0,right:0,background:"white",border:"1.5px solid #ddd",borderRadius:8,boxShadow:"0 4px 16px rgba(0,0,0,.12)",zIndex:20,maxHeight:220,overflowY:"auto"}}>
-          {Object.entries(fCat.variants).map(([k,v])=><div key={k} onClick={()=>{onSelect(catKey,k);setDropdownOpen(false)}} style={{display:"flex",alignItems:"center",gap:6,padding:"7px 9px",cursor:"pointer",borderBottom:"1px solid #f5f5f5"}}>
+          {Object.entries(fCat.variants).sort((a,b)=>(a[1].bn||"").localeCompare(b[1].bn||"","bn")).map(([k,v])=><div key={k} onClick={()=>{onSelect(catKey,k);setDropdownOpen(false)}} style={{display:"flex",alignItems:"center",gap:6,padding:"7px 9px",cursor:"pointer",borderBottom:"1px solid #f5f5f5"}}>
             {coverFor(k)?<img src={coverFor(k)} style={{width:26,height:26,objectFit:"cover",borderRadius:5,flexShrink:0,border:"1px solid #eee"}} alt=""/>:<div style={{width:26,height:26,background:"#f3f4f6",borderRadius:5,flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,color:"#ccc"}}>🪑</div>}
             <span style={{fontSize:10,color:"#222"}}>{isEmptyWood(v)?"⚠️ ":""}[{v.code}] {v.bn}</span>
           </div>)}
@@ -680,7 +692,7 @@ function S2({order,onPrint,db,saveDb,galleries,onUpdateOrder,woodSettings,laborS
 /* ── SLIP 3: DEPT TRACKING ── */
 function S3({order,onPrint,onUpdateOrder,workers}){
   const{cust,items,no,printLogs}=order;
-  const ip=order.itemProgress||{};
+  const ip=effectiveItemProgress(order);
   const itemKey=(it,idx)=>it.itemId||`idx_${idx}`;
 
   const getDept=(ikey,deptId)=>((ip[ikey]||{})[deptId])||{start:"",end:"",pct:0,workers:[]};
@@ -844,8 +856,8 @@ function S4({order,onPrint,db,saveDb,onUpdateOrder}){
               {sec.pieces.map((p,pi)=><div key={pi} style={{background:"white",border:"1px solid #f0e0c0",borderRadius:6,padding:6,marginBottom:5}}>
                 <input value={p.bn} onChange={e=>updatePiece(si,pi,"bn",e.target.value)} placeholder="কাঠের নাম" style={{width:"100%",fontSize:11,border:"1px solid #e5e5e5",borderRadius:4,padding:"5px 7px",marginBottom:4,boxSizing:"border-box"}}/>
                 <div style={{display:"flex",gap:4,alignItems:"center",flexWrap:"wrap"}}>
-                  {["h","l","w","pc"].map((f,fi)=><div key={f} style={{display:"flex",alignItems:"center",gap:2,flex:"1 1 21%",minWidth:44}}>
-                    <span style={{fontSize:8,color:"#92400e",flexShrink:0}}>{["H","L","W","পিস"][fi]}</span>
+                  {["w","h","l","pc"].map((f,fi)=><div key={f} style={{display:"flex",alignItems:"center",gap:2,flex:"1 1 21%",minWidth:44}}>
+                    <span style={{fontSize:8,color:"#92400e",flexShrink:0}}>{["W","H","L","পিস"][fi]}</span>
                     <input type="number" step="0.25" value={p[f]} onChange={e=>updatePiece(si,pi,f,e.target.value)} style={{width:"100%",fontSize:11,border:"1px solid #e5e5e5",borderRadius:4,padding:"5px 3px",minWidth:0,boxSizing:"border-box"}}/>
                   </div>)}
                   <button onClick={()=>removePiece(si,pi)} style={{background:"#fee2e2",border:"none",borderRadius:5,color:RED,fontSize:12,padding:"6px 9px",flexShrink:0}}>✕</button>
@@ -859,7 +871,7 @@ function S4({order,onPrint,db,saveDb,onUpdateOrder}){
             </div>
           </>:it.sections.map((sec,j)=><div key={j} style={{marginBottom:7}}>
             <div style={{fontWeight:700,fontSize:9,color:"#92400e",borderBottom:"1px solid #fde68a",paddingBottom:2,marginBottom:3}}>{sec.name}</div>
-            {sec.pieces.map((p,k)=><div key={k} style={{display:"flex",justifyContent:"space-between",fontSize:9,padding:"2px 0",borderBottom:"1px dotted #f0f0f0"}}><span>{p.bn}</span><span style={{color:"#555",fontFamily:"monospace"}}>{p.h}″×{p.l}″×{p.w}″ × {p.pc}</span></div>)}
+            {sec.pieces.map((p,k)=><div key={k} style={{display:"flex",justifyContent:"space-between",fontSize:9,padding:"2px 0",borderBottom:"1px dotted #f0f0f0"}}><span>{p.bn}</span><span style={{color:"#555",fontFamily:"monospace"}}>{p.w}″×{p.h}″×{p.l}″ × {p.pc}</span></div>)}
           </div>)}
           {editIdx!==i&&<div style={{background:"#fef3c7",borderRadius:5,padding:"5px 8px",fontSize:9,marginTop:4}}>মোট CFT: <strong>{(totalCft(it.sections)*it.qty).toFixed(3)}</strong></div>}
         </div>
@@ -887,12 +899,12 @@ function S5({order,onPrint}){
       </div>
       <div style={{fontWeight:700,fontSize:10,color:"#065f46",marginBottom:6}}>গোডাউনের র‍্যাক থেকে নিন:</div>
       <table style={{width:"100%",borderCollapse:"collapse",fontSize:9}}>
-        <thead><tr style={{background:"#065f46",color:"white"}}>{["র‍্যাক কোড","কাঠের নাম","পিস","H×L×W","CFT"].map((h,i)=><th key={h} style={{padding:"5px 4px",textAlign:i<2?"left":"center",fontWeight:700}}>{h}</th>)}</tr></thead>
+        <thead><tr style={{background:"#065f46",color:"white"}}>{["র‍্যাক কোড","কাঠের নাম","W×H×L","পিস","CFT"].map((h,i)=><th key={h} style={{padding:"5px 4px",textAlign:i<2?"left":"center",fontWeight:700}}>{h}</th>)}</tr></thead>
         <tbody>{list.map((w,i)=><tr key={i} style={{background:i%2===0?"#f0fdf4":"white",borderBottom:"1px solid #d1fae5"}}>
           <td style={{padding:"5px 4px",fontWeight:800,color:"#065f46",fontFamily:"monospace",fontSize:10}}>{w.code}</td>
           <td style={{padding:"5px 4px"}}>{w.name}</td>
+          <td style={{padding:"5px 4px",textAlign:"center",fontFamily:"monospace",color:"#555"}}>{w.w}×{w.h}×{w.l}</td>
           <td style={{padding:"5px 4px",textAlign:"center",fontWeight:700}}>{w.pc}</td>
-          <td style={{padding:"5px 4px",textAlign:"center",fontFamily:"monospace",color:"#555"}}>{w.h}×{w.l}×{w.w}</td>
           <td style={{padding:"5px 4px",textAlign:"center"}}>{w.cv.toFixed(3)}</td>
         </tr>)}</tbody>
         <tfoot><tr style={{background:"#065f46",color:"white"}}><td colSpan={4} style={{padding:"7px 4px",fontWeight:700}}>মোট CFT</td><td style={{padding:"7px 4px",textAlign:"center",fontWeight:800,fontSize:11}}>{tot.toFixed(3)}</td></tr></tfoot>
@@ -1242,6 +1254,60 @@ function App({firebaseConfig,onResetConfig}){
     setLaborSettings(newSettings);
     if(fsRef.current)fsRef.current.doc("meta/laborSettings").set(newSettings).catch(err=>alert("⚠️ শ্রম হার সেভ করতে সমস্যা হয়েছে: "+err.message));
   };
+  const latestDataRef=useRef({});
+  latestDataRef.current={orders,expenses,woodLots,workers,payrollWeeks,db,carpenters,woodSettings,laborSettings};
+
+  const buildBackupSnapshot=(auto)=>{
+    const d=latestDataRef.current;
+    return{
+      backupDate:new Date().toISOString(),
+      appVersion:BUILD_TAG,
+      auto:!!auto,
+      orders:d.orders,expenses:d.expenses,woodLots:d.woodLots,workers:d.workers,payrollWeeks:d.payrollWeeks,db:d.db,carpenters:d.carpenters,
+      woodSettings:d.woodSettings,laborSettings:d.laborSettings,
+      note:"এটি রূপালী ফার্নিচার অ্যাপের একটি ডেটা ব্যাকআপ। এই ফাইলটি নিরাপদ কোথাও (Google Drive, ইমেইল ইত্যাদি) সংরক্ষণ করে রাখুন। সমস্যা হলে Claude-কে এই ফাইলটি দেখিয়ে সাহায্য চাইতে পারবেন।"
+    };
+  };
+  const backupData=()=>{
+    const json=JSON.stringify(buildBackupSnapshot(false),null,2);
+    const blob=new Blob([json],{type:"application/json"});
+    const url=URL.createObjectURL(blob);
+    const dateStr=todayStr();
+    const a=document.createElement("a");
+    a.href=url;
+    a.download=`RupaliFurniture_Backup_${dateStr}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(()=>URL.revokeObjectURL(url),2000);
+  };
+
+  // ── স্বয়ংক্রিয় দৈনিক ব্যাকআপ — কিছু মনে রাখা বা ক্লিক করার দরকার নেই ──
+  // ১) ক্লাউডে (Firestore) প্রতিদিন একবার একটা স্ন্যাপশট জমা হয় (সব ডিভাইসে কাজ করে)
+  // ২) ডেস্কটপে ছবির ফোল্ডার সংযুক্ত থাকলে সেই একই ফোল্ডারে আসল JSON ফাইলও সেভ হয়ে যায়
+  useEffect(()=>{
+    if(!db)return;
+    const todayD=todayStr();
+    if(localStorage.getItem("rf_last_auto_backup")===todayD)return;
+    const timer=setTimeout(async()=>{
+      const snapshot=buildBackupSnapshot(true);
+      const json=JSON.stringify(snapshot,null,2);
+      if(fsRef.current){
+        fsRef.current.collection("backups").doc(todayD).set(JSON.parse(json)).catch(()=>{});
+      }
+      try{
+        const folder=await getImageFolderHandle();
+        if(folder){
+          const fileHandle=await folder.getFileHandle(`RupaliFurniture_Backup_${todayD}.json`,{create:true});
+          const writable=await fileHandle.createWritable();
+          await writable.write(json);
+          await writable.close();
+        }
+      }catch(e){}
+      localStorage.setItem("rf_last_auto_backup",todayD);
+    },6000); // অন্য সব ডেটা ঠিকভাবে লোড হওয়ার সময় দেওয়া হচ্ছে
+    return()=>clearTimeout(timer);
+  },[db]);
 
   useEffect(()=>{
     setTimedOut(false);
@@ -1435,11 +1501,11 @@ function App({firebaseConfig,onResetConfig}){
   if(page==="expense")return<ExpensePage expenses={expenses} onSave={saveExpense} onBack={goBack}/>;
   if(page==="payroll")return<PayrollPage workers={workers} saveWorker={saveWorker} deleteWorker={deleteWorker} payrollWeeks={payrollWeeks} savePayrollWeek={savePayrollWeek} onBack={goBack}/>;
   if(page==="plreport")return<PLReportPage orders={orders} expenses={expenses} workers={workers} payrollWeeks={payrollWeeks} woodLots={woodLots} woodSettings={woodSettings} laborSettings={laborSettings} onBack={goBack}/>;
-  return<Home orders={orders} expenses={expenses} woodLots={woodLots} db={db} onNew={()=>navigate({page:"form"})} onHist={()=>navigate({page:"history"})} onManage={()=>navigate({page:"manage"})} onExpense={()=>navigate({page:"expense"})} onWoodStock={()=>navigate({page:"woodstock",view:"list"})} onPayroll={()=>navigate({page:"payroll"})} onPLReport={()=>navigate({page:"plreport"})} onView={o=>navigate({page:"preview",orderNo:o.no,slip:0})} online={online} connError={connError} onResetConfig={onResetConfig} folderStatus={folderStatus} connectFolder={connectFolder} highlightNo={highlightNo}/>;
+  return<Home orders={orders} expenses={expenses} woodLots={woodLots} db={db} onNew={()=>navigate({page:"form"})} onHist={()=>navigate({page:"history"})} onManage={()=>navigate({page:"manage"})} onExpense={()=>navigate({page:"expense"})} onWoodStock={()=>navigate({page:"woodstock",view:"list"})} onPayroll={()=>navigate({page:"payroll"})} onPLReport={()=>navigate({page:"plreport"})} onView={o=>navigate({page:"preview",orderNo:o.no,slip:0})} online={online} connError={connError} onResetConfig={onResetConfig} folderStatus={folderStatus} connectFolder={connectFolder} highlightNo={highlightNo} onBackupData={backupData}/>;
 }
 
 /* ── HOME / DASHBOARD ── */
-function Home({orders,expenses,woodLots,db,onNew,onHist,onManage,onExpense,onWoodStock,onPayroll,onPLReport,onView,online,connError,onResetConfig,folderStatus,connectFolder,highlightNo}){
+function Home({orders,expenses,woodLots,db,onNew,onHist,onManage,onExpense,onWoodStock,onPayroll,onPLReport,onView,online,connError,onResetConfig,folderStatus,connectFolder,highlightNo,onBackupData}){
   const now=new Date();
   const stats=useMemo(()=>{
     // Running orders (not fully paid = not delivered typically, but we track by payment completion as proxy + delivery date)
@@ -1451,7 +1517,7 @@ function Home({orders,expenses,woodLots,db,onNew,onHist,onManage,onExpense,onWoo
     });
     const withDays=running.map(o=>{
       const daysLeft=o.cust.delivery?daysBetween(todayStr(),o.cust.delivery):999;
-      const ip=o.itemProgress||{};
+      const ip=effectiveItemProgress(o);
       const allPcts=[];
       const allWorkersSet=new Set();
       (o.items||[]).forEach((it,idx)=>{
@@ -1756,6 +1822,13 @@ function Home({orders,expenses,woodLots,db,onNew,onHist,onManage,onExpense,onWoo
         </div>}
         <div><button onClick={onResetConfig} style={{background:"none",border:"none",color:"#aaa",fontSize:10,textDecoration:"underline",cursor:"pointer"}}>Firebase সংযোগ পরিবর্তন করুন</button></div>
       </div>
+
+      {/* Data backup */}
+      <div style={{marginTop:10,background:"#eff6ff",border:"1px solid #bfdbfe",borderRadius:10,padding:"12px 14px"}}>
+        <div style={{fontSize:12,fontWeight:700,color:"#1d4ed8",marginBottom:6}}>✅ স্বয়ংক্রিয় দৈনিক ব্যাকআপ চালু আছে</div>
+        <div style={{fontSize:10,color:"#555",marginBottom:8,lineHeight:1.5}}>প্রতিদিন একবার আপনার সব তথ্যের একটা কপি নিজে থেকেই ক্লাউডে জমা হয়ে যায় — কিছু করার দরকার নেই। কম্পিউটারে ছবির ফোল্ডার সংযুক্ত থাকলে সেখানেও একটা আসল ফাইল সেভ হয়। চাইলে এখনই একটা কপি হাতে রাখতে নিচের বাটনে চাপুন।</div>
+        <button onClick={onBackupData} style={{width:"100%",background:"#1d4ed8",color:"white",border:"none",borderRadius:8,padding:"10px",fontSize:12,fontWeight:700}}>💾 এখনই একটা ব্যাকআপ ডাউনলোড করুন</button>
+      </div>
     </div>
   </div>
 }
@@ -1763,15 +1836,27 @@ function Home({orders,expenses,woodLots,db,onNew,onHist,onManage,onExpense,onWoo
 /* ── EXPENSE PAGE ── */
 function ExpensePage({expenses,onSave,onBack}){
   const today=todayStr();
+  const now=new Date();
   const[form,setForm]=useState({date:today,category:"hardware",itemName:"",qty:"",unit:"cft",rate:"",supplier:"",supplierPhone:"",payMethod:"নগদ",notes:""});
+  const[viewYear,setViewYear]=useState(now.getFullYear());
+  const[viewMonth,setViewMonth]=useState(now.getMonth());
+  const[search,setSearch]=useState("");
   const inp={width:"100%",border:"1.5px solid #e0e0e0",borderRadius:9,padding:"11px 12px",fontSize:14,outline:"none"};
   const lbl=(t)=><div style={{fontSize:12,fontWeight:600,color:"#555",marginBottom:5}}>{t}</div>;
 
-  const lastRate=useMemo(()=>{
-    const matches=expenses.filter(e=>e.category===form.category&&e.itemName.trim().toLowerCase()===form.itemName.trim().toLowerCase());
-    if(matches.length===0)return null;
-    return matches.sort((a,b)=>new Date(b.date)-new Date(a.date))[0];
-  },[expenses,form.category,form.itemName]);
+  // ── একই বা কাছাকাছি নামের পণ্যের আগের কেনাকাটার ইতিহাস — রেট বক্সের নিচে দেখানোর জন্য ──
+  const similarPurchases=useMemo(()=>{
+    const typed=form.itemName.trim().toLowerCase();
+    if(typed.length<2)return[];
+    const words=typed.split(/\s+/).filter(w=>w.length>=2);
+    const matches=expenses.filter(e=>{
+      const name=(e.itemName||"").trim().toLowerCase();
+      if(!name)return false;
+      if(name.includes(typed)||typed.includes(name))return true;
+      return words.some(w=>name.includes(w));
+    });
+    return matches.sort((a,b)=>new Date(b.date)-new Date(a.date)).slice(0,4);
+  },[expenses,form.itemName]);
 
   // Supplier ranking by total spend in last 1 year
   const supplierList=useMemo(()=>{
@@ -1800,7 +1885,24 @@ function ExpensePage({expenses,onSave,onBack}){
     setForm({date:today,category:form.category,itemName:"",qty:"",unit:form.unit,rate:"",supplier:"",supplierPhone:"",payMethod:"নগদ",notes:""});
   };
 
-  const recentExpenses=[...expenses].sort((a,b)=>new Date(b.date)-new Date(a.date)).slice(0,10);
+  // ── ডিফল্টে শুধু নির্বাচিত মাসের খরচ (তালিকা যাতে দিনে দিনে বিশাল না হয়ে যায়) ──
+  // সার্চ করলে সব সময়ের ভেতর থেকে খোঁজা হয়
+  const monthExpenses=useMemo(()=>expenses.filter(e=>{
+    const d=new Date(e.date);
+    return d.getFullYear()===viewYear&&d.getMonth()===viewMonth;
+  }).sort((a,b)=>new Date(b.date)-new Date(a.date)),[expenses,viewYear,viewMonth]);
+
+  const searchResults=useMemo(()=>{
+    const q=search.trim().toLowerCase();
+    if(q.length<2)return null;
+    return expenses.filter(e=>(e.itemName||"").toLowerCase().includes(q)||(e.supplier||"").toLowerCase().includes(q))
+      .sort((a,b)=>new Date(b.date)-new Date(a.date)).slice(0,40);
+  },[expenses,search]);
+
+  const displayList=searchResults!==null?searchResults:monthExpenses;
+  const monthTotal=monthExpenses.reduce((s,e)=>s+(parseFloat(e.total)||0),0);
+  const prevMonth=()=>{if(viewMonth===0){setViewYear(viewYear-1);setViewMonth(11)}else setViewMonth(viewMonth-1)};
+  const nextMonth=()=>{if(viewMonth===11){setViewYear(viewYear+1);setViewMonth(0)}else setViewMonth(viewMonth+1)};
 
   return<div style={{minHeight:"100vh",background:"#f8f8f8"}}>
     <div style={{background:"#0f766e",color:"white",padding:"13px 16px",display:"flex",alignItems:"center",gap:11}}>
@@ -1818,14 +1920,18 @@ function ExpensePage({expenses,onSave,onBack}){
           </div>
         </div>
         <div style={{marginBottom:14}}>{lbl("পণ্য/আইটেমের নাম *")}<input value={form.itemName} onChange={e=>setForm({...form,itemName:e.target.value})} placeholder="যেমন: কাঠের স্ক্রু, লেকার স্প্রে" style={inp}/></div>
-        {lastRate&&<div style={{background:"#fffbeb",border:"1px solid #fde68a",borderRadius:9,padding:"9px 12px",marginBottom:14,fontSize:12,color:"#92400e"}}>
-          📌 গত রেট: <strong>{money(lastRate.rate)}</strong>/{lastRate.unit} ({fmtDate(lastRate.date)} তারিখে, {lastRate.supplier||"সাপ্লায়ার উল্লেখ নেই"})
-        </div>}
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,marginBottom:14}}>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,marginBottom:8}}>
           <div>{lbl("পরিমাণ *")}<input type="number" value={form.qty} onChange={e=>setForm({...form,qty:e.target.value})} placeholder="0" style={inp}/></div>
           <div>{lbl("একক")}<select value={form.unit} onChange={e=>setForm({...form,unit:e.target.value})} style={inp}>{UNITS.map(u=><option key={u} value={u}>{u}</option>)}</select></div>
           <div>{lbl("রেট (৳) *")}<input type="number" value={form.rate} onChange={e=>setForm({...form,rate:e.target.value})} placeholder="0" style={inp}/></div>
         </div>
+        {similarPurchases.length>0&&<div style={{background:"#fffbeb",border:"1px solid #fde68a",borderRadius:9,padding:"9px 12px",marginBottom:14}}>
+          <div style={{fontSize:10,fontWeight:700,color:"#92400e",marginBottom:6}}>📌 এই বা কাছাকাছি নামের আগের কেনাকাটা — দাম যাচাই করে নিন</div>
+          {similarPurchases.map((p,i)=><div key={i} style={{display:"flex",justifyContent:"space-between",fontSize:11,color:"#78350f",padding:"3px 0",borderTop:i>0?"1px dashed #fde68a":"none"}}>
+            <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:"55%"}}>{p.itemName} · {fmtDate(p.date)}</span>
+            <strong>{p.qty} {p.unit} × {money(p.rate)}</strong>
+          </div>)}
+        </div>}
         <div style={{background:"#f0fdf4",borderRadius:10,padding:"12px 14px",marginBottom:14,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
           <span style={{fontSize:13,color:"#555"}}>মোট মূল্য:</span>
           <span style={{fontSize:20,fontWeight:800,color:"#166534"}}>{money(total)}</span>
@@ -1842,9 +1948,22 @@ function ExpensePage({expenses,onSave,onBack}){
         <button onClick={submit} style={{width:"100%",background:"#0f766e",color:"white",border:"none",borderRadius:11,padding:"15px",fontSize:15,fontWeight:700}}>খরচ সংরক্ষণ করুন</button>
       </div>
 
-      <div style={{fontWeight:700,fontSize:14,marginBottom:10}}>সাম্প্রতিক খরচ</div>
-      {recentExpenses.length===0?<div style={{textAlign:"center",color:"#aaa",padding:20,fontSize:13}}>কোনো খরচ এন্ট্রি নেই</div>:
-      recentExpenses.map((e,i)=>{
+      <div style={{marginBottom:10}}>
+        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="🔍 পণ্য বা সাপ্লায়ারের নাম দিয়ে যেকোনো সময়ের খরচ খুঁজুন..." style={{...inp,background:"white"}}/>
+      </div>
+
+      {searchResults===null&&<div className="no-print" style={{display:"flex",alignItems:"center",justifyContent:"space-between",background:"white",borderRadius:11,padding:"9px 12px",marginBottom:10,boxShadow:"0 1px 4px rgba(0,0,0,.06)"}}>
+        <button onClick={prevMonth} style={{background:"#f0fdfa",border:"none",borderRadius:7,padding:"7px 11px",color:"#0f766e",fontWeight:700}}>◀</button>
+        <div style={{textAlign:"center"}}>
+          <div style={{fontSize:13,fontWeight:700}}>{monthName(viewMonth)} {viewYear}</div>
+          <div style={{fontSize:10,color:"#888"}}>মোট: {money(monthTotal)} ({monthExpenses.length}টি এন্ট্রি)</div>
+        </div>
+        <button onClick={nextMonth} style={{background:"#f0fdfa",border:"none",borderRadius:7,padding:"7px 11px",color:"#0f766e",fontWeight:700}}>▶</button>
+      </div>}
+
+      <div style={{fontWeight:700,fontSize:14,marginBottom:10}}>{searchResults!==null?`সার্চ ফলাফল (${searchResults.length})`:"এই মাসের খরচ"}</div>
+      {displayList.length===0?<div style={{textAlign:"center",color:"#aaa",padding:20,fontSize:13}}>{searchResults!==null?"কিছু পাওয়া যায়নি":"এই মাসে কোনো খরচ এন্ট্রি নেই"}</div>:
+      displayList.map((e,i)=>{
         const cat=EXP_CATS.find(c=>c.id===e.category);
         return<div key={i} style={{background:"white",borderRadius:10,padding:"11px 13px",marginBottom:8,boxShadow:"0 1px 4px rgba(0,0,0,.06)",display:"flex",justifyContent:"space-between"}}>
           <div><div style={{fontWeight:700,fontSize:13}}>{e.itemName}</div><div style={{fontSize:11,color:"#888",marginTop:1}}>{cat?.bn} | {e.qty} {e.unit} × {money(e.rate)} | {e.supplier||"—"}</div></div>
@@ -2829,7 +2948,7 @@ function ManageDB({db,saveDb,galleries,saveGalleryEntry,onBack}){
   const[renamingCat,setRenamingCat]=useState(null);
   const[renameVal,setRenameVal]=useState("");
   const startRenameCat=(catK)=>{setRenamingCat(catK);setRenameVal(db[catK].bn)};
-  const saveRenameCat=(catK)=>{const nd=JSON.parse(JSON.stringify(db));nd[catK].bn=renameVal.trim()||nd[catK].bn;nd[catK].en=renameVal.trim()||nd[catK].en;saveDb(nd);setRenamingCat(null)};
+  const saveRenameCat=(catK)=>{const nd=JSON.parse(JSON.stringify(db));nd[catK].bn=renameVal.trim()||nd[catK].bn;saveDb(nd);setRenamingCat(null)};
   const[renamingVar,setRenamingVar]=useState(null);
   const[renameVarVal,setRenameVarVal]=useState("");
   const startRenameVar=(catK,varK)=>{setRenamingVar(catK+"|"+varK);setRenameVarVal(db[catK].variants[varK].bn)};
@@ -2857,7 +2976,7 @@ function ManageDB({db,saveDb,galleries,saveGalleryEntry,onBack}){
               <button onClick={()=>startRenameCat(catK)} style={{background:"rgba(255,255,255,.2)",border:"none",color:"white",borderRadius:6,padding:"4px 9px",fontSize:11}}>✏️ নাম বদলান</button>
             </>}
           </div>
-          {Object.entries(cat.variants).map(([vK,v])=><div key={vK} style={{padding:"8px 12px",borderBottom:"1px solid #f0f0f0"}}>
+          {Object.entries(cat.variants).sort((a,b)=>(a[1].bn||"").localeCompare(b[1].bn||"","bn")).map(([vK,v])=><div key={vK} style={{padding:"8px 12px",borderBottom:"1px solid #f0f0f0"}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:6}}>
             {renamingVar===catK+"|"+vK?<>
               <input value={renameVarVal} onChange={e=>setRenameVarVal(e.target.value)} style={{flex:1,border:"1px solid #ddd",borderRadius:6,padding:"5px 8px",fontSize:12,outline:"none"}} autoFocus/>
@@ -2900,12 +3019,12 @@ function ManageDB({db,saveDb,galleries,saveGalleryEntry,onBack}){
           <div style={{padding:"8px 12px"}}>
             {sec.pieces.map((p,pi)=><div key={pi} style={{display:"flex",gap:4,alignItems:"center",marginBottom:4,fontSize:10}}>
               <span style={{flex:2,color:"#333"}}>{p.bn}</span>
-              <span style={{fontFamily:"monospace",color:"#555",flexShrink:0}}>{p.h}×{p.l}×{p.w} × {p.pc}pc</span>
+              <span style={{fontFamily:"monospace",color:"#555",flexShrink:0}}>{p.w}×{p.h}×{p.l} × {p.pc}pc</span>
               <button onClick={()=>removePiece(si,pi)} style={{background:"#fee2e2",border:"none",borderRadius:4,padding:"2px 6px",color:RED,fontSize:10,cursor:"pointer"}}>✕</button>
             </div>)}
             <div style={{display:"grid",gridTemplateColumns:"2fr 1fr 1fr 1fr 1fr auto",gap:4,marginTop:6}}>
               <input placeholder="কাঠের নাম" value={newPiece.sectionIdx===si?newPiece.bn:""} onChange={e=>setNewPiece({...newPiece,sectionIdx:si,bn:e.target.value})} style={{...inp,padding:"5px 7px",fontSize:10}} onFocus={()=>setNewPiece(p=>({...p,sectionIdx:si}))}/>
-              {[{k:"h",p:"H\""},{k:"l",p:"L\""},{k:"w",p:"W\""},{k:"pc",p:"পিস"}].map(f=><input key={f.k} type="number" step="0.25" placeholder={f.p} value={newPiece.sectionIdx===si?newPiece[f.k]:""} onChange={e=>setNewPiece({...newPiece,sectionIdx:si,[f.k]:e.target.value})} style={{...inp,padding:"5px 4px",fontSize:10}}/>)}
+              {[{k:"w",p:"W\""},{k:"h",p:"H\""},{k:"l",p:"L\""},{k:"pc",p:"পিস"}].map(f=><input key={f.k} type="number" step="0.25" placeholder={f.p} value={newPiece.sectionIdx===si?newPiece[f.k]:""} onChange={e=>setNewPiece({...newPiece,sectionIdx:si,[f.k]:e.target.value})} style={{...inp,padding:"5px 4px",fontSize:10}}/>)}
               <button onClick={addPiece} style={{background:"#6d28d9",color:"white",border:"none",borderRadius:6,padding:"5px 8px",fontSize:11}}>+</button>
             </div>
           </div>
