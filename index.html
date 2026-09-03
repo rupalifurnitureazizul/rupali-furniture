@@ -74,7 +74,7 @@ function compressImage(file,maxDim=1200,quality=0.82){
 /* ── FULL-RESOLUTION LOCAL FOLDER STORAGE (desktop Chrome/Edge/Brave only) ──
    Original, uncompressed images are saved as real files in a folder you choose
    on your computer. Only a small compressed thumbnail syncs to the cloud/mobile. */
-const BUILD_TAG="2.25";
+const BUILD_TAG="2.49";
 const FS_SUPPORTED=typeof window!=="undefined"&&"showDirectoryPicker" in window;
 function idbOpen(){
   return new Promise((resolve,reject)=>{
@@ -126,22 +126,54 @@ function genImgFileName(prefix,index,file){
   const ext=(file.name.match(/\.[0-9a-z]+$/i)||[".jpg"])[0];
   return`${prefix}_${index}${ext}`.replace(/[^a-zA-Z0-9_.\-]/g,"_");
 }
-async function saveFullResImage(file,fileName){
+function sanitizeFolderName(name){
+  return(name||"অন্যান্য").replace(/[\\/:*?"<>|]/g,"_").trim()||"অন্যান্য";
+}
+// ছবি যতগুলোই থাকুক, A4 পেজের একটা নির্দিষ্ট বরাদ্দের মধ্যেই থাকবে — বেশি ছবি হলে গ্রিড নিজে থেকেই ছোট হয়ে সমন্বয় করে নেয়
+function computePhotoGrid(count){
+  if(count<=1)return{cols:1,imgHeight:190};
+  if(count===2)return{cols:2,imgHeight:150};
+  if(count<=4)return{cols:2,imgHeight:110};
+  if(count<=6)return{cols:3,imgHeight:92};
+  if(count<=9)return{cols:3,imgHeight:72};
+  if(count<=12)return{cols:4,imgHeight:62};
+  return{cols:4,imgHeight:50};
+}
+// অর্ডারের প্রথম ফার্নিচারের ক্যাটাগরি অনুযায়ী ফোল্ডারের নাম — ছবি সেই ক্যাটাগরির সাবফোল্ডারে সেভ হয়
+function orderCategoryFolder(order,db){
+  const firstItem=(order&&order.items||[])[0];
+  if(!firstItem||!firstItem.catKey||!db||!db[firstItem.catKey])return"অন্যান্য";
+  return sanitizeFolderName(db[firstItem.catKey].bn);
+}
+// relPath এ "/" থাকলে সেটাকে সাবফোল্ডার ধরে সেই অনুযায়ী ফোল্ডার তৈরি/খোঁজা হয় — না থাকলে আগের মতোই রুট ফোল্ডারে সরাসরি
+async function resolveFolderForPath(rootFolder,relPath){
+  const parts=relPath.split("/");
+  const baseName=parts.pop();
+  let dir=rootFolder;
+  for(const part of parts){
+    if(!part)continue;
+    dir=await dir.getDirectoryHandle(part,{create:true});
+  }
+  return{dir,baseName};
+}
+async function saveFullResImage(file,relPath){
   const folder=await getImageFolderHandle();
   if(!folder)return false;
   try{
-    const fileHandle=await folder.getFileHandle(fileName,{create:true});
+    const{dir,baseName}=await resolveFolderForPath(folder,relPath);
+    const fileHandle=await dir.getFileHandle(baseName,{create:true});
     const writable=await fileHandle.createWritable();
     await writable.write(file);
     await writable.close();
     return true;
   }catch(e){return false}
 }
-async function openFullResImageForPrint(fileName){
+async function openFullResImageForPrint(relPath){
   const folder=await getImageFolderHandle();
   if(!folder){alert("⚠️ ফুল রেজোলিউশন ফোল্ডারের সাথে সংযোগ নেই। হোম পেজ থেকে ফোল্ডার পুনরায় সংযুক্ত করুন।");return}
   try{
-    const fileHandle=await folder.getFileHandle(fileName);
+    const{dir,baseName}=await resolveFolderForPath(folder,relPath);
+    const fileHandle=await dir.getFileHandle(baseName);
     const file=await fileHandle.getFile();
     const url=URL.createObjectURL(file);
     const w=window.open("","_blank");
@@ -421,27 +453,39 @@ function PrintLog({log}){
 }
 function PrintBtn({onPrint}){return<button className="no-print" onClick={onPrint} style={{background:"white",color:"inherit",border:"1.5px solid currentColor",borderRadius:7,padding:"6px 13px",fontWeight:700,fontSize:11,display:"flex",alignItems:"center",gap:5}}>🖨️ এই স্লিপ প্রিন্ট করুন</button>}
 function WhatsAppSendBtn({targetRef,phone,label}){
-  const[busy,setBusy]=useState(false);
-  const send=async()=>{
+  const[state,setState]=useState("idle"); // idle | preparing | ready
+  const[pendingFile,setPendingFile]=useState(null);
+  const[pendingBlob,setPendingBlob]=useState(null);
+
+  const prepare=async()=>{
     if(!targetRef.current||typeof html2canvas==="undefined")return;
-    setBusy(true);
+    setState("preparing");
     try{
       const canvas=await html2canvas(targetRef.current,{scale:2,useCORS:true,backgroundColor:"#ffffff"});
-      canvas.toBlob(async(blob)=>{
-        if(!blob){setBusy(false);return}
-        const file=new File([blob],"receipt.png",{type:"image/png"});
-        if(navigator.canShare&&navigator.canShare({files:[file]})){
-          try{await navigator.share({files:[file],title:"রূপালী ফার্নিচার",text:"আপনার অর্ডারের রশিদ"})}catch(e){}
-        }else{
-          const url=URL.createObjectURL(blob);
-          const a=document.createElement("a");a.href=url;a.download="receipt.png";document.body.appendChild(a);a.click();document.body.removeChild(a);
-          setTimeout(()=>{window.open(`https://wa.me/${toIntlPhone(phone)}`,"_blank");alert("ছবিটি ডাউনলোড হয়েছে। WhatsApp চ্যাটে গিয়ে ম্যানুয়ালি ছবিটি অ্যাটাচ করে পাঠান।")},300);
-        }
-        setBusy(false);
+      canvas.toBlob((blob)=>{
+        if(!blob){setState("idle");return}
+        setPendingFile(new File([blob],"receipt.png",{type:"image/png"}));
+        setPendingBlob(blob);
+        setState("ready");
       },"image/png");
-    }catch(e){alert("ছবি তৈরি করতে সমস্যা হয়েছে: "+e.message);setBusy(false)}
+    }catch(e){alert("ছবি তৈরি করতে সমস্যা হয়েছে: "+e.message);setState("idle")}
   };
-  return<button className="no-print" onClick={send} disabled={busy} style={{background:"#16a34a",color:"white",border:"none",borderRadius:7,padding:"6px 13px",fontWeight:700,fontSize:11,display:"flex",alignItems:"center",gap:5}}>{busy?"⏳ তৈরি হচ্ছে...":`📤 ${label||"WhatsApp-এ পাঠান"}`}</button>
+  // এই ফাংশনটা একটা টাটকা, সরাসরি ট্যাপের মধ্যেই চলে (আগের কোনো অপেক্ষার পর নয়) — তাই
+  // iPhone-এর Safari-ও এটাকে ব্লক করে না (আগে html2canvas এর অপেক্ষার পরে খোলার চেষ্টা করাতেই ব্লক হচ্ছিল)
+  const sendNow=()=>{
+    if(pendingFile&&navigator.canShare&&navigator.canShare({files:[pendingFile]})){
+      navigator.share({files:[pendingFile],title:"রূপালী ফার্নিচার",text:"আপনার অর্ডারের রশিদ"}).catch(()=>{});
+    }else if(pendingBlob){
+      const url=URL.createObjectURL(pendingBlob);
+      const a=document.createElement("a");a.href=url;a.download="receipt.png";document.body.appendChild(a);a.click();document.body.removeChild(a);
+      window.open(`https://wa.me/${toIntlPhone(phone)}`,"_blank");
+      alert("ছবিটি ডাউনলোড হয়েছে। WhatsApp চ্যাটে গিয়ে ম্যানুয়ালি ছবিটি অ্যাটাচ করে পাঠান।");
+    }
+    setState("idle");setPendingFile(null);setPendingBlob(null);
+  };
+
+  if(state==="ready")return<button className="no-print" onClick={sendNow} style={{background:"#0d9488",color:"white",border:"none",borderRadius:7,padding:"6px 13px",fontWeight:700,fontSize:11,display:"flex",alignItems:"center",gap:5,boxShadow:"0 0 0 3px rgba(13,148,136,0.25)"}}>✅ প্রস্তুত — এখন ট্যাপ করুন</button>;
+  return<button className="no-print" onClick={prepare} disabled={state==="preparing"} style={{background:"#16a34a",color:"white",border:"none",borderRadius:7,padding:"6px 13px",fontWeight:700,fontSize:11,display:"flex",alignItems:"center",gap:5}}>{state==="preparing"?"⏳ তৈরি হচ্ছে...":`📤 ${label||"WhatsApp-এ পাঠান"}`}</button>;
 }
 function FullImgBtn({fileName}){
   if(!fileName||!FS_SUPPORTED)return null;
@@ -464,16 +508,18 @@ function S1({order,onPrint}){
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"3px 12px",background:"#fff8f8",borderRadius:7,padding:"8px",marginBottom:8}}>
         <IR l="তারিখ" v={fmtDate(cust.date)}/><IR l="ডেলিভারি" v={cust.delivery?`${fmtDate(cust.delivery)} (${days} দিনে)`:""}/>
         <IR l="গ্রাহকের নাম" v={cust.name}/><IR l="মোবাইল" v={cust.phone}/>
+        {cust.phone2&&<IR l="২য় মোবাইল" v={cust.phone2}/>}
         <IR l="ঠিকানা" v={cust.address}/>{cust.notes&&<IR l="মন্তব্য" v={cust.notes}/>}
       </div>
       {images.length>0&&<div style={{marginBottom:10}}>
         <div style={{fontSize:11,color:"#888",marginBottom:6,textAlign:"center",fontWeight:600}}>গ্রাহকের রেফারেন্স ছবি:</div>
-        <div style={{display:"flex",flexWrap:"wrap",gap:10,justifyContent:"center"}}>
+        <div style={{display:"grid",gridTemplateColumns:`repeat(${computePhotoGrid(images.length).cols},1fr)`,gap:8}}>
           {images.map((img,i)=>{
             const clickable=img.fileName&&FS_SUPPORTED;
-            return<div key={i} style={{textAlign:"center",maxWidth:"46%"}}>
-              <div style={{position:"relative",display:"inline-block"}}>
-                <img src={img.src} alt="ref" onClick={()=>clickable&&openFullResImageForPrint(img.fileName)} style={{maxHeight:230,maxWidth:"100%",borderRadius:9,border:"1px solid #eee",cursor:clickable?"pointer":"default",display:"block"}}/>
+            const imgH=computePhotoGrid(images.length).imgHeight;
+            return<div key={i} style={{textAlign:"center"}}>
+              <div style={{position:"relative"}}>
+                <img src={img.src} alt="ref" onClick={()=>clickable&&openFullResImageForPrint(img.fileName)} style={{width:"100%",height:imgH,objectFit:"cover",borderRadius:9,border:"1px solid #eee",cursor:clickable?"pointer":"default",display:"block"}}/>
                 {clickable&&<div className="no-print" style={{position:"absolute",top:5,right:5,background:"rgba(0,0,0,0.55)",color:"white",borderRadius:"50%",width:22,height:22,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11}}>🔍</div>}
               </div>
               <div style={{fontSize:9,color:"#888",marginTop:3}}>{img.caption}</div>
@@ -566,13 +612,15 @@ function S2({order,onPrint,db,saveDb,galleries,onUpdateOrder,woodSettings,laborS
     e.target.value="";
     if(files.length===0)return;
     const newOnes=[];
+    const categoryFolder=orderCategoryFolder(order,db);
     for(let idx=0;idx<files.length;idx++){
       const compressed=await compressImage(files[idx]);
       if(!compressed)continue;
       const fileIdx=images.length+newOnes.length+1;
-      const fileName=genImgFileName(`${order.no}_ref`,fileIdx,files[idx]);
-      const savedFull=await saveFullResImage(files[idx],fileName);
-      newOnes.push({src:compressed,caption:`ছবি ${fileIdx}`,fileName:savedFull?fileName:null});
+      const baseFileName=genImgFileName(`${order.no}_ref`,fileIdx,files[idx]);
+      const relPath=`${categoryFolder}/${baseFileName}`;
+      const savedFull=await saveFullResImage(files[idx],relPath);
+      newOnes.push({src:compressed,caption:`ছবি ${fileIdx}`,fileName:savedFull?relPath:null});
     }
     if(newOnes.length>0)onUpdateOrder({...order,refImgs:[...images,...newOnes],refImg:undefined});
   };
@@ -917,16 +965,25 @@ function S5({order,onPrint}){
 }
 
 /* ── SLIP 6: DELIVERY RECEIPT ── */
-function S6({order,onPrint,onUpdateOrder,onPhotoChange}){
-  const{cust,items,payments,no,deliveryImg,printLogs}=order;
+function S6({order,onPrint,onUpdateOrder,onSetDelivered,onPhotoChange,onRemovePhoto,allOrders}){
+  const{cust,items,payments,no,deliveryImgs,printLogs}=order;
+  const images=deliveryImgs||[];
   const totalPaid=(payments||[]).reduce((s,p)=>s+(parseFloat(p.amount)||0),0);
   const captureRef=useRef();
   const photoInput=useRef();
   const markDelivered=()=>{
     if(window.confirm("এই অর্ডারটি ডেলিভারি সম্পন্ন হয়েছে বলে চিহ্নিত করতে চান? এটি 'চলমান অর্ডার' লিস্ট থেকে সরে 'ডেলিভারড' তালিকায় যাবে।")){
-      onUpdateOrder({...order,delivered:true,deliveredAt:todayStr()});
+      onSetDelivered(order.no,true,todayStr());
     }
   };
+  // হার্ডকপি বাইন্ডিংয়ের জন্য অর্ডারের তারিখ অনুযায়ী ক্রমিক নম্বর — সংরক্ষিত নয়, সব সময় তাজা হিসাব করা হয়
+  const bindingNo=useMemo(()=>{
+    if(!allOrders)return null;
+    const sorted=allOrders.filter(o=>!o.cancelled).sort((a,b)=>(a.cust.date||"").localeCompare(b.cust.date||"")||(a.no||"").localeCompare(b.no||""));
+    const idx=sorted.findIndex(o=>o.no===order.no);
+    return idx>=0?idx+1:null;
+  },[allOrders,order.no]);
+  const grid=computePhotoGrid(images.length);
   return<div style={{fontSize:11}}>
     <div className="no-print" style={{padding:"8px 14px",background:"#fff",borderBottom:"1px solid #eee",display:"flex",justifyContent:"flex-end",gap:8,color:"#0f766e"}}><WhatsAppSendBtn targetRef={captureRef} phone={cust.phone}/><PrintBtn onPrint={()=>onPrint("s6")}/></div>
     {!order.delivered&&<div className="no-print" style={{padding:"8px 14px",background:"#f0fdfa",borderBottom:"1px solid #eee"}}><button onClick={markDelivered} style={{width:"100%",background:"#0f766e",color:"white",border:"none",borderRadius:8,padding:"9px",fontSize:12,fontWeight:700}}>✅ ডেলিভারি সম্পন্ন হয়েছে — চিহ্নিত করুন</button></div>}
@@ -934,22 +991,37 @@ function S6({order,onPrint,onUpdateOrder,onPhotoChange}){
     <div ref={captureRef}>
     <Hdr title="ডেলিভারি রশিদ" sub="Delivery Receipt" no={no} bg="#0f766e"/>
     <div style={{padding:"12px 14px"}}>
-      <div style={{background:"#f0fdfa",borderRadius:7,padding:"9px",marginBottom:10}}>
-        <IR l="গ্রাহকের নাম" v={cust.name}/><IR l="মোবাইল" v={cust.phone}/><IR l="ঠিকানা" v={cust.address}/>
-        <IR l="অর্ডারের তারিখ" v={fmtDate(cust.date)}/><IR l="ডেলিভারির তারিখ" v={fmtDate(order.deliveredAt||todayStr())}/>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",background:"#f0fdfa",borderRadius:7,padding:"9px",marginBottom:10}}>
+        <div style={{flex:1}}>
+          <IR l="গ্রাহকের নাম" v={cust.name}/><IR l="মোবাইল" v={cust.phone}/><IR l="ঠিকানা" v={cust.address}/>
+          <IR l="অর্ডারের তারিখ" v={fmtDate(cust.date)}/><IR l="ডেলিভারির তারিখ" v={fmtDate(order.deliveredAt||todayStr())}/>
+        </div>
+        {bindingNo&&<div style={{textAlign:"center",background:"white",border:"1.5px solid #0f766e",borderRadius:8,padding:"6px 10px",flexShrink:0,marginLeft:8}}>
+          <div style={{fontSize:8,color:"#0f766e"}}>বাইন্ডিং নং</div>
+          <div style={{fontSize:16,fontWeight:800,color:"#0f766e"}}>{bindingNo}</div>
+        </div>}
       </div>
       <div style={{fontWeight:700,fontSize:10,color:"#0f766e",marginBottom:5}}>ডেলিভারিকৃত পণ্য</div>
       {items.map((it,i)=><div key={i} style={{border:"1px solid #99f6e4",borderRadius:6,padding:"6px 9px",marginBottom:5,fontSize:10}}>
         <div style={{fontWeight:700}}>[{it.code}] {it.variantBn}</div>
         <div style={{color:"#555",marginTop:1}}>কাঠ: {it.woodBn} | পরিমাণ: {it.qty}</div>
       </div>)}
-      <input ref={photoInput} type="file" accept="image/*" onChange={onPhotoChange} style={{display:"none"}} className="no-print"/>
-      {deliveryImg?<div className="delivery-photo-block" style={{marginBottom:10,textAlign:"center"}}>
-        <div style={{fontSize:10,color:"#888",marginBottom:3}}>সম্পন্ন ফার্নিচারের ছবি:</div>
-        <img src={deliveryImg} style={{maxWidth:"100%",maxHeight:160,objectFit:"contain",borderRadius:8,border:"1px solid #99f6e4"}} alt="delivery"/>
-        <div className="no-print"><button onClick={()=>photoInput.current.click()} style={{marginTop:6,background:"white",border:"1.5px solid #0f766e",color:"#0f766e",borderRadius:8,padding:"7px 14px",fontSize:11,fontWeight:600}}>📷 ছবি বদলান</button></div>
-      </div>:<div className="no-print" style={{marginBottom:10}}>
-        <button onClick={()=>photoInput.current.click()} style={{width:"100%",background:"#f0fdfa",border:"2px dashed #0f766e",borderRadius:9,padding:"12px",fontSize:12,color:"#0f766e",fontWeight:600}}>📷 সম্পন্ন ফার্নিচারের ছবি যোগ করুন</button>
+      <input ref={photoInput} type="file" accept="image/*" multiple onChange={onPhotoChange} style={{display:"none"}} className="no-print"/>
+      {images.length>0&&<div style={{marginBottom:10}}>
+        <div style={{fontSize:10,color:"#888",marginBottom:4,textAlign:"center"}}>সম্পন্ন ফার্নিচারের ছবি:</div>
+        <div style={{display:"grid",gridTemplateColumns:`repeat(${grid.cols},1fr)`,gap:6}}>
+          {images.map((img,i)=><div key={i} style={{textAlign:"center",position:"relative"}}>
+            <img src={img.src} style={{width:"100%",height:grid.imgHeight,objectFit:"cover",borderRadius:8,border:"1px solid #99f6e4",display:"block"}} alt="delivery"/>
+            <div className="no-print" style={{display:"flex",justifyContent:"center",gap:4,marginTop:3}}>
+              {img.fileName&&FS_SUPPORTED&&<FullImgBtn fileName={img.fileName}/>}
+              <button onClick={()=>onRemovePhoto(i)} style={{background:"#fee2e2",border:"none",borderRadius:5,color:RED,fontSize:8,padding:"2px 6px"}}>✕</button>
+            </div>
+          </div>)}
+        </div>
+        <div className="no-print" style={{textAlign:"center",marginTop:8}}><button onClick={()=>photoInput.current.click()} style={{background:"white",border:"1.5px solid #0f766e",color:"#0f766e",borderRadius:8,padding:"7px 14px",fontSize:11,fontWeight:600}}>📷 আরও ছবি যোগ করুন</button></div>
+      </div>}
+      {images.length===0&&<div className="no-print" style={{marginBottom:10}}>
+        <button onClick={()=>photoInput.current.click()} style={{width:"100%",background:"#f0fdfa",border:"2px dashed #0f766e",borderRadius:9,padding:"12px",fontSize:12,color:"#0f766e",fontWeight:600}}>📷 সম্পন্ন ফার্নিচারের ছবি যোগ করুন (একাধিক)</button>
       </div>}
       <div style={{background:"#f0fdfa",borderRadius:7,padding:"9px",marginBottom:12}}>
         <div style={{display:"flex",justifyContent:"space-between",fontSize:11,marginBottom:3}}><span>মোট মূল্য:</span><span style={{fontWeight:700}}>{money(cust.total)}</span></div>
@@ -1422,6 +1494,35 @@ function App({firebaseConfig,onResetConfig}){
     }
   },[firebaseConfig,retryKey]);
 
+  // ── ফোন ব্যাকগ্রাউন্ডে থাকার পর ফিরে আসলে (স্ক্রিন অন হলে/ট্যাব আবার সক্রিয় হলে) সরাসরি
+  // সার্ভার থেকে নতুন করে যাচাই — মোবাইল ব্রাউজার দীর্ঘক্ষণ ব্যাকগ্রাউন্ডে থাকলে লাইভ সংযোগ
+  // নিজে থেকে দেরিতে সচল হতে পারে, তাই ফিরে আসার সাথে সাথেই জোর করে তাজা তথ্য আনা হয় ──
+  useEffect(()=>{
+    const refreshFromServer=()=>{
+      if(document.visibilityState&&document.visibilityState!=="visible")return;
+      const fs=fsRef.current;
+      if(!fs)return;
+      fs.collection("orders").get({source:"server"}).then(snap=>{
+        const list=snap.docs.map(d=>d.data()).sort((a,b)=>new Date(b.at||b.cust?.date||0)-new Date(a.at||a.cust?.date||0));
+        setOrders(list);
+      }).catch(()=>{});
+      fs.collection("expenses").get({source:"server"}).then(snap=>{
+        const list=snap.docs.map(d=>d.data()).sort((a,b)=>new Date(b.at||b.date||0)-new Date(a.at||a.date||0));
+        setExpenses(list);
+      }).catch(()=>{});
+      fs.collection("woodlots").get({source:"server"}).then(snap=>{
+        const list=snap.docs.map(d=>d.data()).sort((a,b)=>new Date(b.date||0)-new Date(a.date||0));
+        setWoodLots(list);
+      }).catch(()=>{});
+      fs.collection("payrollWeeks").get({source:"server"}).then(snap=>{
+        const map={};snap.docs.forEach(d=>{map[d.id]=d.data()});setPayrollWeeks(map);
+      }).catch(()=>{});
+    };
+    document.addEventListener("visibilitychange",refreshFromServer);
+    window.addEventListener("focus",refreshFromServer);
+    return()=>{document.removeEventListener("visibilitychange",refreshFromServer);window.removeEventListener("focus",refreshFromServer)};
+  },[]);
+
   const saveDb=(newDb)=>{
     setDb(newDb);
     if(fsRef.current)fsRef.current.doc("meta/db").set(newDb).catch(err=>alert("⚠️ ক্লাউডে সেভ করতে সমস্যা হয়েছে: "+err.message));
@@ -1432,8 +1533,23 @@ function App({firebaseConfig,onResetConfig}){
     if(fsRef.current)fsRef.current.collection("orders").doc(o.no).set(o).catch(err=>alert("⚠️ অর্ডার সিঙ্ক করতে সমস্যা হয়েছে: "+err.message+" — ইন্টারনেট সংযোগ ফিরে আসলে এটি নিজে থেকেই সিঙ্ক হবে।"));
   };
   const updateOrder=(updated)=>{
+    setOrders(prev=>prev.map(o=>o.no===updated.no?updated:o));
     if(draft&&draft.no===updated.no)setDraft(updated);
     if(fsRef.current)fsRef.current.collection("orders").doc(updated.no).set(updated).catch(err=>alert("⚠️ পরিবর্তন সিঙ্ক করতে সমস্যা হয়েছে: "+err.message));
+  };
+  // ── এই দুটো atomic — টাকার হিসাব ও ডেলিভারি স্ট্যাটাসের মতো জরুরি তথ্যের জন্য।
+  // পুরো অর্ডার নতুন করে না লিখে শুধু নির্দিষ্ট অংশটাই সার্ভারে পাঠানো হয়, তাই অন্য কোনো
+  // ডিভাইস/সেশনের কাছে থাকা কপি একটু পুরনো হলেও সেটা এই লেখাকে হারিয়ে ফেলতে পারবে না। ──
+  const addOrderPayment=(orderNo,payment)=>{
+    const withId={...payment,id:payment.id||("pay_"+Date.now())};
+    setOrders(prev=>prev.map(o=>o.no===orderNo?{...o,payments:[...(o.payments||[]),withId]}:o));
+    if(draft&&draft.no===orderNo)setDraft(prev=>({...prev,payments:[...(prev.payments||[]),withId]}));
+    if(fsRef.current)fsRef.current.collection("orders").doc(orderNo).set({payments:firebase.firestore.FieldValue.arrayUnion(withId)},{merge:true}).catch(err=>alert("⚠️ পেমেন্ট সিঙ্ক করতে সমস্যা হয়েছে — ইন্টারনেট সংযোগ যাচাই করুন: "+err.message));
+  };
+  const setOrderDelivered=(orderNo,delivered,deliveredAt)=>{
+    setOrders(prev=>prev.map(o=>o.no===orderNo?{...o,delivered,deliveredAt}:o));
+    if(draft&&draft.no===orderNo)setDraft(prev=>({...prev,delivered,deliveredAt}));
+    if(fsRef.current)fsRef.current.collection("orders").doc(orderNo).set({delivered,deliveredAt},{merge:true}).catch(err=>alert("⚠️ ডেলিভারি স্ট্যাটাস সিঙ্ক করতে সমস্যা হয়েছে — ইন্টারনেট সংযোগ যাচাই করুন: "+err.message));
   };
   const deleteOrderPermanently=(orderNo)=>{
     if(fsRef.current)fsRef.current.collection("orders").doc(orderNo).delete().catch(err=>alert("⚠️ ডিলিট করতে সমস্যা হয়েছে: "+err.message));
@@ -1456,6 +1572,12 @@ function App({firebaseConfig,onResetConfig}){
     newList.forEach(lot=>fsRef.current.collection("woodlots").doc(lot.id).set(lot).catch(err=>alert("⚠️ কাঠের স্টক সিঙ্ক করতে সমস্যা হয়েছে: "+err.message)));
     woodLots.forEach(lot=>{if(!newIds.has(lot.id))fsRef.current.collection("woodlots").doc(lot.id).delete().catch(()=>{})});
   };
+  // সাপ্লায়ারকে দেওয়া পেমেন্টও টাকার হিসাব — একই কারণে atomic (arrayUnion) লেখা হয়
+  const addLotPayment=(lotId,payment)=>{
+    const withId={...payment,id:payment.id||("lotpay_"+Date.now())};
+    setWoodLots(prev=>prev.map(l=>l.id===lotId?{...l,payments:[...(l.payments||[]),withId]}:l));
+    if(fsRef.current)fsRef.current.collection("woodlots").doc(lotId).set({payments:firebase.firestore.FieldValue.arrayUnion(withId)},{merge:true}).catch(err=>alert("⚠️ পেমেন্ট সিঙ্ক করতে সমস্যা হয়েছে — ইন্টারনেট সংযোগ যাচাই করুন: "+err.message));
+  };
   const saveWorker=(worker)=>{
     const id=worker.id||("worker_"+Date.now());
     const withId={...worker,id};
@@ -1469,6 +1591,30 @@ function App({firebaseConfig,onResetConfig}){
   const savePayrollWeek=(weekEnd,data)=>{
     setPayrollWeeks(prev=>({...prev,[weekEnd]:data}));
     if(fsRef.current)fsRef.current.collection("payrollWeeks").doc(weekEnd).set(data).catch(err=>alert("⚠️ পে-রোল সিঙ্ক করতে সমস্যা হয়েছে: "+err.message));
+  };
+  // ── নিচের তিনটা atomic (পরমাণু-সদৃশ) — একাধিক ডিভাইস থেকে একই সপ্তাহে একসাথে এন্ট্রি দিলেও
+  // একজনের লেখা আরেকজনের লেখা মুছে ফেলবে না। উপরের savePayrollWeek পুরো ডকুমেন্ট বদলে দেয় বলে
+  // একটা ডিভাইসের পুরনো/স্টেল কপি দিয়ে সেভ করলে অন্য ডিভাইসের এন্ট্রি হারিয়ে যেতে পারত — এখন আর পারবে না।
+  const updateAttendance=(weekEnd,workerId,days)=>{
+    setPayrollWeeks(prev=>{
+      const wd=prev[weekEnd]||{attendance:{},advances:[]};
+      return{...prev,[weekEnd]:{...wd,attendance:{...(wd.attendance||{}),[workerId]:days}}};
+    });
+    if(fsRef.current)fsRef.current.collection("payrollWeeks").doc(weekEnd).set({[`attendance.${workerId}`]:days},{merge:true}).catch(err=>alert("⚠️ হাজিরা সিঙ্ক করতে সমস্যা হয়েছে: "+err.message));
+  };
+  const addAdvanceEntry=(weekEnd,adv)=>{
+    setPayrollWeeks(prev=>{
+      const wd=prev[weekEnd]||{attendance:{},advances:[]};
+      return{...prev,[weekEnd]:{...wd,advances:[...(wd.advances||[]),adv]}};
+    });
+    if(fsRef.current)fsRef.current.collection("payrollWeeks").doc(weekEnd).set({advances:firebase.firestore.FieldValue.arrayUnion(adv)},{merge:true}).catch(err=>alert("⚠️ অগ্রিম সিঙ্ক করতে সমস্যা হয়েছে: "+err.message));
+  };
+  const removeAdvanceEntry=(weekEnd,adv)=>{
+    setPayrollWeeks(prev=>{
+      const wd=prev[weekEnd]||{attendance:{},advances:[]};
+      return{...prev,[weekEnd]:{...wd,advances:(wd.advances||[]).filter(a=>a.id!==adv.id)}};
+    });
+    if(fsRef.current)fsRef.current.collection("payrollWeeks").doc(weekEnd).set({advances:firebase.firestore.FieldValue.arrayRemove(adv)},{merge:true}).catch(err=>alert("⚠️ মুছতে সমস্যা হয়েছে: "+err.message));
   };
 
   if(!db){
@@ -1494,13 +1640,13 @@ function App({firebaseConfig,onResetConfig}){
     </div>;
     return<div style={{padding:40,textAlign:"center"}}><div style={{fontSize:9,color:"#ccc",marginBottom:10}}>{BUILD_TAG}</div>সিঙ্ক হচ্ছে...</div>;
   }
-  if(page==="preview")return<Preview order={viewed||draft} onBack={goBack} slip={slip} setSlip={setSlip} onUpdate={updateOrder} onDelete={deleteOrderPermanently} db={db} saveDb={saveDb} carpenters={carpenters} saveCarpenters={saveCarpenters} galleries={galleries} saveGalleryEntry={saveGalleryEntry} woodSettings={woodSettings} laborSettings={laborSettings} workers={workers}/>;
-  if(page==="form")return<Form onSave={saveOrder} onBack={goBack} db={db} saveDb={saveDb} galleries={galleries} woodSettings={woodSettings} laborSettings={laborSettings}/>;
+  if(page==="preview")return<Preview order={viewed||draft} onBack={goBack} slip={slip} setSlip={setSlip} onUpdate={updateOrder} onAddPayment={addOrderPayment} onSetDelivered={setOrderDelivered} onDelete={deleteOrderPermanently} db={db} saveDb={saveDb} carpenters={carpenters} saveCarpenters={saveCarpenters} galleries={galleries} saveGalleryEntry={saveGalleryEntry} woodSettings={woodSettings} laborSettings={laborSettings} workers={workers} allOrders={orders}/>;
+  if(page==="form")return<Form onSave={saveOrder} onBack={goBack} db={db} saveDb={saveDb} galleries={galleries} woodSettings={woodSettings} laborSettings={laborSettings} orders={orders}/>;
   if(page==="history")return<Hist orders={orders} onBack={goBack} onView={o=>navigate({page:"preview",orderNo:o.no,slip:0})} highlightNo={highlightNo}/>;
   if(page==="manage")return<ManageDB db={db} saveDb={saveDb} galleries={galleries} saveGalleryEntry={saveGalleryEntry} onBack={goBack}/>;
-  if(page==="woodstock")return<WoodStockPage woodLots={woodLots} saveWoodLots={saveWoodLots} woodSettings={woodSettings} saveWoodSettings={saveWoodSettings} laborSettings={laborSettings} saveLaborSettings={saveLaborSettings} payrollWeeks={payrollWeeks} workers={workers} orders={orders} onBack={goBack} view={curScreen.view||"list"} lotId={curScreen.lotId||null} onOpenList={()=>navigate({page:"woodstock",view:"list"})} onOpenDetail={lotId=>navigate({page:"woodstock",view:"detail",lotId})} onOpenNew={()=>navigate({page:"woodstock",view:"new"})} onOpenRates={()=>navigate({page:"woodstock",view:"rates"})} highlightNo={highlightNo}/>;
+  if(page==="woodstock")return<WoodStockPage woodLots={woodLots} saveWoodLots={saveWoodLots} addLotPayment={addLotPayment} woodSettings={woodSettings} saveWoodSettings={saveWoodSettings} laborSettings={laborSettings} saveLaborSettings={saveLaborSettings} payrollWeeks={payrollWeeks} workers={workers} orders={orders} onBack={goBack} view={curScreen.view||"list"} lotId={curScreen.lotId||null} onOpenList={()=>navigate({page:"woodstock",view:"list"})} onOpenDetail={lotId=>navigate({page:"woodstock",view:"detail",lotId})} onOpenNew={()=>navigate({page:"woodstock",view:"new"})} onOpenRates={()=>navigate({page:"woodstock",view:"rates"})} highlightNo={highlightNo}/>;
   if(page==="expense")return<ExpensePage expenses={expenses} onSave={saveExpense} onBack={goBack}/>;
-  if(page==="payroll")return<PayrollPage workers={workers} saveWorker={saveWorker} deleteWorker={deleteWorker} payrollWeeks={payrollWeeks} savePayrollWeek={savePayrollWeek} onBack={goBack}/>;
+  if(page==="payroll")return<PayrollPage workers={workers} saveWorker={saveWorker} deleteWorker={deleteWorker} payrollWeeks={payrollWeeks} savePayrollWeek={savePayrollWeek} updateAttendance={updateAttendance} addAdvanceEntry={addAdvanceEntry} removeAdvanceEntry={removeAdvanceEntry} onBack={goBack}/>;
   if(page==="plreport")return<PLReportPage orders={orders} expenses={expenses} workers={workers} payrollWeeks={payrollWeeks} woodLots={woodLots} woodSettings={woodSettings} laborSettings={laborSettings} onBack={goBack}/>;
   return<Home orders={orders} expenses={expenses} woodLots={woodLots} db={db} onNew={()=>navigate({page:"form"})} onHist={()=>navigate({page:"history"})} onManage={()=>navigate({page:"manage"})} onExpense={()=>navigate({page:"expense"})} onWoodStock={()=>navigate({page:"woodstock",view:"list"})} onPayroll={()=>navigate({page:"payroll"})} onPLReport={()=>navigate({page:"plreport"})} onView={o=>navigate({page:"preview",orderNo:o.no,slip:0})} online={online} connError={connError} onResetConfig={onResetConfig} folderStatus={folderStatus} connectFolder={connectFolder} highlightNo={highlightNo} onBackupData={backupData}/>;
 }
@@ -1710,7 +1856,7 @@ function Home({orders,expenses,woodLots,db,onNew,onHist,onManage,onExpense,onWoo
         <div style={{fontWeight:700,fontSize:13,color:"#222",marginBottom:8,display:"flex",alignItems:"center",gap:6}}>🔥 চলমান অর্ডার — ডেলিভারি অনুযায়ী র‍্যাংক</div>
         {stats.running.length===0?<div style={{textAlign:"center",color:"#aaa",fontSize:12,padding:16,background:"#fafafa",borderRadius:9}}>কোনো চলমান অর্ডার নেই</div>:
         <div style={{background:"white",border:"1px solid #eee",borderRadius:10,overflow:"hidden"}}>
-          {stats.running.slice(0,8).map((o,i)=>{
+          {stats.running.map((o,i)=>{
             const urgent=o.daysLeft<=3;
             const warn=o.daysLeft>3&&o.daysLeft<=7;
             const refThumb=(o.refImgs&&o.refImgs.length&&o.refImgs[0].src)||o.refImg||null;
@@ -1976,7 +2122,7 @@ function ExpensePage({expenses,onSave,onBack}){
 }
 
 /* ── WOOD STOCK PAGE ── */
-function WoodStockPage({woodLots,saveWoodLots,woodSettings,saveWoodSettings,laborSettings,saveLaborSettings,payrollWeeks,workers,orders,onBack,view,lotId,onOpenList,onOpenDetail,onOpenNew,onOpenRates,highlightNo}){
+function WoodStockPage({woodLots,saveWoodLots,addLotPayment,woodSettings,saveWoodSettings,laborSettings,saveLaborSettings,payrollWeeks,workers,orders,onBack,view,lotId,onOpenList,onOpenDetail,onOpenNew,onOpenRates,highlightNo}){
   const today=todayStr();
   const setView=(v)=>{if(v==="list")onOpenList();else if(v==="new")onOpenNew();else if(v==="rates")onOpenRates()}; // পুরনো কল-সাইটের সাথে সামঞ্জস্যের জন্য
   const setSelLotId=(id)=>onOpenDetail(id);
@@ -2041,7 +2187,7 @@ function WoodStockPage({woodLots,saveWoodLots,woodSettings,saveWoodSettings,labo
   };
   const addPayment=()=>{
     if(!newPay.amount)return;
-    updateLot({...selLot,payments:[...(selLot.payments||[]),newPay]});
+    addLotPayment(selLot.id,newPay);
     setNewPay({date:today,amount:""});
   };
   const deleteLot=(lotId)=>{
@@ -2587,7 +2733,7 @@ function PLReportPage({orders,expenses,workers,payrollWeeks,woodLots,woodSetting
   </div>
 }
 
-function PayrollPage({workers,saveWorker,deleteWorker,payrollWeeks,savePayrollWeek,onBack}){
+function PayrollPage({workers,saveWorker,deleteWorker,payrollWeeks,savePayrollWeek,updateAttendance,addAdvanceEntry,removeAdvanceEntry,onBack}){
   const today=todayStr();
   const[view,setView]=useState("week"); // week | workers
   const[weekEnd,setWeekEnd]=useState(()=>weekEndThursday(today));
@@ -2644,17 +2790,17 @@ function PayrollPage({workers,saveWorker,deleteWorker,payrollWeeks,savePayrollWe
     if(isNaN(n))n=0;
     if(n<0)n=0;
     if(n>10.5)n=10.5;
-    const att={...(weekData.attendance||{}),[workerId]:n};
-    savePayrollWeek(weekEnd,{...weekData,attendance:att});
+    updateAttendance(weekEnd,workerId,n);
   };
   const addAdvance=()=>{
     if(!newAdv.workerId||!newAdv.amount)return;
     const adv={id:"adv_"+Date.now(),workerId:newAdv.workerId,date:newAdv.date,amount:parseFloat(newAdv.amount)||0,note:newAdv.note};
-    savePayrollWeek(weekEnd,{...weekData,advances:[...(weekData.advances||[]),adv]});
+    addAdvanceEntry(weekEnd,adv);
     setNewAdv({date:today,workerId:"",amount:"",note:""});
   };
   const removeAdvance=(advId)=>{
-    savePayrollWeek(weekEnd,{...weekData,advances:(weekData.advances||[]).filter(a=>a.id!==advId)});
+    const adv=(weekData.advances||[]).find(a=>a.id===advId);
+    if(adv)removeAdvanceEntry(weekEnd,adv);
   };
 
   const daysPresent=(workerId)=>{
@@ -3060,11 +3206,11 @@ function ManageDB({db,saveDb,galleries,saveGalleryEntry,onBack}){
 }
 
 /* ── FORM (no wood editing here anymore, smart delivery date, inline new-category) ── */
-function Form({onSave,onBack,db,saveDb,galleries,woodSettings,laborSettings}){
+function Form({onSave,onBack,db,saveDb,galleries,woodSettings,laborSettings,orders}){
   const today=todayStr();
   const[orderNo]=useState(()=>genNo());
   const[step,setStep]=useState(1);
-  const[c,setC]=useState({name:"",phone:"",address:"",date:today,delivery:addDays(today,60),notes:""});
+  const[c,setC]=useState({name:"",phone:"",phone2:"",address:"",date:today,delivery:addDays(today,60),notes:""});
   const[emergency,setEmergency]=useState(false);
   const[payments,setPayments]=useState([{date:today,amount:"",note:"অগ্রিম"}]);
   const[items,setItems]=useState([]);
@@ -3077,6 +3223,42 @@ function Form({onSave,onBack,db,saveDb,galleries,woodSettings,laborSettings}){
   const[newCatVarName,setNewCatVarName]=useState("");
   const[newModelName,setNewModelName]=useState("");
   const[varDropdownOpen,setVarDropdownOpen]=useState(false);
+  const[custPickJustDone,setCustPickJustDone]=useState(false);
+
+  // ── ফোন নম্বর ধরে পুরনো গ্রাহকের ইনডেক্স — মোট ক্রয়মূল্য অনুযায়ী র‍্যাংক সহ ──
+  // এটা সংরক্ষিত হয় না, প্রতিবার orders থেকে সরাসরি হিসাব হয় — তাই নতুন অর্ডারের পরেই র‍্যাংক স্বয়ংক্রিয়ভাবে বদলে যায়
+  const customerIndex=useMemo(()=>{
+    const map={};
+    (orders||[]).filter(o=>!o.cancelled).forEach(o=>{
+      const phone=(o.cust.phone||"").trim();
+      if(!phone)return;
+      if(!map[phone])map[phone]={phone,phone2:"",name:o.cust.name,address:o.cust.address,totalSpent:0,pastOrders:[],_latestDate:""};
+      const cust=map[phone];
+      cust.totalSpent+=parseFloat(o.cust.total)||0;
+      cust.pastOrders.push({date:o.cust.date,items:(o.items||[]).map(it=>it.variantBn).join(", "),total:o.cust.total});
+      if(!cust._latestDate||o.cust.date>=cust._latestDate){cust.name=o.cust.name;cust.address=o.cust.address;cust.phone2=o.cust.phone2||cust.phone2;cust._latestDate=o.cust.date}
+      else if(o.cust.phone2&&!cust.phone2)cust.phone2=o.cust.phone2; // পুরনো এন্ট্রিতে ২য় নম্বর থাকলেও যাতে হারিয়ে না যায়
+    });
+    const list=Object.values(map).sort((a,b)=>b.totalSpent-a.totalSpent);
+    list.forEach((cust,i)=>{cust.rank=i+1;cust.pastOrders.sort((a,b)=>(b.date||"").localeCompare(a.date||""))});
+    return list;
+  },[orders]);
+
+  const customerSuggestions=useMemo(()=>{
+    if(custPickJustDone)return[];
+    const nameQ=c.name.trim().toLowerCase();
+    const phoneQ=c.phone.trim();
+    if(nameQ.length<2&&phoneQ.length<3)return[];
+    return customerIndex.filter(cust=>
+      (nameQ.length>=2&&cust.name.toLowerCase().includes(nameQ))||
+      (phoneQ.length>=3&&(cust.phone.includes(phoneQ)||(cust.phone2&&cust.phone2.includes(phoneQ))))
+    ).slice(0,5);
+  },[customerIndex,c.name,c.phone,custPickJustDone]);
+
+  const pickCustomer=(cust)=>{
+    setC({...c,name:cust.name,phone:cust.phone,phone2:cust.phone2||"",address:cust.address});
+    setCustPickJustDone(true);
+  };
 
   const fCat=ni.catKey?db[ni.catKey]:null;
   const fVar=fCat&&ni.varKey&&ni.varKey!=="__NEW__"?fCat.variants[ni.varKey]:null;
@@ -3126,13 +3308,15 @@ function Form({onSave,onBack,db,saveDb,galleries,woodSettings,laborSettings}){
     const files=Array.from(e.target.files||[]);
     e.target.value="";
     let baseIdx=refImgs.length;
+    const categoryFolder=items.length>0?orderCategoryFolder({items},db):"অন্যান্য";
     for(const file of files){
       const compressed=await compressImage(file);
       if(!compressed)continue;
       baseIdx++;
-      const fileName=genImgFileName(`${orderNo}_ref`,baseIdx,file);
-      const savedFull=await saveFullResImage(file,fileName);
-      setRefImgs(prev=>[...prev,{src:compressed,caption:`ছবি ${prev.length+1}`,fileName:savedFull?fileName:null}]);
+      const baseFileName=genImgFileName(`${orderNo}_ref`,baseIdx,file);
+      const relPath=`${categoryFolder}/${baseFileName}`;
+      const savedFull=await saveFullResImage(file,relPath);
+      setRefImgs(prev=>[...prev,{src:compressed,caption:`ছবি ${prev.length+1}`,fileName:savedFull?relPath:null}]);
     }
   };
   const removeRefImg=(idx)=>{
@@ -3172,7 +3356,40 @@ function Form({onSave,onBack,db,saveDb,galleries,woodSettings,laborSettings}){
         <div style={{background:days<0?"#fee2e2":"#f0fdf4",borderRadius:8,padding:"7px 12px",marginBottom:14,fontSize:12,color:days<0?RED:"#166534",fontWeight:600,textAlign:"center"}}>
           {days!==null&&(days<0?`⚠ ডেলিভারি তারিখ অতীতে!`:`ডেলিভারি হবে ${days} দিন পরে${!emergency?" (স্বয়ংক্রিয় ৬০ দিন)":" (ইমারজেন্সি — ম্যানুয়াল)"}`)}
         </div>
-        {[{l:"গ্রাহকের নাম *",k:"name",t:"text",p:"পূর্ণ নাম"},{l:"মোবাইল *",k:"phone",t:"tel",p:"01X-XXXXXXXX"},{l:"ঠিকানা",k:"address",t:"text",p:"বিস্তারিত ঠিকানা"}].map(f=><div key={f.k} style={{marginBottom:11}}>{lbl(f.l)}<input type={f.t} value={c[f.k]} onChange={e=>setC({...c,[f.k]:e.target.value})} placeholder={f.p} style={inp}/></div>)}
+        <div style={{marginBottom:custPickJustDone||customerSuggestions.length===0?11:0,position:"relative"}}>
+          {lbl("মোবাইল *")}
+          <input type="tel" value={c.phone} onChange={e=>{setC({...c,phone:e.target.value});setCustPickJustDone(false)}} placeholder="01X-XXXXXXXX" style={inp}/>
+        </div>
+        {customerSuggestions.length>0&&<div style={{background:"#fffbeb",border:"1.5px solid #fde68a",borderRadius:10,padding:9,marginBottom:11,marginTop:8}}>
+          <div style={{fontSize:10,fontWeight:700,color:"#92400e",marginBottom:6}}>👤 আগে অর্ডার করেছেন এমন গ্রাহক পাওয়া গেছে</div>
+          {customerSuggestions.map(cust=><div key={cust.phone} onClick={()=>pickCustomer(cust)} style={{background:"white",borderRadius:8,padding:"9px 10px",marginBottom:6,cursor:"pointer",border:"1px solid #fef3c7"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <div style={{fontWeight:700,fontSize:13}}>{cust.name} <span style={{fontSize:11,color:"#888",fontWeight:400}}>· {cust.phone}</span></div>
+              <span style={{background:"#92400e",color:"white",fontSize:9,fontWeight:700,borderRadius:12,padding:"2px 8px",flexShrink:0}}>র‍্যাংক #{cust.rank}</span>
+            </div>
+            {cust.address&&<div style={{fontSize:10,color:"#999",marginTop:2}}>📍 {cust.address}</div>}
+            <div style={{marginTop:5,paddingTop:5,borderTop:"1px dashed #f0e0c0"}}>
+              {cust.pastOrders.slice(0,3).map((po,pi)=><div key={pi} style={{fontSize:10,color:"#666",display:"flex",justifyContent:"space-between",marginBottom:1}}>
+                <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:"70%"}}>{fmtDate(po.date)} — {po.items}</span>
+                <strong style={{color:"#166534"}}>{money(po.total)}</strong>
+              </div>)}
+              {cust.pastOrders.length>3&&<div style={{fontSize:9,color:"#aaa"}}>...ও আরও {cust.pastOrders.length-3}টি অর্ডার</div>}
+              <div style={{fontSize:10,fontWeight:700,color:"#92400e",marginTop:3}}>সর্বমোট ক্রয়: {money(cust.totalSpent)}</div>
+            </div>
+          </div>)}
+        </div>}
+        <div style={{marginBottom:11,position:"relative"}}>
+          {lbl("গ্রাহকের নাম *")}
+          <input type="text" value={c.name} onChange={e=>{setC({...c,name:e.target.value});setCustPickJustDone(false)}} placeholder="পূর্ণ নাম" style={inp}/>
+        </div>
+        <div style={{marginBottom:11}}>
+          {lbl("২য় মোবাইল (ঐচ্ছিক)")}
+          <input type="tel" value={c.phone2} onChange={e=>setC({...c,phone2:e.target.value})} placeholder="বিকল্প নম্বর, না থাকলে খালি রাখুন" style={inp}/>
+        </div>
+        <div style={{marginBottom:11}}>
+          {lbl("ঠিকানা")}
+          <input type="text" value={c.address} onChange={e=>setC({...c,address:e.target.value})} placeholder="বিস্তারিত ঠিকানা" style={inp}/>
+        </div>
         <div style={{marginBottom:14}}>{lbl("বিশেষ মন্তব্য")}<textarea rows={2} value={c.notes} onChange={e=>setC({...c,notes:e.target.value})} style={{...inp,resize:"vertical"}}/></div>
         <button onClick={()=>setStep(2)} style={{width:"100%",background:RED,color:"white",border:"none",borderRadius:10,padding:"14px",fontSize:14,fontWeight:700}}>পরবর্তী →</button>
       </>}
@@ -3251,44 +3468,57 @@ function Form({onSave,onBack,db,saveDb,galleries,woodSettings,laborSettings}){
 }
 
 /* ── PREVIEW (each slip prints independently now) ── */
-function Preview({order,onBack,slip,setSlip,onUpdate,onDelete,db,saveDb,carpenters,saveCarpenters,galleries,saveGalleryEntry,woodSettings,laborSettings,workers}){
+function Preview({order,onBack,slip,setSlip,onUpdate,onAddPayment,onSetDelivered,onDelete,db,saveDb,carpenters,saveCarpenters,galleries,saveGalleryEntry,woodSettings,laborSettings,workers,allOrders}){
   const totalPaid=(order.payments||[]).reduce((s,p)=>s+(parseFloat(p.amount)||0),0);
   const isFullyPaid=parseFloat(order.cust.total)>0&&totalPaid>=(parseFloat(order.cust.total)||0);
   const[addingPay,setAddingPay]=useState(false);
   const[newPay,setNewPay]=useState({date:todayStr(),amount:"",note:"পেমেন্ট"});
-  const[deliveryImg,setDeliveryImg]=useState(order.deliveryImg||null);
+  // ── সরাসরি লাইভ order prop থেকে — কোনো স্থানীয় (স্টেল হতে পারে এমন) কপি রাখা হচ্ছে না,
+  // যাতে অন্য ডিভাইস (যেমন ফোন) থেকে ছবি যুক্ত করলে এই স্ক্রিনও সাথে সাথে দেখতে পায় ──
+  const deliveryImgs=order.deliveryImgs||(order.deliveryImg?[{src:order.deliveryImg,fileName:order.deliveryImgFileName||null}]:[]);
   const delInput=useRef();
 
   const handleDeliveryImg=async(e)=>{
-    const file=e.target.files[0];
+    const files=Array.from(e.target.files||[]);
     e.target.value="";
-    if(!file)return;
-    const compressed=await compressImage(file);
-    if(compressed){
-      setDeliveryImg(compressed);
-      const fileName=genImgFileName(`${order.no}_delivery`,1,file);
-      const savedFull=await saveFullResImage(file,fileName);
-      onUpdate({...order,deliveryImg:compressed,deliveryImgFileName:savedFull?fileName:null});
-      // এই ছবিটি অর্ডারে থাকা প্রতিটা ফার্নিচার মডেলের গ্যালারিতেও যুক্ত করুন,
-      // যাতে পরবর্তীতে সেই মডেল সিলেক্ট করলে ডেলিভারি দেওয়া আসল পণ্যের ছবি দেখা যায়
-      if(saveGalleryEntry&&order.items){
-        const seen=new Set();
-        order.items.forEach(it=>{
-          if(!it.catKey||!it.varKey)return;
-          const key=`${it.catKey}__${it.varKey}`;
-          if(seen.has(key))return;
-          seen.add(key);
-          const existing=(galleries&&galleries[key])||{gallery:[],coverImage:null};
-          if((existing.gallery||[]).includes(compressed))return; // আগে থেকেই থাকলে দ্বিতীয়বার যোগ হবে না
-          const updatedGallery=[...(existing.gallery||[]),compressed];
-          saveGalleryEntry(it.catKey,it.varKey,{gallery:updatedGallery,coverImage:existing.coverImage||compressed});
-        });
-      }
+    if(files.length===0)return;
+    const categoryFolder=orderCategoryFolder(order,db);
+    let next=[...deliveryImgs];
+    let firstCompressed=null;
+    for(const file of files){
+      const compressed=await compressImage(file);
+      if(!compressed)continue;
+      if(!firstCompressed)firstCompressed=compressed;
+      const baseFileName=genImgFileName(`${order.no}_delivery`,next.length+1,file);
+      const relPath=`${categoryFolder}/${baseFileName}`;
+      const savedFull=await saveFullResImage(file,relPath);
+      next.push({src:compressed,fileName:savedFull?relPath:null});
     }
+    onUpdate({...order,deliveryImgs:next,deliveryImg:next[0]?.src||null,deliveryImgFileName:next[0]?.fileName||null});
+    // এই ছবিগুলো অর্ডারে থাকা প্রতিটা ফার্নিচার মডেলের গ্যালারিতেও যুক্ত করুন,
+    // যাতে পরবর্তীতে সেই মডেল সিলেক্ট করলে ডেলিভারি দেওয়া আসল পণ্যের ছবি দেখা যায়
+    if(saveGalleryEntry&&order.items&&firstCompressed){
+      const seen=new Set();
+      order.items.forEach(it=>{
+        if(!it.catKey||!it.varKey)return;
+        const key=`${it.catKey}__${it.varKey}`;
+        if(seen.has(key))return;
+        seen.add(key);
+        const existing=(galleries&&galleries[key])||{gallery:[],coverImage:null};
+        if((existing.gallery||[]).includes(firstCompressed))return;
+        const updatedGallery=[...(existing.gallery||[]),firstCompressed];
+        saveGalleryEntry(it.catKey,it.varKey,{gallery:updatedGallery,coverImage:existing.coverImage||firstCompressed});
+      });
+    }
+  };
+  const removeDeliveryImg=(idx)=>{
+    if(!window.confirm("এই ছবিটি মুছে ফেলতে চান?"))return;
+    const next=deliveryImgs.filter((_,i)=>i!==idx);
+    onUpdate({...order,deliveryImgs:next,deliveryImg:next[0]?.src||null,deliveryImgFileName:next[0]?.fileName||null});
   };
   const addPayment=()=>{
     if(!newPay.amount)return;
-    onUpdate({...order,payments:[...(order.payments||[]),newPay]});
+    onAddPayment(order.no,newPay);
     setAddingPay(false);setNewPay({date:todayStr(),amount:"",note:"পেমেন্ট"});
   };
   const logPrint=(slipKey)=>{
@@ -3352,7 +3582,7 @@ function Preview({order,onBack,slip,setSlip,onUpdate,onDelete,db,saveDb,carpente
         {slip===2&&<S3 order={order} onPrint={logPrint} onUpdateOrder={onUpdate} workers={workers}/>}
         {slip===3&&<S4 order={order} onPrint={logPrint} db={db} saveDb={saveDb} onUpdateOrder={onUpdate}/>}
         {slip===4&&<S5 order={order} onPrint={logPrint}/>}
-        {slip===5&&isFullyPaid&&<S6 order={{...order,deliveryImg}} onPrint={logPrint} onUpdateOrder={onUpdate} onPhotoChange={handleDeliveryImg}/>}
+        {slip===5&&isFullyPaid&&<S6 order={{...order,deliveryImgs}} onPrint={logPrint} onUpdateOrder={onUpdate} onSetDelivered={onSetDelivered} onPhotoChange={handleDeliveryImg} onRemovePhoto={removeDeliveryImg} allOrders={allOrders}/>}
         {slip===5&&!isFullyPaid&&<div style={{padding:40,textAlign:"center",color:"#aaa"}}><div style={{fontSize:40,marginBottom:10}}>🔒</div><div style={{fontSize:14}}>সম্পূর্ণ পেমেন্টের পরে আনলক হবে</div></div>}
       </div>
     </div>
