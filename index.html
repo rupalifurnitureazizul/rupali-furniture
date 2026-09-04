@@ -74,7 +74,7 @@ function compressImage(file,maxDim=1200,quality=0.82){
 /* ── FULL-RESOLUTION LOCAL FOLDER STORAGE (desktop Chrome/Edge/Brave only) ──
    Original, uncompressed images are saved as real files in a folder you choose
    on your computer. Only a small compressed thumbnail syncs to the cloud/mobile. */
-const BUILD_TAG="2.49";
+const BUILD_TAG="2.57";
 const FS_SUPPORTED=typeof window!=="undefined"&&"showDirectoryPicker" in window;
 function idbOpen(){
   return new Promise((resolve,reject)=>{
@@ -131,13 +131,13 @@ function sanitizeFolderName(name){
 }
 // ছবি যতগুলোই থাকুক, A4 পেজের একটা নির্দিষ্ট বরাদ্দের মধ্যেই থাকবে — বেশি ছবি হলে গ্রিড নিজে থেকেই ছোট হয়ে সমন্বয় করে নেয়
 function computePhotoGrid(count){
-  if(count<=1)return{cols:1,imgHeight:190};
-  if(count===2)return{cols:2,imgHeight:150};
-  if(count<=4)return{cols:2,imgHeight:110};
-  if(count<=6)return{cols:3,imgHeight:92};
-  if(count<=9)return{cols:3,imgHeight:72};
-  if(count<=12)return{cols:4,imgHeight:62};
-  return{cols:4,imgHeight:50};
+  if(count<=1)return{cols:1,imgHeight:150};
+  if(count===2)return{cols:2,imgHeight:120};
+  if(count<=4)return{cols:2,imgHeight:95};
+  if(count<=6)return{cols:3,imgHeight:80};
+  if(count<=9)return{cols:3,imgHeight:64};
+  if(count<=12)return{cols:4,imgHeight:54};
+  return{cols:4,imgHeight:46};
 }
 // অর্ডারের প্রথম ফার্নিচারের ক্যাটাগরি অনুযায়ী ফোল্ডারের নাম — ছবি সেই ক্যাটাগরির সাবফোল্ডারে সেভ হয়
 function orderCategoryFolder(order,db){
@@ -198,7 +198,7 @@ const UNITS=["cft","kg","লিটার","পিস","বস্তা","ফু�
 /* ── HELPERS ── */
 const cft=(pc,h,l,w)=>parseFloat(((pc*h*l*w)/1728).toFixed(4));
 const rackCode=(prefix,w,h)=>{const tm={0.5:"5",1:"1",1.25:"125",1.5:"15",2:"2",2.5:"25",3:"3"};const t=tm[w]||String(Math.round(w*100));return`${prefix}${t}${String(Math.round(h)).padStart(2,"0")}`};
-const genNo=()=>{const d=new Date().toISOString().slice(0,10).replace(/-/g,"");return`RF-${d}-${String(Math.floor(Math.random()*900)+100)}`};
+const genNo=()=>{const d=new Date().toISOString().slice(0,10).replace(/-/g,"");return`RF-${d}-${String(Math.floor(Math.random()*900)+100)}`}; // অফলাইন ফলব্যাক — ইন্টারনেট না থাকলে এটাই ব্যবহার হয়
 const money=(n)=>`৳${(parseFloat(n)||0).toLocaleString()}`;
 const totalCft=(sections)=>sections.reduce((s,sec)=>s+sec.pieces.reduce((ss,p)=>ss+cft(p.pc,p.h,p.l,p.w),0),0);
 const autoCode=(baseName,suffix)=>{
@@ -470,21 +470,22 @@ function WhatsAppSendBtn({targetRef,phone,label}){
       },"image/png");
     }catch(e){alert("ছবি তৈরি করতে সমস্যা হয়েছে: "+e.message);setState("idle")}
   };
-  // এই ফাংশনটা একটা টাটকা, সরাসরি ট্যাপের মধ্যেই চলে (আগের কোনো অপেক্ষার পর নয়) — তাই
-  // iPhone-এর Safari-ও এটাকে ব্লক করে না (আগে html2canvas এর অপেক্ষার পরে খোলার চেষ্টা করাতেই ব্লক হচ্ছিল)
+  // WhatsApp-এর নিজস্ব নিয়মে কোনো ওয়েবসাইট থেকে ছবিসহ কোনো নির্দিষ্ট নম্বরে সরাসরি পাঠানো
+  // (কন্টাক্ট বেছে নেওয়া ছাড়া) সম্ভব না — এটা WhatsApp নিজেই নিয়ন্ত্রণ করে। তবে এই পদ্ধতিতে
+  // অন্তত "কন্টাক্ট খোঁজা"র ধাপটা এড়ানো যায় — সরাসরি সঠিক চ্যাটে চলে যাবে।
   const sendNow=()=>{
-    if(pendingFile&&navigator.canShare&&navigator.canShare({files:[pendingFile]})){
-      navigator.share({files:[pendingFile],title:"রূপালী ফার্নিচার",text:"আপনার অর্ডারের রশিদ"}).catch(()=>{});
-    }else if(pendingBlob){
+    if(pendingBlob){
       const url=URL.createObjectURL(pendingBlob);
       const a=document.createElement("a");a.href=url;a.download="receipt.png";document.body.appendChild(a);a.click();document.body.removeChild(a);
       window.open(`https://wa.me/${toIntlPhone(phone)}`,"_blank");
-      alert("ছবিটি ডাউনলোড হয়েছে। WhatsApp চ্যাটে গিয়ে ম্যানুয়ালি ছবিটি অ্যাটাচ করে পাঠান।");
     }
     setState("idle");setPendingFile(null);setPendingBlob(null);
   };
 
-  if(state==="ready")return<button className="no-print" onClick={sendNow} style={{background:"#0d9488",color:"white",border:"none",borderRadius:7,padding:"6px 13px",fontWeight:700,fontSize:11,display:"flex",alignItems:"center",gap:5,boxShadow:"0 0 0 3px rgba(13,148,136,0.25)"}}>✅ প্রস্তুত — এখন ট্যাপ করুন</button>;
+  if(state==="ready")return<div className="no-print" style={{display:"flex",flexDirection:"column",alignItems:"flex-start",gap:2}}>
+    <button onClick={sendNow} style={{background:"#0d9488",color:"white",border:"none",borderRadius:7,padding:"6px 13px",fontWeight:700,fontSize:11,display:"flex",alignItems:"center",gap:5,boxShadow:"0 0 0 3px rgba(13,148,136,0.25)"}}>✅ প্রস্তুত — এখন ট্যাপ করুন</button>
+    <span style={{fontSize:8,color:"#0d9488",maxWidth:150,lineHeight:1.3}}>ছবি ডাউনলোড হবে ও সঠিক চ্যাট খুলবে — গ্যালারি থেকে অ্যাটাচ করে পাঠান</span>
+  </div>;
   return<button className="no-print" onClick={prepare} disabled={state==="preparing"} style={{background:"#16a34a",color:"white",border:"none",borderRadius:7,padding:"6px 13px",fontWeight:700,fontSize:11,display:"flex",alignItems:"center",gap:5}}>{state==="preparing"?"⏳ তৈরি হচ্ছে...":`📤 ${label||"WhatsApp-এ পাঠান"}`}</button>;
 }
 function FullImgBtn({fileName}){
@@ -519,7 +520,7 @@ function S1({order,onPrint}){
             const imgH=computePhotoGrid(images.length).imgHeight;
             return<div key={i} style={{textAlign:"center"}}>
               <div style={{position:"relative"}}>
-                <img src={img.src} alt="ref" onClick={()=>clickable&&openFullResImageForPrint(img.fileName)} style={{width:"100%",height:imgH,objectFit:"cover",borderRadius:9,border:"1px solid #eee",cursor:clickable?"pointer":"default",display:"block"}}/>
+                <img src={img.src} alt="ref" onClick={()=>clickable&&openFullResImageForPrint(img.fileName)} style={{width:"100%",height:imgH,objectFit:"contain",background:"#fafafa",borderRadius:9,border:"1px solid #eee",cursor:clickable?"pointer":"default",display:"block"}}/>
                 {clickable&&<div className="no-print" style={{position:"absolute",top:5,right:5,background:"rgba(0,0,0,0.55)",color:"white",borderRadius:"50%",width:22,height:22,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11}}>🔍</div>}
               </div>
               <div style={{fontSize:9,color:"#888",marginTop:3}}>{img.caption}</div>
@@ -976,13 +977,6 @@ function S6({order,onPrint,onUpdateOrder,onSetDelivered,onPhotoChange,onRemovePh
       onSetDelivered(order.no,true,todayStr());
     }
   };
-  // হার্ডকপি বাইন্ডিংয়ের জন্য অর্ডারের তারিখ অনুযায়ী ক্রমিক নম্বর — সংরক্ষিত নয়, সব সময় তাজা হিসাব করা হয়
-  const bindingNo=useMemo(()=>{
-    if(!allOrders)return null;
-    const sorted=allOrders.filter(o=>!o.cancelled).sort((a,b)=>(a.cust.date||"").localeCompare(b.cust.date||"")||(a.no||"").localeCompare(b.no||""));
-    const idx=sorted.findIndex(o=>o.no===order.no);
-    return idx>=0?idx+1:null;
-  },[allOrders,order.no]);
   const grid=computePhotoGrid(images.length);
   return<div style={{fontSize:11}}>
     <div className="no-print" style={{padding:"8px 14px",background:"#fff",borderBottom:"1px solid #eee",display:"flex",justifyContent:"flex-end",gap:8,color:"#0f766e"}}><WhatsAppSendBtn targetRef={captureRef} phone={cust.phone}/><PrintBtn onPrint={()=>onPrint("s6")}/></div>
@@ -991,15 +985,9 @@ function S6({order,onPrint,onUpdateOrder,onSetDelivered,onPhotoChange,onRemovePh
     <div ref={captureRef}>
     <Hdr title="ডেলিভারি রশিদ" sub="Delivery Receipt" no={no} bg="#0f766e"/>
     <div style={{padding:"12px 14px"}}>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",background:"#f0fdfa",borderRadius:7,padding:"9px",marginBottom:10}}>
-        <div style={{flex:1}}>
-          <IR l="গ্রাহকের নাম" v={cust.name}/><IR l="মোবাইল" v={cust.phone}/><IR l="ঠিকানা" v={cust.address}/>
-          <IR l="অর্ডারের তারিখ" v={fmtDate(cust.date)}/><IR l="ডেলিভারির তারিখ" v={fmtDate(order.deliveredAt||todayStr())}/>
-        </div>
-        {bindingNo&&<div style={{textAlign:"center",background:"white",border:"1.5px solid #0f766e",borderRadius:8,padding:"6px 10px",flexShrink:0,marginLeft:8}}>
-          <div style={{fontSize:8,color:"#0f766e"}}>বাইন্ডিং নং</div>
-          <div style={{fontSize:16,fontWeight:800,color:"#0f766e"}}>{bindingNo}</div>
-        </div>}
+      <div style={{background:"#f0fdfa",borderRadius:7,padding:"9px",marginBottom:10}}>
+        <IR l="গ্রাহকের নাম" v={cust.name}/><IR l="মোবাইল" v={cust.phone}/><IR l="ঠিকানা" v={cust.address}/>
+        <IR l="অর্ডারের তারিখ" v={fmtDate(cust.date)}/><IR l="ডেলিভারির তারিখ" v={fmtDate(order.deliveredAt||todayStr())}/>
       </div>
       <div style={{fontWeight:700,fontSize:10,color:"#0f766e",marginBottom:5}}>ডেলিভারিকৃত পণ্য</div>
       {items.map((it,i)=><div key={i} style={{border:"1px solid #99f6e4",borderRadius:6,padding:"6px 9px",marginBottom:5,fontSize:10}}>
@@ -1011,7 +999,7 @@ function S6({order,onPrint,onUpdateOrder,onSetDelivered,onPhotoChange,onRemovePh
         <div style={{fontSize:10,color:"#888",marginBottom:4,textAlign:"center"}}>সম্পন্ন ফার্নিচারের ছবি:</div>
         <div style={{display:"grid",gridTemplateColumns:`repeat(${grid.cols},1fr)`,gap:6}}>
           {images.map((img,i)=><div key={i} style={{textAlign:"center",position:"relative"}}>
-            <img src={img.src} style={{width:"100%",height:grid.imgHeight,objectFit:"cover",borderRadius:8,border:"1px solid #99f6e4",display:"block"}} alt="delivery"/>
+            <img src={img.src} style={{width:"100%",height:grid.imgHeight,objectFit:"contain",background:"#fafafa",borderRadius:8,border:"1px solid #99f6e4",display:"block"}} alt="delivery"/>
             <div className="no-print" style={{display:"flex",justifyContent:"center",gap:4,marginTop:3}}>
               {img.fileName&&FS_SUPPORTED&&<FullImgBtn fileName={img.fileName}/>}
               <button onClick={()=>onRemovePhoto(i)} style={{background:"#fee2e2",border:"none",borderRadius:5,color:RED,fontSize:8,padding:"2px 6px"}}>✕</button>
@@ -1527,6 +1515,27 @@ function App({firebaseConfig,onResetConfig}){
     setDb(newDb);
     if(fsRef.current)fsRef.current.doc("meta/db").set(newDb).catch(err=>alert("⚠️ ক্লাউডে সেভ করতে সমস্যা হয়েছে: "+err.message));
   };
+  // ── ক্রমিক অর্ডার নম্বর — Firestore transaction দিয়ে, যাতে দুইটা ডিভাইস একই সময়ে
+  // নতুন অর্ডার শুরু করলেও কখনো একই নম্বর না পায়। ফরম্যাট আগের মতোই RF-YYYYMMDD-ক্রমিক,
+  // শুধু শেষের অংশটা এখন এলোমেলো না হয়ে সত্যিকারের ক্রমিক সংখ্যা। শুধু সংযোগ না থাকলে
+  // পুরনো (তারিখ+এলোমেলো) পদ্ধতি ফলব্যাক হিসেবে ব্যবহার হয়, যাতে অফলাইনেও অর্ডার নেওয়া আটকে না যায়। ──
+  const getNextOrderNumber=async()=>{
+    if(!fsRef.current)return genNo();
+    try{
+      const counterRef=fsRef.current.doc("meta/orderCounter");
+      const next=await fsRef.current.runTransaction(async(tx)=>{
+        const doc=await tx.get(counterRef);
+        const current=(doc.exists&&doc.data().lastNumber)||0;
+        const n=current+1;
+        tx.set(counterRef,{lastNumber:n});
+        return n;
+      });
+      const d=new Date().toISOString().slice(0,10).replace(/-/g,"");
+      return`RF-${d}-${String(next).padStart(6,"0")}`;
+    }catch(e){
+      return genNo();
+    }
+  };
   const saveOrder=(o)=>{
     setDraft(o);
     navigate({page:"preview",orderNo:o.no,slip:0,from:"home"});
@@ -1641,7 +1650,7 @@ function App({firebaseConfig,onResetConfig}){
     return<div style={{padding:40,textAlign:"center"}}><div style={{fontSize:9,color:"#ccc",marginBottom:10}}>{BUILD_TAG}</div>সিঙ্ক হচ্ছে...</div>;
   }
   if(page==="preview")return<Preview order={viewed||draft} onBack={goBack} slip={slip} setSlip={setSlip} onUpdate={updateOrder} onAddPayment={addOrderPayment} onSetDelivered={setOrderDelivered} onDelete={deleteOrderPermanently} db={db} saveDb={saveDb} carpenters={carpenters} saveCarpenters={saveCarpenters} galleries={galleries} saveGalleryEntry={saveGalleryEntry} woodSettings={woodSettings} laborSettings={laborSettings} workers={workers} allOrders={orders}/>;
-  if(page==="form")return<Form onSave={saveOrder} onBack={goBack} db={db} saveDb={saveDb} galleries={galleries} woodSettings={woodSettings} laborSettings={laborSettings} orders={orders}/>;
+  if(page==="form")return<Form onSave={saveOrder} onBack={goBack} db={db} saveDb={saveDb} galleries={galleries} woodSettings={woodSettings} laborSettings={laborSettings} orders={orders} getNextOrderNumber={getNextOrderNumber}/>;
   if(page==="history")return<Hist orders={orders} onBack={goBack} onView={o=>navigate({page:"preview",orderNo:o.no,slip:0})} highlightNo={highlightNo}/>;
   if(page==="manage")return<ManageDB db={db} saveDb={saveDb} galleries={galleries} saveGalleryEntry={saveGalleryEntry} onBack={goBack}/>;
   if(page==="woodstock")return<WoodStockPage woodLots={woodLots} saveWoodLots={saveWoodLots} addLotPayment={addLotPayment} woodSettings={woodSettings} saveWoodSettings={saveWoodSettings} laborSettings={laborSettings} saveLaborSettings={saveLaborSettings} payrollWeeks={payrollWeeks} workers={workers} orders={orders} onBack={goBack} view={curScreen.view||"list"} lotId={curScreen.lotId||null} onOpenList={()=>navigate({page:"woodstock",view:"list"})} onOpenDetail={lotId=>navigate({page:"woodstock",view:"detail",lotId})} onOpenNew={()=>navigate({page:"woodstock",view:"new"})} onOpenRates={()=>navigate({page:"woodstock",view:"rates"})} highlightNo={highlightNo}/>;
@@ -1654,6 +1663,7 @@ function App({firebaseConfig,onResetConfig}){
 /* ── HOME / DASHBOARD ── */
 function Home({orders,expenses,woodLots,db,onNew,onHist,onManage,onExpense,onWoodStock,onPayroll,onPLReport,onView,online,connError,onResetConfig,folderStatus,connectFolder,highlightNo,onBackupData}){
   const now=new Date();
+  const[showAllRunning,setShowAllRunning]=useState(false);
   const stats=useMemo(()=>{
     // Running orders (not fully paid = not delivered typically, but we track by payment completion as proxy + delivery date)
     const running=orders.filter(o=>{
@@ -1856,7 +1866,7 @@ function Home({orders,expenses,woodLots,db,onNew,onHist,onManage,onExpense,onWoo
         <div style={{fontWeight:700,fontSize:13,color:"#222",marginBottom:8,display:"flex",alignItems:"center",gap:6}}>🔥 চলমান অর্ডার — ডেলিভারি অনুযায়ী র‍্যাংক</div>
         {stats.running.length===0?<div style={{textAlign:"center",color:"#aaa",fontSize:12,padding:16,background:"#fafafa",borderRadius:9}}>কোনো চলমান অর্ডার নেই</div>:
         <div style={{background:"white",border:"1px solid #eee",borderRadius:10,overflow:"hidden"}}>
-          {stats.running.map((o,i)=>{
+          {stats.running.slice(0,showAllRunning?stats.running.length:10).map((o,i)=>{
             const urgent=o.daysLeft<=3;
             const warn=o.daysLeft>3&&o.daysLeft<=7;
             const refThumb=(o.refImgs&&o.refImgs.length&&o.refImgs[0].src)||o.refImg||null;
@@ -1881,6 +1891,7 @@ function Home({orders,expenses,woodLots,db,onNew,onHist,onManage,onExpense,onWoo
               <ProgressBar pct={o.pct}/>
             </div>
           })}
+          {!showAllRunning&&stats.running.length>10&&<button onClick={()=>setShowAllRunning(true)} style={{width:"100%",background:"#f8fafc",border:"none",borderTop:"1px solid #f0f0f0",padding:"11px",fontSize:12,fontWeight:700,color:RED}}>আরও দেখুন (+{stats.running.length-10}টি)</button>}
         </div>}
       </div>
 
@@ -3206,9 +3217,14 @@ function ManageDB({db,saveDb,galleries,saveGalleryEntry,onBack}){
 }
 
 /* ── FORM (no wood editing here anymore, smart delivery date, inline new-category) ── */
-function Form({onSave,onBack,db,saveDb,galleries,woodSettings,laborSettings,orders}){
+function Form({onSave,onBack,db,saveDb,galleries,woodSettings,laborSettings,orders,getNextOrderNumber}){
   const today=todayStr();
-  const[orderNo]=useState(()=>genNo());
+  const[orderNo,setOrderNo]=useState(null);
+  useEffect(()=>{
+    let cancelled=false;
+    getNextOrderNumber().then(no=>{if(!cancelled)setOrderNo(no)});
+    return()=>{cancelled=true};
+  },[]);
   const[step,setStep]=useState(1);
   const[c,setC]=useState({name:"",phone:"",phone2:"",address:"",date:today,delivery:addDays(today,60),notes:""});
   const[emergency,setEmergency]=useState(false);
@@ -3224,6 +3240,7 @@ function Form({onSave,onBack,db,saveDb,galleries,woodSettings,laborSettings,orde
   const[newModelName,setNewModelName]=useState("");
   const[varDropdownOpen,setVarDropdownOpen]=useState(false);
   const[custPickJustDone,setCustPickJustDone]=useState(false);
+  const[activeField,setActiveField]=useState("phone");
 
   // ── ফোন নম্বর ধরে পুরনো গ্রাহকের ইনডেক্স — মোট ক্রয়মূল্য অনুযায়ী র‍্যাংক সহ ──
   // এটা সংরক্ষিত হয় না, প্রতিবার orders থেকে সরাসরি হিসাব হয় — তাই নতুন অর্ডারের পরেই র‍্যাংক স্বয়ংক্রিয়ভাবে বদলে যায়
@@ -3232,11 +3249,12 @@ function Form({onSave,onBack,db,saveDb,galleries,woodSettings,laborSettings,orde
     (orders||[]).filter(o=>!o.cancelled).forEach(o=>{
       const phone=(o.cust.phone||"").trim();
       if(!phone)return;
-      if(!map[phone])map[phone]={phone,phone2:"",name:o.cust.name,address:o.cust.address,totalSpent:0,pastOrders:[],_latestDate:""};
+      if(!map[phone])map[phone]={phone,phone2:"",name:o.cust.name,address:o.cust.address,totalSpent:0,pastOrders:[],_latestAt:""};
       const cust=map[phone];
       cust.totalSpent+=parseFloat(o.cust.total)||0;
       cust.pastOrders.push({date:o.cust.date,items:(o.items||[]).map(it=>it.variantBn).join(", "),total:o.cust.total});
-      if(!cust._latestDate||o.cust.date>=cust._latestDate){cust.name=o.cust.name;cust.address=o.cust.address;cust.phone2=o.cust.phone2||cust.phone2;cust._latestDate=o.cust.date}
+      const stamp=o.at||o.cust.date||"";
+      if(!cust._latestAt||stamp>=cust._latestAt){cust.name=o.cust.name;cust.address=o.cust.address;cust.phone2=o.cust.phone2||cust.phone2;cust._latestAt=stamp}
       else if(o.cust.phone2&&!cust.phone2)cust.phone2=o.cust.phone2; // পুরনো এন্ট্রিতে ২য় নম্বর থাকলেও যাতে হারিয়ে না যায়
     });
     const list=Object.values(map).sort((a,b)=>b.totalSpent-a.totalSpent);
@@ -3307,6 +3325,7 @@ function Form({onSave,onBack,db,saveDb,galleries,woodSettings,laborSettings,orde
   const handleRefImg=async(e)=>{
     const files=Array.from(e.target.files||[]);
     e.target.value="";
+    if(!orderNo){alert("একটু অপেক্ষা করুন, অর্ডার নম্বর তৈরি হচ্ছে — কয়েক সেকেন্ড পর আবার চেষ্টা করুন।");return}
     let baseIdx=refImgs.length;
     const categoryFolder=items.length>0?orderCategoryFolder({items},db):"অন্যান্য";
     for(const file of files){
@@ -3328,6 +3347,7 @@ function Form({onSave,onBack,db,saveDb,galleries,woodSettings,laborSettings,orde
 
   const submit=()=>{
     if(!c.name||!c.phone||items.length===0)return;
+    if(!orderNo){alert("একটু অপেক্ষা করুন, অর্ডার নম্বর তৈরি হচ্ছে — কয়েক সেকেন্ড পর আবার চেষ্টা করুন।");return}
     // ঐতিহাসিক ব্যয় নীতি: অর্ডার তৈরির সময়ের কাঠ ও শ্রমের দাম স্থায়ীভাবে সংরক্ষণ করা হয়,
     // যাতে ভবিষ্যতে দাম বাড়লেও এই অর্ডারের হিসাব বদলে না যায়
     const itemsWithRate=items.map(it=>({...it,woodRateSnapshot:woodRateOn(woodSettings,it.wood,c.date)||null}));
@@ -3356,11 +3376,11 @@ function Form({onSave,onBack,db,saveDb,galleries,woodSettings,laborSettings,orde
         <div style={{background:days<0?"#fee2e2":"#f0fdf4",borderRadius:8,padding:"7px 12px",marginBottom:14,fontSize:12,color:days<0?RED:"#166534",fontWeight:600,textAlign:"center"}}>
           {days!==null&&(days<0?`⚠ ডেলিভারি তারিখ অতীতে!`:`ডেলিভারি হবে ${days} দিন পরে${!emergency?" (স্বয়ংক্রিয় ৬০ দিন)":" (ইমারজেন্সি — ম্যানুয়াল)"}`)}
         </div>
-        <div style={{marginBottom:custPickJustDone||customerSuggestions.length===0?11:0,position:"relative"}}>
+        <div style={{marginBottom:(custPickJustDone||customerSuggestions.length===0||activeField!=="phone")?11:0,position:"relative"}}>
           {lbl("মোবাইল *")}
-          <input type="tel" value={c.phone} onChange={e=>{setC({...c,phone:e.target.value});setCustPickJustDone(false)}} placeholder="01X-XXXXXXXX" style={inp}/>
+          <input type="tel" value={c.phone} onFocus={()=>setActiveField("phone")} onChange={e=>{setC({...c,phone:e.target.value});setCustPickJustDone(false);setActiveField("phone")}} placeholder="01X-XXXXXXXX" style={inp}/>
         </div>
-        {customerSuggestions.length>0&&<div style={{background:"#fffbeb",border:"1.5px solid #fde68a",borderRadius:10,padding:9,marginBottom:11,marginTop:8}}>
+        {activeField==="phone"&&customerSuggestions.length>0&&<div style={{background:"#fffbeb",border:"1.5px solid #fde68a",borderRadius:10,padding:9,marginBottom:11,marginTop:8}}>
           <div style={{fontSize:10,fontWeight:700,color:"#92400e",marginBottom:6}}>👤 আগে অর্ডার করেছেন এমন গ্রাহক পাওয়া গেছে</div>
           {customerSuggestions.map(cust=><div key={cust.phone} onClick={()=>pickCustomer(cust)} style={{background:"white",borderRadius:8,padding:"9px 10px",marginBottom:6,cursor:"pointer",border:"1px solid #fef3c7"}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
@@ -3380,8 +3400,26 @@ function Form({onSave,onBack,db,saveDb,galleries,woodSettings,laborSettings,orde
         </div>}
         <div style={{marginBottom:11,position:"relative"}}>
           {lbl("গ্রাহকের নাম *")}
-          <input type="text" value={c.name} onChange={e=>{setC({...c,name:e.target.value});setCustPickJustDone(false)}} placeholder="পূর্ণ নাম" style={inp}/>
+          <input type="text" value={c.name} onFocus={()=>setActiveField("name")} onChange={e=>{setC({...c,name:e.target.value});setCustPickJustDone(false);setActiveField("name")}} placeholder="পূর্ণ নাম" style={inp}/>
         </div>
+        {activeField==="name"&&customerSuggestions.length>0&&<div style={{background:"#fffbeb",border:"1.5px solid #fde68a",borderRadius:10,padding:9,marginBottom:11,marginTop:-3}}>
+          <div style={{fontSize:10,fontWeight:700,color:"#92400e",marginBottom:6}}>👤 আগে অর্ডার করেছেন এমন গ্রাহক পাওয়া গেছে</div>
+          {customerSuggestions.map(cust=><div key={cust.phone} onClick={()=>pickCustomer(cust)} style={{background:"white",borderRadius:8,padding:"9px 10px",marginBottom:6,cursor:"pointer",border:"1px solid #fef3c7"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <div style={{fontWeight:700,fontSize:13}}>{cust.name} <span style={{fontSize:11,color:"#888",fontWeight:400}}>· {cust.phone}</span></div>
+              <span style={{background:"#92400e",color:"white",fontSize:9,fontWeight:700,borderRadius:12,padding:"2px 8px",flexShrink:0}}>র‍্যাংক #{cust.rank}</span>
+            </div>
+            {cust.address&&<div style={{fontSize:10,color:"#999",marginTop:2}}>📍 {cust.address}</div>}
+            <div style={{marginTop:5,paddingTop:5,borderTop:"1px dashed #f0e0c0"}}>
+              {cust.pastOrders.slice(0,3).map((po,pi)=><div key={pi} style={{fontSize:10,color:"#666",display:"flex",justifyContent:"space-between",marginBottom:1}}>
+                <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:"70%"}}>{fmtDate(po.date)} — {po.items}</span>
+                <strong style={{color:"#166534"}}>{money(po.total)}</strong>
+              </div>)}
+              {cust.pastOrders.length>3&&<div style={{fontSize:9,color:"#aaa"}}>...ও আরও {cust.pastOrders.length-3}টি অর্ডার</div>}
+              <div style={{fontSize:10,fontWeight:700,color:"#92400e",marginTop:3}}>সর্বমোট ক্রয়: {money(cust.totalSpent)}</div>
+            </div>
+          </div>)}
+        </div>}
         <div style={{marginBottom:11}}>
           {lbl("২য় মোবাইল (ঐচ্ছিক)")}
           <input type="tel" value={c.phone2} onChange={e=>setC({...c,phone2:e.target.value})} placeholder="বিকল্প নম্বর, না থাকলে খালি রাখুন" style={inp}/>
