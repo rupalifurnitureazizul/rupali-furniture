@@ -74,7 +74,7 @@ function compressImage(file,maxDim=1200,quality=0.82){
 /* ── FULL-RESOLUTION LOCAL FOLDER STORAGE (desktop Chrome/Edge/Brave only) ──
    Original, uncompressed images are saved as real files in a folder you choose
    on your computer. Only a small compressed thumbnail syncs to the cloud/mobile. */
-const BUILD_TAG="3.02";
+const BUILD_TAG="3.10";
 const FS_SUPPORTED=typeof window!=="undefined"&&"showDirectoryPicker" in window;
 function idbOpen(){
   return new Promise((resolve,reject)=>{
@@ -184,6 +184,15 @@ async function openFullResImageForPrint(relPath){
 
 /* ── CONSTANTS ── */
 const WOOD={S:{bn:"সেগুন",en:"Segun"},M:{bn:"মেহগনি",en:"Mahogany"},A:{bn:"আকাশমণি",en:"Akashmoni"},K:{bn:"কড়ই",en:"Koroi"},E:{bn:"ইউক্যালিপটাস",en:"Eucalyptus"}};
+// কাঠভেদে আলাদা রঙ — র‍্যাক কার্ড চেনার সুবিধার জন্য
+const WOOD_COLORS={
+  M:{bg:"#fdf2f0",border:"#e8b4a8",accent:"#b45309",name:"#9a3412"},
+  S:{bg:"#fefce8",border:"#e8d48b",accent:"#a16207",name:"#854d0e"},
+  A:{bg:"#f0fdf4",border:"#a7d8b8",accent:"#15803d",name:"#166534"},
+  K:{bg:"#eff6ff",border:"#a8c5e8",accent:"#1d4ed8",name:"#1e40af"},
+  E:{bg:"#faf5ff",border:"#cbb4e8",accent:"#7c3aed",name:"#6b21a8"}
+};
+const woodColor=(w)=>WOOD_COLORS[w]||{bg:"#fafafa",border:"#ddd",accent:"#666",name:"#444"};
 const DEPTS=[{id:"carpenter",bn:"ছুতার বিভাগ",payDept:"ছুতার"},{id:"craftsmen",bn:"কারিগর বিভাগ",payDept:"কারিগর"},{id:"burnish",bn:"বার্নিশ বিভাগ",payDept:"বার্নিশ"},{id:"transport",bn:"পরিবহন বিভাগ",payDept:"পরিবহন"}];
 const EXP_CATS=[
   {id:"hardware",bn:"হার্ডওয়্যার",group:"other"},{id:"varnish",bn:"বার্নিশ আইটেম",group:"other"},
@@ -198,20 +207,19 @@ const UNITS=["cft","kg","লিটার","পিস","বস্তা","ফু�
 /* ── HELPERS ── */
 const cft=(pc,h,l,w)=>parseFloat(((pc*h*l*w)/1728).toFixed(4));
 const rackCode=(prefix,w,h)=>{const tm={0.5:"5",1:"1",1.25:"125",1.5:"15",2:"2",2.5:"25",3:"3"};const t=tm[w]||String(Math.round(w*100));return`${prefix}${t}${String(Math.round(h)).padStart(2,"0")}`};
-// ── হাইট ব্যান্ড: ১-২" পার্থক্যে আলাদা র‍্যাক-কোড না হয়ে একটা পরিসর একসাথে ধরার জন্য —
-// প্রতিটা ব্যান্ড হাতে যোগ করা হয় (সর্বনিম্ন-সর্বোচ্চ), কোনো স্বয়ংক্রিয় সূত্র নেই — আপনি
-// যেটা যোগ করবেন সেটাই কার্যকর হবে। Transport Slip ও Usage Analysis দুই জায়গাতেই এই একই
-// ফাংশন ব্যবহার হয়, যাতে কোড সবসময় মিলে যায় ──
-function effectiveHeight(h,woodKey,woodSettings){
-  const ws=(woodSettings&&woodSettings[woodKey])||{};
-  const bands=ws.heightBands||[];
-  const match=bands.find(b=>h>=parseFloat(b.from)&&h<=parseFloat(b.to));
-  if(match)return match.rep!==undefined&&match.rep!==null&&match.rep!==""?parseFloat(match.rep):parseFloat(match.from);
+// ── হাইট ব্যান্ড: প্রতিটা র‍্যাক-কোডের নিজস্ব — অর্থাৎ একই কাঠ ও একই W (চওড়া) এর জন্য
+// আপনি যে রেঞ্জ ঠিক করে দেবেন, সেই রেঞ্জের সব H একটা কোডেই মিশে যাবে। রেঞ্জটা যে কার্ড থেকে
+// দেওয়া হয়, সেই কার্ডের নিজের H-ই কোডে থাকে। Transport Slip ও Usage Analysis দুই জায়গাতেই
+// এই একই ফাংশন ব্যবহার হয়, যাতে কোড সবসময় মিলে যায় ──
+function effectiveHeight(h,woodKey,w,woodSettings){
+  const bands=(woodSettings&&woodSettings.__rackBands)||[];
+  const match=bands.find(b=>b.wood===woodKey&&parseFloat(b.w)===parseFloat(w)&&h>=parseFloat(b.from)&&h<=parseFloat(b.to));
+  if(match)return parseFloat(match.rep);
   return h;
 }
 // একটা নির্দিষ্ট W×H×L এর জন্য আলাদা (বিভক্ত) র‍্যাক অনুমোদিত থাকলে তার নিজস্ব ৩-মাত্রিক কোড, নাহলে স্বাভাবিক ২-মাত্রিক কোড
 function pieceRackInfo(wood,w,h,l,woodSettings,rackSplits){
-  const effH=effectiveHeight(h,wood,woodSettings);
+  const effH=effectiveHeight(h,wood,w,woodSettings);
   const splitMatch=(rackSplits||[]).find(s=>s.wood===wood&&s.w===w&&s.h===effH&&s.l===l);
   if(splitMatch)return{code:splitMatch.code,isSplit:true,w,h:effH,l};
   return{code:rackCode(wood,w,effH),isSplit:false,w,h:effH,l:null};
@@ -1318,6 +1326,7 @@ function App({firebaseConfig,onResetConfig}){
   const[woodSettings,setWoodSettings]=useState({});
   const[laborSettings,setLaborSettings]=useState({});
   const[rackSplits,setRackSplits]=useState([]);
+  const[rackBands,setRackBands]=useState([]);
   const fsRef=useRef(null);
 
   useEffect(()=>{
@@ -1349,8 +1358,11 @@ function App({firebaseConfig,onResetConfig}){
     if(fsRef.current)fsRef.current.collection("galleries").doc(key).set(data).catch(err=>alert("⚠️ ছবি সেভ করতে সমস্যা হয়েছে: "+err.message));
   };
   const saveWoodSettings=(newSettings)=>{
-    setWoodSettings(newSettings);
-    if(fsRef.current)fsRef.current.doc("meta/woodSettings").set(newSettings).catch(err=>alert("⚠️ কাঠের সেটিংস সেভ করতে সমস্যা হয়েছে: "+err.message));
+    // __rackBands শুধু হিসাবের সুবিধার জন্য মেমরিতে যোগ করা হয় — এটা যেন কখনো
+    // woodSettings ডকুমেন্টে সেভ হয়ে না যায়, তাই এখানে বাদ দেওয়া হচ্ছে
+    const{__rackBands,...clean}=newSettings||{};
+    setWoodSettings(clean);
+    if(fsRef.current)fsRef.current.doc("meta/woodSettings").set(clean).catch(err=>alert("⚠️ কাঠের সেটিংস সেভ করতে সমস্যা হয়েছে: "+err.message));
   };
   const saveLaborSettings=(newSettings)=>{
     setLaborSettings(newSettings);
@@ -1359,6 +1371,14 @@ function App({firebaseConfig,onResetConfig}){
   const addRackSplit=(split)=>{
     setRackSplits(prev=>[...prev,split]);
     if(fsRef.current)fsRef.current.doc("meta/rackSplits").set({list:firebase.firestore.FieldValue.arrayUnion(split)},{merge:true}).catch(err=>alert("⚠️ নতুন র‍্যাক সেভ করতে সমস্যা হয়েছে: "+err.message));
+  };
+  const addRackBand=(band)=>{
+    setRackBands(prev=>[...prev,band]);
+    if(fsRef.current)fsRef.current.doc("meta/rackBands").set({list:firebase.firestore.FieldValue.arrayUnion(band)},{merge:true}).catch(err=>alert("⚠️ হাইট ব্যান্ড সেভ করতে সমস্যা হয়েছে: "+err.message));
+  };
+  const removeRackBand=(band)=>{
+    setRackBands(prev=>prev.filter(b=>!(b.wood===band.wood&&b.w===band.w&&b.from===band.from&&b.to===band.to&&b.rep===band.rep)));
+    if(fsRef.current)fsRef.current.doc("meta/rackBands").set({list:firebase.firestore.FieldValue.arrayRemove(band)},{merge:true}).catch(err=>alert("⚠️ ব্যান্ড মুছতে সমস্যা হয়েছে: "+err.message));
   };
   const latestDataRef=useRef({});
   latestDataRef.current={orders,expenses,woodLots,workers,payrollWeeks,db,carpenters,woodSettings,laborSettings};
@@ -1493,6 +1513,10 @@ function App({firebaseConfig,onResetConfig}){
         setLaborSettings(snap.exists?snap.data():{});
       },err=>{});
 
+      const unsubRackBands=firestore.doc("meta/rackBands").onSnapshot(snap=>{
+        setRackBands(snap.exists?(snap.data().list||[]):[]);
+      },err=>{});
+
       const unsubRackSplits=firestore.doc("meta/rackSplits").onSnapshot(snap=>{
         setRackSplits(snap.exists?(snap.data().list||[]):[]);
       },err=>{});
@@ -1524,7 +1548,7 @@ function App({firebaseConfig,onResetConfig}){
         localStorage.setItem("rf_migrated_to_cloud","true");
       })();
 
-      return()=>{clearTimeout(timer);unsubOrders();unsubExpenses();unsubLots();unsubDb();unsubGalleries();unsubWoodSettings();unsubLaborSettings();unsubRackSplits();unsubCarp();unsubWorkers();unsubPayroll()};
+      return()=>{clearTimeout(timer);unsubOrders();unsubExpenses();unsubLots();unsubDb();unsubGalleries();unsubWoodSettings();unsubLaborSettings();unsubRackSplits();unsubRackBands();unsubCarp();unsubWorkers();unsubPayroll()};
     }catch(e){
       clearTimeout(timer);
       setConnError(e.message);
@@ -1675,6 +1699,10 @@ function App({firebaseConfig,onResetConfig}){
     if(fsRef.current)fsRef.current.collection("payrollWeeks").doc(weekEnd).set({advances:firebase.firestore.FieldValue.arrayRemove(adv)},{merge:true}).catch(err=>alert("⚠️ মুছতে সমস্যা হয়েছে: "+err.message));
   };
 
+  // পিস-লেভেল কোড হিসাবের জন্য woodSettings-এর সাথে র‍্যাক ব্যান্ডগুলো একসাথে পাঠানো হয়,
+  // যাতে সব জায়গায় (Transport Slip, Usage Analysis) একই কোড তৈরি হয়
+  const woodSettingsWithBands=useMemo(()=>({...woodSettings,__rackBands:rackBands}),[woodSettings,rackBands]);
+
   if(!db){
     if(connError)return<div style={{padding:30,textAlign:"center",maxWidth:480,margin:"40px auto"}}>
       <div style={{fontSize:9,color:"#ccc",marginBottom:8}}>{BUILD_TAG}</div>
@@ -1698,11 +1726,11 @@ function App({firebaseConfig,onResetConfig}){
     </div>;
     return<div style={{padding:40,textAlign:"center"}}><div style={{fontSize:9,color:"#ccc",marginBottom:10}}>{BUILD_TAG}</div>সিঙ্ক হচ্ছে...</div>;
   }
-  if(page==="preview")return<Preview order={viewed||draft} onBack={goBack} slip={slip} setSlip={setSlip} onUpdate={updateOrder} onAddPayment={addOrderPayment} onSetDelivered={setOrderDelivered} onDelete={deleteOrderPermanently} db={db} saveDb={saveDb} carpenters={carpenters} saveCarpenters={saveCarpenters} galleries={galleries} saveGalleryEntry={saveGalleryEntry} woodSettings={woodSettings} laborSettings={laborSettings} workers={workers} allOrders={orders} rackSplits={rackSplits}/>;
+  if(page==="preview")return<Preview order={viewed||draft} onBack={goBack} slip={slip} setSlip={setSlip} onUpdate={updateOrder} onAddPayment={addOrderPayment} onSetDelivered={setOrderDelivered} onDelete={deleteOrderPermanently} db={db} saveDb={saveDb} carpenters={carpenters} saveCarpenters={saveCarpenters} galleries={galleries} saveGalleryEntry={saveGalleryEntry} woodSettings={woodSettingsWithBands} laborSettings={laborSettings} workers={workers} allOrders={orders} rackSplits={rackSplits}/>;
   if(page==="form")return<Form onSave={saveOrder} onBack={goBack} db={db} saveDb={saveDb} galleries={galleries} woodSettings={woodSettings} laborSettings={laborSettings} orders={orders} getNextOrderNumber={getNextOrderNumber}/>;
   if(page==="history")return<Hist orders={orders} onBack={goBack} onView={o=>navigate({page:"preview",orderNo:o.no,slip:0})} highlightNo={highlightNo}/>;
   if(page==="manage")return<ManageDB db={db} saveDb={saveDb} galleries={galleries} saveGalleryEntry={saveGalleryEntry} onBack={goBack}/>;
-  if(page==="woodstock")return<WoodStockPage woodLots={woodLots} saveWoodLots={saveWoodLots} addLotPayment={addLotPayment} woodSettings={woodSettings} saveWoodSettings={saveWoodSettings} laborSettings={laborSettings} saveLaborSettings={saveLaborSettings} rackSplits={rackSplits} addRackSplit={addRackSplit} payrollWeeks={payrollWeeks} workers={workers} orders={orders} onBack={goBack} view={curScreen.view||"list"} lotId={curScreen.lotId||null} onOpenList={()=>navigate({page:"woodstock",view:"list"})} onOpenDetail={lotId=>navigate({page:"woodstock",view:"detail",lotId})} onOpenNew={()=>navigate({page:"woodstock",view:"new"})} onOpenRates={()=>navigate({page:"woodstock",view:"rates"})} onOpenUsage={()=>navigate({page:"woodstock",view:"usage"})} highlightNo={highlightNo}/>;
+  if(page==="woodstock")return<WoodStockPage woodLots={woodLots} saveWoodLots={saveWoodLots} addLotPayment={addLotPayment} woodSettings={woodSettingsWithBands} saveWoodSettings={saveWoodSettings} laborSettings={laborSettings} saveLaborSettings={saveLaborSettings} rackSplits={rackSplits} addRackSplit={addRackSplit} rackBands={rackBands} addRackBand={addRackBand} removeRackBand={removeRackBand} payrollWeeks={payrollWeeks} workers={workers} orders={orders} onBack={goBack} view={curScreen.view||"list"} lotId={curScreen.lotId||null} onOpenList={()=>navigate({page:"woodstock",view:"list"})} onOpenDetail={lotId=>navigate({page:"woodstock",view:"detail",lotId})} onOpenNew={()=>navigate({page:"woodstock",view:"new"})} onOpenRates={()=>navigate({page:"woodstock",view:"rates"})} onOpenUsage={()=>navigate({page:"woodstock",view:"usage"})} highlightNo={highlightNo}/>;
   if(page==="expense")return<ExpensePage expenses={expenses} onSave={saveExpense} onBack={goBack}/>;
   if(page==="payroll")return<PayrollPage workers={workers} saveWorker={saveWorker} deleteWorker={deleteWorker} payrollWeeks={payrollWeeks} savePayrollWeek={savePayrollWeek} updateAttendance={updateAttendance} addAdvanceEntry={addAdvanceEntry} removeAdvanceEntry={removeAdvanceEntry} onBack={goBack}/>;
   if(page==="plreport")return<PLReportPage orders={orders} expenses={expenses} workers={workers} payrollWeeks={payrollWeeks} woodLots={woodLots} woodSettings={woodSettings} laborSettings={laborSettings} onBack={goBack}/>;
@@ -2182,7 +2210,7 @@ function ExpensePage({expenses,onSave,onBack}){
 }
 
 /* ── WOOD STOCK PAGE ── */
-function WoodStockPage({woodLots,saveWoodLots,addLotPayment,woodSettings,saveWoodSettings,laborSettings,saveLaborSettings,rackSplits,addRackSplit,payrollWeeks,workers,orders,onBack,view,lotId,onOpenList,onOpenDetail,onOpenNew,onOpenRates,onOpenUsage,highlightNo}){
+function WoodStockPage({woodLots,saveWoodLots,addLotPayment,woodSettings,saveWoodSettings,laborSettings,saveLaborSettings,rackSplits,addRackSplit,rackBands,addRackBand,removeRackBand,payrollWeeks,workers,orders,onBack,view,lotId,onOpenList,onOpenDetail,onOpenNew,onOpenRates,onOpenUsage,highlightNo}){
   const today=todayStr();
   const setView=(v)=>{if(v==="list")onOpenList();else if(v==="new")onOpenNew();else if(v==="rates")onOpenRates();else if(v==="usage")onOpenUsage()}; // পুরনো কল-সাইটের সাথে সামঞ্জস্যের জন্য
   const setSelLotId=(id)=>onOpenDetail(id);
@@ -2201,7 +2229,7 @@ function WoodStockPage({woodLots,saveWoodLots,addLotPayment,woodSettings,saveWoo
   const[expandedCode,setExpandedCode]=useState(null);
   const[totalRacksInput,setTotalRacksInput]=useState("");
   const[rackCapacityInput,setRackCapacityInput]=useState("30");
-  const[showBandSettings,setShowBandSettings]=useState(false);
+  const[editingBandFor,setEditingBandFor]=useState(null);
   const[laborRateDraft,setLaborRateDraft]=useState({from:"",rate:""});
   const inp={width:"100%",border:"1.5px solid #e0e0e0",borderRadius:9,padding:"10px 11px",fontSize:13,outline:"none"};
   const lbl=(t)=><div style={{fontSize:11,fontWeight:600,color:"#555",marginBottom:4}}>{t}</div>;
@@ -2513,6 +2541,26 @@ function WoodStockPage({woodLots,saveWoodLots,addLotPayment,woodSettings,saveWoo
         const totalSuggestedRacks=Object.values(rackAllocation).reduce((a,b)=>a+b,0);
         const currentRacksNum=parseInt(totalRacksInput)||0;
 
+        // ── ব্যান্ড না থাকলে কত র‍্যাক লাগত (সাশ্রয় দেখানোর জন্য) ও প্রতি কোডে কোন কোন আসল H মিশেছে ──
+        const unbandedGroups={},bandedRawH={};
+        orders.filter(o=>!o.cancelled&&o.cust.date>=curStart&&o.cust.date<today).forEach(o=>{
+          (o.items||[]).forEach(it=>{
+            (it.sections||[]).forEach(sec=>{
+              (sec.pieces||[]).forEach(p=>{
+                const pw=pieceWoodType(p,it.wood);
+                const cv=cft((p.pc||0)*(it.qty||1),p.h,p.l,p.w);
+                const rawCode=rackCode(pw,p.w,p.h);
+                unbandedGroups[rawCode]=(unbandedGroups[rawCode]||0)+cv;
+                const bandedCode=pieceRackInfo(pw,p.w,p.h,p.l,woodSettings,rackSplits).code;
+                if(!bandedRawH[bandedCode])bandedRawH[bandedCode]={};
+                bandedRawH[bandedCode][p.h]=(bandedRawH[bandedCode][p.h]||0)+cv;
+              });
+            });
+          });
+        });
+        const unbandedRackTotal=Object.values(unbandedGroups).reduce((s,cv)=>s+Math.max(1,Math.ceil(cv/rackCapacity)),0);
+        const racksSaved=unbandedRackTotal-totalSuggestedRacks;
+
         const periodLabel=`${monthName(parseISO(curStart).getUTCMonth())} ${parseISO(curStart).getUTCFullYear()} – ${monthName(parseISO(today).getUTCMonth())} ${parseISO(today).getUTCFullYear()}`;
 
         const copyList=()=>{
@@ -2545,48 +2593,6 @@ function WoodStockPage({woodLots,saveWoodLots,addLotPayment,woodSettings,saveWoo
               <button onClick={()=>setUsageWoodFilter("all")} style={{background:usageWoodFilter==="all"?"#7c2d12":"#f5f0ee",color:usageWoodFilter==="all"?"white":"#7c2d12",border:"none",borderRadius:20,padding:"6px 13px",fontSize:11,fontWeight:700}}>সব</button>
               {Object.entries(WOOD).map(([k,w])=><button key={k} onClick={()=>setUsageWoodFilter(k)} style={{background:usageWoodFilter===k?"#7c2d12":"#f5f0ee",color:usageWoodFilter===k?"white":"#7c2d12",border:"none",borderRadius:20,padding:"6px 13px",fontSize:11,fontWeight:700}}>{w.bn}</button>)}
             </div>
-            <div style={{fontSize:11,fontWeight:700,color:"#7c2d12",marginBottom:6,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-              <span>📏 হাইট ব্যান্ড (একই র‍্যাকে কোন হাইট থেকে কোন হাইট)</span>
-              <button onClick={()=>setShowBandSettings(!showBandSettings)} style={{background:"none",border:"none",color:"#1d4ed8",fontSize:10.5,fontWeight:700}}>{showBandSettings?"লুকান":"দেখুন/বদলান"}</button>
-            </div>
-            {showBandSettings&&<div style={{marginBottom:12}}>
-              <div style={{fontSize:9,color:"#999",marginBottom:8,lineHeight:1.5}}>একটা সর্বনিম্ন ও সর্বোচ্চ মাপ দিন — আপনার আসল অর্ডার-ডেটায় যে যে H (হাইট) সেই রেঞ্জে পড়ে তা সাথে সাথে নিচে দেখাবে, যাতে যোগ করার আগেই যাচাই করে নিতে পারেন। যোগ করার পর সেই রেঞ্জের সব H একই র‍্যাক-কোডে গণনা হবে (রেঞ্জের সর্বনিম্ন সংখ্যাটাই কোডে বসবে, চাইলে অন্য সংখ্যাও বসাতে পারেন)।</div>
-              {Object.entries(WOOD).map(([wKey,wInfo])=>{
-                const ws=(woodSettings&&woodSettings[wKey])||{};
-                const draft=bandDraft[wKey]||{};
-                const rawH=rawHByWood[wKey]||{};
-                const previewMatches=(draft.from!==undefined&&draft.from!==""&&draft.to!==undefined&&draft.to!=="")?
-                  Object.entries(rawH).filter(([h])=>parseFloat(h)>=parseFloat(draft.from)&&parseFloat(h)<=parseFloat(draft.to)).sort((a,b)=>parseFloat(a[0])-parseFloat(b[0])):[];
-                const previewTotalCft=previewMatches.reduce((s,[,c])=>s+c,0);
-                return<div key={wKey} style={{background:"#f9f5f3",borderRadius:8,padding:"9px 10px",marginBottom:8}}>
-                  <div style={{fontSize:11,fontWeight:700,marginBottom:6}}>{wInfo.bn}</div>
-                  {(ws.heightBands||[]).length>0&&<div style={{marginBottom:8}}>
-                    {(ws.heightBands||[]).map((b,bi)=><div key={bi} style={{display:"flex",alignItems:"center",gap:5,fontSize:10,marginBottom:4}}>
-                      <span style={{flex:1}}>{b.from}″–{b.to}″ → কোডে {b.rep??b.from}″</span>
-                      <button onClick={()=>{const nb=(ws.heightBands||[]).filter((_,j)=>j!==bi);saveWoodSettings({...woodSettings,[wKey]:{...ws,heightBands:nb}})}} style={{background:"#fee2e2",border:"none",borderRadius:5,padding:"2px 6px",color:RED,fontSize:9}}>✕</button>
-                    </div>)}
-                  </div>}
-                  <div style={{display:"flex",gap:4,alignItems:"flex-end",marginBottom:6}}>
-                    <div style={{flex:1}}><div style={{fontSize:8,color:"#888",marginBottom:2}}>সর্বনিম্ন (″)</div><input type="number" value={draft.from||""} onChange={e=>setBandDraft({...bandDraft,[wKey]:{...draft,from:e.target.value}})} placeholder="60" style={{width:"100%",border:"1px solid #ddd",borderRadius:6,padding:"7px 6px",fontSize:11,boxSizing:"border-box",outline:"none"}}/></div>
-                    <div style={{flex:1}}><div style={{fontSize:8,color:"#888",marginBottom:2}}>সর্বোচ্চ (″)</div><input type="number" value={draft.to||""} onChange={e=>setBandDraft({...bandDraft,[wKey]:{...draft,to:e.target.value}})} placeholder="65" style={{width:"100%",border:"1px solid #ddd",borderRadius:6,padding:"7px 6px",fontSize:11,boxSizing:"border-box",outline:"none"}}/></div>
-                    <div style={{flex:1}}><div style={{fontSize:8,color:"#888",marginBottom:2}}>কোডে (ঐচ্ছিক)</div><input type="number" value={draft.rep||""} onChange={e=>setBandDraft({...bandDraft,[wKey]:{...draft,rep:e.target.value}})} placeholder={draft.from||"সর্বনিম্ন"} style={{width:"100%",border:"1px solid #ddd",borderRadius:6,padding:"7px 6px",fontSize:11,boxSizing:"border-box",outline:"none"}}/></div>
-                    <button onClick={()=>{
-                      if(!draft.from||!draft.to)return;
-                      const nb=[...(ws.heightBands||[]),{from:parseFloat(draft.from),to:parseFloat(draft.to),rep:draft.rep?parseFloat(draft.rep):null}];
-                      saveWoodSettings({...woodSettings,[wKey]:{...ws,heightBands:nb}});
-                      setBandDraft({...bandDraft,[wKey]:{from:"",to:"",rep:""}});
-                    }} style={{background:"#7c2d12",color:"white",border:"none",borderRadius:6,padding:"9px 12px",fontSize:10,fontWeight:700,flexShrink:0}}>+ যোগ</button>
-                  </div>
-                  {(draft.from!==undefined&&draft.from!==""&&draft.to!==undefined&&draft.to!=="")&&<div style={{background:"white",borderRadius:6,padding:"7px 9px",fontSize:9,color:"#555"}}>
-                    {previewMatches.length===0?"এই রেঞ্জে আপনার সাম্প্রতিক অর্ডারে কোনো H পাওয়া যায়নি":<>
-                      <span style={{fontWeight:700,color:"#166534"}}>এই রেঞ্জে পড়বে: </span>
-                      {previewMatches.map(([h,c])=>`${h}″ (${c.toFixed(2)} CFT)`).join(", ")}
-                      <span style={{fontWeight:700}}> — মোট {previewTotalCft.toFixed(2)} CFT</span>
-                    </>}
-                  </div>}
-                </div>
-              })}
-            </div>}
             <div style={{fontSize:11,fontWeight:700,color:"#7c2d12",marginBottom:4}}>একটা র‍্যাকে গড়ে কত CFT আঁটে?</div>
             <div style={{fontSize:9,color:"#999",marginBottom:6,lineHeight:1.4}}>এই ধারণক্ষমতা ধরে প্রতিটা মাপের CFT ভাগ করে কতগুলো র‍্যাক দরকার তা নিচে দেখাবে (যেকোনো ব্যবহারই ন্যূনতম ১টা র‍্যাক ধরা হয়)।</div>
             <input type="number" value={rackCapacityInput} onChange={e=>setRackCapacityInput(e.target.value)} placeholder="30" style={{width:"100%",border:"1.5px solid #e0e0e0",borderRadius:9,padding:"10px 11px",fontSize:14,outline:"none",marginBottom:12,boxSizing:"border-box"}}/>
@@ -2595,6 +2601,14 @@ function WoodStockPage({woodLots,saveWoodLots,addLotPayment,woodSettings,saveWoo
             {codeList.length>0&&<div style={{fontSize:10,marginTop:6,marginBottom:12,padding:"7px 9px",background:"#f9f5f3",borderRadius:7}}>
               <span style={{color:"#7c2d12",fontWeight:700}}>প্রস্তাবিত মোট র‍্যাক: {totalSuggestedRacks}টি</span>
               {currentRacksNum>0&&<span style={{color:totalSuggestedRacks>currentRacksNum?RED:"#166534",marginLeft:6}}>({totalSuggestedRacks>currentRacksNum?`আরও ${totalSuggestedRacks-currentRacksNum}টি দরকার`:totalSuggestedRacks<currentRacksNum?`${currentRacksNum-totalSuggestedRacks}টি বেশি আছে`:"ঠিক আছে"})</span>}
+              {racksSaved>0&&<div style={{color:"#166534",fontWeight:700,marginTop:3}}>✅ হাইট ব্যান্ড ছাড়া লাগত {unbandedRackTotal}টি — {racksSaved}টি সাশ্রয় হয়েছে</div>}
+            </div>}
+            {(rackBands||[]).length>0&&<div style={{marginBottom:12,background:"#eff6ff",border:"1px solid #bfdbfe",borderRadius:8,padding:"8px 10px"}}>
+              <div style={{fontSize:10,fontWeight:700,color:"#1d4ed8",marginBottom:5}}>📏 চালু হাইট ব্যান্ড ({rackBands.length}টি)</div>
+              {rackBands.map((b,bi)=><div key={bi} style={{display:"flex",alignItems:"center",gap:5,fontSize:10,marginBottom:3}}>
+                <span style={{flex:1,color:"#1e40af"}}>{WOOD[b.wood]?.bn} {b.w}″ → {b.from}″–{b.to}″ একসাথে (কোডে {b.rep}″)</span>
+                <button onClick={()=>removeRackBand(b)} style={{background:"#fee2e2",border:"none",borderRadius:5,padding:"2px 6px",color:RED,fontSize:9}}>✕</button>
+              </div>)}
             </div>}
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
               <button onClick={()=>window.print()} style={{background:"#7c2d12",color:"white",border:"none",borderRadius:9,padding:"11px",fontSize:12,fontWeight:700}}>🖨️ প্রিন্ট করুন</button>
@@ -2630,28 +2644,62 @@ function WoodStockPage({woodLots,saveWoodLots,addLotPayment,woodSettings,saveWoo
             const suggested=rackAllocation[c.code];
             const isExpanded=expandedCode===c.code;
             const lengthEntries=Object.entries(c.byLength).map(([len,d])=>({len,pieces:d.pieces,cft:d.cft,pct:c.cft>0?(d.cft/c.cft)*100:0})).sort((a,b)=>b.cft-a.cft);
-            const BAR_COLORS=["#7c2d12","#0d9488","#b45309","#7c3aed","#94a3b8"];
+            const BAR_COLORS=["#ea7317","#0d9488","#eab308","#7c3aed","#94a3b8"];
             const top4=lengthEntries.slice(0,4);
             const otherPct=Math.max(0,100-top4.reduce((s,t)=>s+t.pct,0));
-            const domL=lengthEntries[0]; // সবচেয়ে বেশি ব্যবহৃত ওসার (L)
+            const domL=lengthEntries[0];
             const showSplitSuggestion=!c.isSplit&&domL&&domL.pct>=60&&lengthEntries.length>1;
+            const wc=woodColor(c.wood);
             const approveSplit=(e)=>{
               e.stopPropagation();
               const newCode=rackCode3D(c.wood,c.w,c.h,parseFloat(domL.len));
               if(!window.confirm(`"${newCode}" কোডে ${c.w}″×${c.h}″×${domL.len}″ মাপের জন্য আলাদা নতুন র‍্যাক তৈরি করতে চান?`))return;
               addRackSplit({wood:c.wood,w:c.w,h:c.h,l:parseFloat(domL.len),code:newCode,createdAt:new Date().toISOString()});
             };
-            return<div key={c.code} style={{background:isHigh?"#fff7ed":"white",border:isHigh?"1.5px solid #fb923c":"1px solid #f0f0f0",borderRadius:10,padding:"10px 12px",marginBottom:8,cursor:"pointer"}} onClick={()=>setExpandedCode(isExpanded?null:c.code)}>
+            // এই কোডে কোন ব্যান্ড চালু আছে কিনা
+            const myBand=(rackBands||[]).find(b=>b.wood===c.wood&&parseFloat(b.w)===parseFloat(c.w)&&parseFloat(b.rep)===parseFloat(c.h));
+            // এই কোডে যেসব আসল H মিশেছে
+            const mergedH=Object.entries(bandedRawH[c.code]||{}).map(([h,cv])=>({h:parseFloat(h),cft:cv})).sort((a,b)=>a.h-b.h);
+            // কাছাকাছি (একই কাঠ ও একই W, ৫″ এর মধ্যে) অন্য কোডগুলো
+            const nearby=codeList.filter(o=>o.code!==c.code&&o.wood===c.wood&&parseFloat(o.w)===parseFloat(c.w)&&Math.abs(o.h-c.h)<=5).sort((a,b)=>a.h-b.h);
+            const isEditingBand=editingBandFor===c.code;
+            const bd=bandDraft[c.code]||{};
+            // টাইপ করার সাথে সাথে যাচাই: সংঘর্ষ ও কী কী মিশবে
+            let bandConflict=null,bandPreview=null;
+            if(bd.from!==undefined&&bd.from!==""&&bd.to!==undefined&&bd.to!==""){
+              const f=parseFloat(bd.from),t=parseFloat(bd.to);
+              if(f>t)bandConflict="সর্বনিম্ন মাপ সর্বোচ্চের চেয়ে বড় হতে পারে না";
+              else if(c.h<f||c.h>t)bandConflict=`এই কার্ডের নিজের হাইট (${c.h}″) রেঞ্জের বাইরে — রেঞ্জে ${c.h}″ থাকতে হবে`;
+              else{
+                const clash=(rackBands||[]).find(b=>b.wood===c.wood&&parseFloat(b.w)===parseFloat(c.w)&&parseFloat(b.rep)!==parseFloat(c.h)&&!(t<parseFloat(b.from)||f>parseFloat(b.to)));
+                if(clash)bandConflict=`সংঘর্ষ: ${clash.from}″–${clash.to}″ ব্যান্ড (কোড ${rackCode(c.wood,c.w,clash.rep)}) এর সাথে মিলে যাচ্ছে`;
+                else{
+                  const willMerge=codeList.filter(o=>o.wood===c.wood&&parseFloat(o.w)===parseFloat(c.w)&&o.h>=f&&o.h<=t);
+                  const mergedCft=willMerge.reduce((s,o)=>s+o.cft,0);
+                  bandPreview={list:willMerge,cft:mergedCft,racks:Math.max(1,Math.ceil(mergedCft/rackCapacity))};
+                }
+              }
+            }
+            const saveBand=(e)=>{
+              e.stopPropagation();
+              if(bandConflict||!bandPreview)return;
+              addRackBand({wood:c.wood,w:parseFloat(c.w),from:parseFloat(bd.from),to:parseFloat(bd.to),rep:parseFloat(c.h)});
+              setBandDraft({...bandDraft,[c.code]:{from:"",to:""}});
+              setEditingBandFor(null);
+            };
+            return<div key={c.code} style={{background:isHigh?wc.bg:"white",border:`1.5px solid ${isHigh?wc.accent:wc.border}`,borderRadius:10,padding:"10px 12px",marginBottom:8,cursor:"pointer"}} onClick={()=>setExpandedCode(isExpanded?null:c.code)}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
                 <div style={{flex:1,minWidth:0}}>
                   <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
-                    <span style={{fontFamily:"monospace",fontWeight:800,fontSize:13,color:"#7c2d12",background:"#f5f0ee",borderRadius:5,padding:"1px 7px"}}>{c.code}</span>
-                    <span style={{fontSize:12,fontWeight:700}}>{WOOD[c.wood]?.bn} · {c.w}″×{c.h}″{c.isSplit&&`×${c.l}″`}</span>
-                    {isHigh&&<span style={{fontSize:9,background:"#fb923c",color:"white",borderRadius:8,padding:"1px 6px",fontWeight:700}}>বেশি ব্যবহার</span>}
-                    {c.isSplit&&<span style={{fontSize:9,background:"#1d4ed8",color:"white",borderRadius:8,padding:"1px 6px",fontWeight:700}}>নতুন (বিভক্ত)</span>}
+                    <span style={{fontFamily:"monospace",fontWeight:800,fontSize:13,color:wc.name,background:wc.bg,border:`1px solid ${wc.border}`,borderRadius:5,padding:"1px 7px"}}>{c.code}</span>
+                    <span style={{fontSize:12,fontWeight:700,color:wc.name}}>{WOOD[c.wood]?.bn} · {c.w}″×{c.h}″{c.isSplit&&`×${c.l}″`}</span>
+                    {myBand&&<span style={{fontSize:9,background:"#1d4ed8",color:"white",borderRadius:8,padding:"1px 6px",fontWeight:700}}>{myBand.from}″–{myBand.to}″ একসাথে</span>}
+                    {isHigh&&<span style={{fontSize:9,background:wc.accent,color:"white",borderRadius:8,padding:"1px 6px",fontWeight:700}}>বেশি ব্যবহার</span>}
+                    {c.isSplit&&<span style={{fontSize:9,background:"#0d9488",color:"white",borderRadius:8,padding:"1px 6px",fontWeight:700}}>বিভক্ত</span>}
                   </div>
                   <div style={{fontSize:10,color:"#999",marginTop:2}}>{c.name} · {c.pieces} পিস · মাসিক গড় {avgMonth.toFixed(2)} CFT</div>
-                  {suggested!==undefined&&<div style={{fontSize:10,color:"#7c2d12",fontWeight:700,marginTop:2}}>🗄️ প্রস্তাবিত র‍্যাক: {suggested}টি</div>}
+                  {suggested!==undefined&&<div style={{fontSize:10,color:wc.accent,fontWeight:700,marginTop:2}}>🗄️ প্রস্তাবিত র‍্যাক: {suggested}টি</div>}
+                  {!myBand&&nearby.length>0&&<div style={{fontSize:9,color:"#1d4ed8",marginTop:2}}>💡 কাছাকাছি: {nearby.map(n=>`${n.code} (${n.h}″)`).join(", ")}</div>}
                 </div>
                 <div style={{textAlign:"right",flexShrink:0,marginLeft:8}}>
                   <div style={{fontWeight:800,fontSize:13}}>{c.cft.toFixed(2)} CFT</div>
@@ -2670,12 +2718,38 @@ function WoodStockPage({woodLots,saveWoodLots,addLotPayment,woodSettings,saveWoo
                   {otherPct>0&&<span style={{fontSize:8,color:"#666",display:"flex",alignItems:"center",gap:3}}><span style={{width:7,height:7,borderRadius:"50%",background:BAR_COLORS[4],display:"inline-block"}}></span>অন্যান্য {otherPct.toFixed(0)}%</span>}
                 </div>
               </div>}
-              {showSplitSuggestion&&<div className="no-print" style={{marginTop:8,display:"flex",alignItems:"center",gap:8}} onClick={e=>e.stopPropagation()}>
-                <button onClick={approveSplit} style={{background:"#eff6ff",color:"#1d4ed8",border:"1px solid #bfdbfe",borderRadius:7,padding:"5px 11px",fontSize:10,fontWeight:700,flexShrink:0}}>+ আলাদা র‍্যাক করুন</button>
-                <span style={{fontSize:8,color:"#999",lineHeight:1.4}}>{domL.pct.toFixed(0)}%-ই {domL.len}″ ওসার — চাইলে এটার জন্য আলাদা র‍্যাক তৈরি হবে</span>
+              <div className="no-print" style={{marginTop:8,display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}} onClick={e=>e.stopPropagation()}>
+                {!c.isSplit&&(myBand?
+                  <button onClick={()=>removeRackBand(myBand)} style={{background:"#fef2f2",color:RED,border:"1px solid #fecaca",borderRadius:7,padding:"5px 11px",fontSize:10,fontWeight:700}}>✕ ব্যান্ড তুলে দিন</button>:
+                  <button onClick={()=>setEditingBandFor(isEditingBand?null:c.code)} style={{background:"#eff6ff",color:"#1d4ed8",border:"1px solid #bfdbfe",borderRadius:7,padding:"5px 11px",fontSize:10,fontWeight:700}}>{isEditingBand?"বন্ধ করুন":"📏 হাইট রেঞ্জ"}</button>
+                )}
+                {showSplitSuggestion&&<>
+                  <button onClick={approveSplit} style={{background:"#f0fdfa",color:"#0d9488",border:"1px solid #99f6e4",borderRadius:7,padding:"5px 11px",fontSize:10,fontWeight:700}}>+ আলাদা র‍্যাক করুন</button>
+                  <span style={{fontSize:8,color:"#999",lineHeight:1.4}}>{domL.pct.toFixed(0)}%-ই {domL.len}″ ওসার</span>
+                </>}
+              </div>
+              {isEditingBand&&!myBand&&<div className="no-print" style={{marginTop:8,background:"#eff6ff",border:"1px solid #bfdbfe",borderRadius:8,padding:"9px 10px"}} onClick={e=>e.stopPropagation()}>
+                <div style={{fontSize:9,color:"#3b5a9a",marginBottom:7,lineHeight:1.5}}>এই কোডে ({WOOD[c.wood]?.bn}, {c.w}″ চওড়া) কোন হাইট থেকে কোন হাইট পর্যন্ত একসাথে রাখবেন? রেঞ্জের মধ্যে এই কার্ডের নিজের {c.h}″ থাকতে হবে — কোডে {c.h}″-ই থাকবে।</div>
+                <div style={{display:"flex",gap:5,alignItems:"flex-end"}}>
+                  <div style={{flex:1}}><div style={{fontSize:8,color:"#3b5a9a",marginBottom:2}}>সর্বনিম্ন (″)</div><input type="number" value={bd.from||""} onChange={e=>setBandDraft({...bandDraft,[c.code]:{...bd,from:e.target.value}})} placeholder={String(c.h-3)} style={{width:"100%",border:"1px solid #bfdbfe",borderRadius:6,padding:"7px 6px",fontSize:11,boxSizing:"border-box",outline:"none"}}/></div>
+                  <div style={{flex:1}}><div style={{fontSize:8,color:"#3b5a9a",marginBottom:2}}>সর্বোচ্চ (″)</div><input type="number" value={bd.to||""} onChange={e=>setBandDraft({...bandDraft,[c.code]:{...bd,to:e.target.value}})} placeholder={String(c.h+3)} style={{width:"100%",border:"1px solid #bfdbfe",borderRadius:6,padding:"7px 6px",fontSize:11,boxSizing:"border-box",outline:"none"}}/></div>
+                  <button onClick={saveBand} disabled={!!bandConflict||!bandPreview} style={{background:(bandConflict||!bandPreview)?"#ccc":"#1d4ed8",color:"white",border:"none",borderRadius:6,padding:"9px 12px",fontSize:10,fontWeight:700,flexShrink:0}}>✓ সেট করুন</button>
+                </div>
+                {bandConflict&&<div style={{marginTop:6,background:"#fef2f2",border:"1px solid #fecaca",borderRadius:6,padding:"6px 8px",fontSize:9,color:RED,fontWeight:600}}>⚠️ {bandConflict}</div>}
+                {bandPreview&&<div style={{marginTop:6,background:"white",borderRadius:6,padding:"7px 9px",fontSize:9,color:"#555"}}>
+                  <span style={{fontWeight:700,color:"#166534"}}>মিশে যাবে: </span>
+                  {bandPreview.list.map(o=>`${o.code} (${o.h}″, ${o.cft.toFixed(2)} CFT)`).join(", ")}
+                  <div style={{fontWeight:700,marginTop:3}}>→ নতুন মোট {bandPreview.cft.toFixed(2)} CFT, র‍্যাক {bandPreview.racks}টি {bandPreview.list.length>1&&<span style={{color:"#166534"}}>({bandPreview.list.reduce((s,o)=>s+Math.max(1,Math.ceil(o.cft/rackCapacity)),0)-bandPreview.racks}টি সাশ্রয়)</span>}</div>
+                </div>}
               </div>}
               {isExpanded&&<div className="no-print" style={{marginTop:9,paddingTop:9,borderTop:"1px dashed #ddd"}} onClick={e=>e.stopPropagation()}>
-                <div style={{fontSize:10,fontWeight:700,color:"#7c2d12",marginBottom:5}}>ওসার (L) অনুযায়ী সম্পূর্ণ ভাঙন — স'মিলে কাটানোর জন্য</div>
+                {myBand&&mergedH.length>1&&<div style={{marginBottom:9}}>
+                  <div style={{fontSize:10,fontWeight:700,color:"#1d4ed8",marginBottom:5}}>এই কোডে যেসব হাইট মিশেছে</div>
+                  {mergedH.map(m=><div key={m.h} style={{display:"flex",justifyContent:"space-between",fontSize:11,padding:"3px 0"}}>
+                    <span>{m.h}″ হাইট</span><span style={{fontWeight:700}}>{m.cft.toFixed(2)} CFT</span>
+                  </div>)}
+                </div>}
+                <div style={{fontSize:10,fontWeight:700,color:wc.accent,marginBottom:5}}>ওসার (L) অনুযায়ী সম্পূর্ণ ভাঙন — স'মিলে কাটানোর জন্য</div>
                 {lengthEntries.map(en=><div key={en.len} style={{display:"flex",justifyContent:"space-between",fontSize:11,padding:"3px 0"}}>
                   <span>{en.len}″ ওসার</span><span style={{fontWeight:700}}>{en.pieces} পিস · {en.cft.toFixed(2)} CFT ({en.pct.toFixed(0)}%)</span>
                 </div>)}
