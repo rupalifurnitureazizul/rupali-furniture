@@ -74,7 +74,7 @@ function compressImage(file,maxDim=1200,quality=0.82){
 /* ── FULL-RESOLUTION LOCAL FOLDER STORAGE (desktop Chrome/Edge/Brave only) ──
    Original, uncompressed images are saved as real files in a folder you choose
    on your computer. Only a small compressed thumbnail syncs to the cloud/mobile. */
-const BUILD_TAG="3.10";
+const BUILD_TAG="3.20";
 const FS_SUPPORTED=typeof window!=="undefined"&&"showDirectoryPicker" in window;
 function idbOpen(){
   return new Promise((resolve,reject)=>{
@@ -272,10 +272,10 @@ function itemWoodRate(item,order,woodSettings){
 }
 // একটা নির্দিষ্ট পিস কোন কাঠের হিসেবে গণ্য হবে — পিসে আলাদা কাঠ বাঁধা (override) থাকলে সেটাই,
 // নাহলে অর্ডারে বাছাই করা প্রধান কাঠ ──
-const pieceWoodType=(p,itemWood)=>p.woodOverride||itemWood;
+const pieceWoodType=(p,sec,itemWood)=>(p&&p.woodOverride)||(sec&&sec.woodOverride)||itemWood;
 // পিস-ভিত্তিক কাঠের দাম — override থাকলে সেই কাঠের স্ন্যাপশট/দাম, নাহলে আইটেমের সাধারণ দাম
-function pieceWoodRate(p,item,order,woodSettings){
-  const pw=pieceWoodType(p,item.wood);
+function pieceWoodRate(p,sec,item,order,woodSettings){
+  const pw=pieceWoodType(p,sec,item.wood);
   if(pw===item.wood)return itemWoodRate(item,order,woodSettings); // মূল কাঠ হলে আগের মতোই
   if(item.woodRateSnapshots&&parseFloat(item.woodRateSnapshots[pw])>0)return parseFloat(item.woodRateSnapshots[pw]);
   return woodRateOn(woodSettings,pw,order&&order.cust?order.cust.date:null);
@@ -285,7 +285,7 @@ function itemWoodCost(item,order,woodSettings){
   let total=0;
   (item.sections||[]).forEach(sec=>{
     (sec.pieces||[]).forEach(p=>{
-      const rate=pieceWoodRate(p,item,order,woodSettings);
+      const rate=pieceWoodRate(p,sec,item,order,woodSettings);
       total+=cft(p.pc,p.h,p.l,p.w)*(item.qty||1)*rate;
     });
   });
@@ -968,8 +968,15 @@ function S4({order,onPrint,db,saveDb,onUpdateOrder}){
               <button onClick={saveEditedItem} style={{flex:2,background:"#92400e",color:"white",border:"none",borderRadius:6,padding:"7px",fontSize:10,fontWeight:700}}>নতুন কোডে সংরক্ষণ করুন</button>
             </div>
           </>:it.sections.map((sec,j)=><div key={j} style={{marginBottom:7}}>
-            <div style={{fontWeight:700,fontSize:9,color:"#92400e",borderBottom:"1px solid #fde68a",paddingBottom:2,marginBottom:3}}>{sec.name}</div>
-            {sec.pieces.map((p,k)=><div key={k} style={{display:"flex",justifyContent:"space-between",fontSize:9,padding:"2px 0",borderBottom:"1px dotted #f0f0f0"}}><span>{p.bn}{p.woodOverride&&<strong style={{marginLeft:4,color:"#7c3aed"}}>({WOOD[p.woodOverride]?.bn} কাঠ)</strong>}</span><span style={{color:"#555",fontFamily:"monospace"}}>{p.w}″×{p.h}″×{p.l}″ × {p.pc}</span></div>)}
+            <div style={{fontWeight:700,fontSize:9,color:"#92400e",borderBottom:"1px solid #fde68a",paddingBottom:2,marginBottom:3}}>{sec.name}{sec.woodOverride&&<span style={{marginLeft:6,background:"#ede9fe",color:"#6d28d9",borderRadius:4,padding:"1px 6px",fontSize:8,fontWeight:700}}>সবসময় {WOOD[sec.woodOverride]?.bn}</span>}</div>
+            {sec.pieces.map((p,k)=>{
+              const effWood=pieceWoodType(p,sec,it.wood);
+              const jointCount=parseInt((p.jointRules||{})[effWood])||1;
+              return<div key={k} style={{display:"flex",justifyContent:"space-between",fontSize:9,padding:"2px 0",borderBottom:"1px dotted #f0f0f0"}}>
+                <span>{p.bn}{jointCount>1&&<strong style={{marginLeft:4,color:"#b45309"}}>🔗 জোড়া: {jointCount}টি</strong>}</span>
+                <span style={{color:"#555",fontFamily:"monospace"}}>{p.w}″×{p.h}″×{p.l}″ × {p.pc}</span>
+              </div>
+            })}
           </div>)}
           {editIdx!==i&&<div style={{background:"#fef3c7",borderRadius:5,padding:"5px 8px",fontSize:9,marginTop:4}}>মোট CFT: <strong>{(totalCft(it.sections)*it.qty).toFixed(3)}</strong></div>}
         </div>
@@ -984,7 +991,7 @@ function S4({order,onPrint,db,saveDb,onUpdateOrder}){
 function S5({order,onPrint,woodSettings,rackSplits}){
   const{cust,items,no,printLogs}=order;
   const map={};
-  items.forEach(it=>{it.sections.forEach(sec=>{sec.pieces.forEach(p=>{const pw=pieceWoodType(p,it.wood);const info=pieceRackInfo(pw,p.w,p.h,p.l,woodSettings,rackSplits);const code=info.code;const key=`${code}__${p.h}__${p.l}__${p.w}`;const pc=p.pc*it.qty;const cv=cft(pc,p.h,p.l,p.w);if(map[key]){map[key].pc+=pc;map[key].cv+=cv}else map[key]={code,name:p.bn,pc,h:p.h,l:p.l,w:p.w,cv,isSplit:info.isSplit,wood:pw}})})});
+  items.forEach(it=>{it.sections.forEach(sec=>{sec.pieces.forEach(p=>{const pw=pieceWoodType(p,sec,it.wood);const info=pieceRackInfo(pw,p.w,p.h,p.l,woodSettings,rackSplits);const code=info.code;const key=`${code}__${p.h}__${p.l}__${p.w}`;const pc=p.pc*it.qty;const cv=cft(pc,p.h,p.l,p.w);if(map[key]){map[key].pc+=pc;map[key].cv+=cv}else map[key]={code,name:p.bn,pc,h:p.h,l:p.l,w:p.w,cv,isSplit:info.isSplit,wood:pw}})})});
   const list=Object.values(map).sort((a,b)=>a.code.localeCompare(b.code));
   const tot=list.reduce((s,w)=>s+w.cv,0);
   return<div style={{fontSize:10}}>
@@ -2478,7 +2485,7 @@ function WoodStockPage({woodLots,saveWoodLots,addLotPayment,woodSettings,saveWoo
             (o.items||[]).forEach(it=>{
               (it.sections||[]).forEach(sec=>{
                 (sec.pieces||[]).forEach(p=>{
-                  const pw=pieceWoodType(p,it.wood);
+                  const pw=pieceWoodType(p,sec,it.wood);
                   const info=pieceRackInfo(pw,p.w,p.h,p.l,woodSettings,rackSplits);
                   const code=info.code;
                   const pc=(p.pc||0)*(it.qty||1);
@@ -2508,7 +2515,7 @@ function WoodStockPage({woodLots,saveWoodLots,addLotPayment,woodSettings,saveWoo
           (o.items||[]).forEach(it=>{
             (it.sections||[]).forEach(sec=>{
               (sec.pieces||[]).forEach(p=>{
-                const pw=pieceWoodType(p,it.wood);
+                const pw=pieceWoodType(p,sec,it.wood);
                 if(!rawHByWood[pw])rawHByWood[pw]={};
                 const cv=cft((p.pc||0)*(it.qty||1),p.h,p.l,p.w);
                 rawHByWood[pw][p.h]=(rawHByWood[pw][p.h]||0)+cv;
@@ -2547,7 +2554,7 @@ function WoodStockPage({woodLots,saveWoodLots,addLotPayment,woodSettings,saveWoo
           (o.items||[]).forEach(it=>{
             (it.sections||[]).forEach(sec=>{
               (sec.pieces||[]).forEach(p=>{
-                const pw=pieceWoodType(p,it.wood);
+                const pw=pieceWoodType(p,sec,it.wood);
                 const cv=cft((p.pc||0)*(it.qty||1),p.h,p.l,p.w);
                 const rawCode=rackCode(pw,p.w,p.h);
                 unbandedGroups[rawCode]=(unbandedGroups[rawCode]||0)+cv;
@@ -2605,10 +2612,18 @@ function WoodStockPage({woodLots,saveWoodLots,addLotPayment,woodSettings,saveWoo
             </div>}
             {(rackBands||[]).length>0&&<div style={{marginBottom:12,background:"#eff6ff",border:"1px solid #bfdbfe",borderRadius:8,padding:"8px 10px"}}>
               <div style={{fontSize:10,fontWeight:700,color:"#1d4ed8",marginBottom:5}}>📏 চালু হাইট ব্যান্ড ({rackBands.length}টি)</div>
-              {rackBands.map((b,bi)=><div key={bi} style={{display:"flex",alignItems:"center",gap:5,fontSize:10,marginBottom:3}}>
-                <span style={{flex:1,color:"#1e40af"}}>{WOOD[b.wood]?.bn} {b.w}″ → {b.from}″–{b.to}″ একসাথে (কোডে {b.rep}″)</span>
-                <button onClick={()=>removeRackBand(b)} style={{background:"#fee2e2",border:"none",borderRadius:5,padding:"2px 6px",color:RED,fontSize:9}}>✕</button>
-              </div>)}
+              {rackBands.map((b,bi)=>{
+                const targetCode=rackCode(b.wood,b.w,b.rep);
+                return<div key={bi} style={{display:"flex",alignItems:"center",gap:5,fontSize:10,marginBottom:3}}>
+                  <span style={{flex:1,color:"#1e40af"}}>{WOOD[b.wood]?.bn} {b.w}″ → {b.from}″–{b.to}″ একসাথে (কোডে {b.rep}″)</span>
+                  <button onClick={()=>{
+                    setUsageWoodFilter(b.wood);
+                    setBandDraft({...bandDraft,[targetCode]:{from:String(b.from),to:String(b.to)}});
+                    setEditingBandFor(targetCode);
+                    setTimeout(()=>document.getElementById(`rack-card-${targetCode}`)?.scrollIntoView({behavior:"smooth",block:"center"}),100);
+                  }} style={{background:"#dbeafe",border:"none",borderRadius:5,padding:"2px 7px",color:"#1d4ed8",fontSize:9,fontWeight:700}}>✏️ এডিট</button>
+                </div>
+              })}
             </div>}
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
               <button onClick={()=>window.print()} style={{background:"#7c2d12",color:"white",border:"none",borderRadius:9,padding:"11px",fontSize:12,fontWeight:700}}>🖨️ প্রিন্ট করুন</button>
@@ -2683,11 +2698,12 @@ function WoodStockPage({woodLots,saveWoodLots,addLotPayment,woodSettings,saveWoo
             const saveBand=(e)=>{
               e.stopPropagation();
               if(bandConflict||!bandPreview)return;
+              if(myBand)removeRackBand(myBand); // এডিট হলে আগেরটা সরিয়ে নতুন রেঞ্জ বসবে
               addRackBand({wood:c.wood,w:parseFloat(c.w),from:parseFloat(bd.from),to:parseFloat(bd.to),rep:parseFloat(c.h)});
               setBandDraft({...bandDraft,[c.code]:{from:"",to:""}});
               setEditingBandFor(null);
             };
-            return<div key={c.code} style={{background:isHigh?wc.bg:"white",border:`1.5px solid ${isHigh?wc.accent:wc.border}`,borderRadius:10,padding:"10px 12px",marginBottom:8,cursor:"pointer"}} onClick={()=>setExpandedCode(isExpanded?null:c.code)}>
+            return<div key={c.code} id={`rack-card-${c.code}`} style={{background:isHigh?wc.bg:"white",border:`1.5px solid ${isHigh?wc.accent:wc.border}`,borderRadius:10,padding:"10px 12px",marginBottom:8,cursor:"pointer"}} onClick={()=>setExpandedCode(isExpanded?null:c.code)}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
                 <div style={{flex:1,minWidth:0}}>
                   <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
@@ -2719,16 +2735,17 @@ function WoodStockPage({woodLots,saveWoodLots,addLotPayment,woodSettings,saveWoo
                 </div>
               </div>}
               <div className="no-print" style={{marginTop:8,display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}} onClick={e=>e.stopPropagation()}>
-                {!c.isSplit&&(myBand?
-                  <button onClick={()=>removeRackBand(myBand)} style={{background:"#fef2f2",color:RED,border:"1px solid #fecaca",borderRadius:7,padding:"5px 11px",fontSize:10,fontWeight:700}}>✕ ব্যান্ড তুলে দিন</button>:
-                  <button onClick={()=>setEditingBandFor(isEditingBand?null:c.code)} style={{background:"#eff6ff",color:"#1d4ed8",border:"1px solid #bfdbfe",borderRadius:7,padding:"5px 11px",fontSize:10,fontWeight:700}}>{isEditingBand?"বন্ধ করুন":"📏 হাইট রেঞ্জ"}</button>
-                )}
+                {!c.isSplit&&<button onClick={()=>{
+                  const opening=!isEditingBand;
+                  setEditingBandFor(opening?c.code:null);
+                  if(opening&&myBand)setBandDraft({...bandDraft,[c.code]:{from:String(myBand.from),to:String(myBand.to)}});
+                }} style={{background:"#eff6ff",color:"#1d4ed8",border:"1px solid #bfdbfe",borderRadius:7,padding:"5px 11px",fontSize:10,fontWeight:700}}>{isEditingBand?"বন্ধ করুন":myBand?"✏️ রেঞ্জ এডিট করুন":"📏 হাইট রেঞ্জ"}</button>}
                 {showSplitSuggestion&&<>
                   <button onClick={approveSplit} style={{background:"#f0fdfa",color:"#0d9488",border:"1px solid #99f6e4",borderRadius:7,padding:"5px 11px",fontSize:10,fontWeight:700}}>+ আলাদা র‍্যাক করুন</button>
                   <span style={{fontSize:8,color:"#999",lineHeight:1.4}}>{domL.pct.toFixed(0)}%-ই {domL.len}″ ওসার</span>
                 </>}
               </div>
-              {isEditingBand&&!myBand&&<div className="no-print" style={{marginTop:8,background:"#eff6ff",border:"1px solid #bfdbfe",borderRadius:8,padding:"9px 10px"}} onClick={e=>e.stopPropagation()}>
+              {isEditingBand&&<div className="no-print" style={{marginTop:8,background:"#eff6ff",border:"1px solid #bfdbfe",borderRadius:8,padding:"9px 10px"}} onClick={e=>e.stopPropagation()}>
                 <div style={{fontSize:9,color:"#3b5a9a",marginBottom:7,lineHeight:1.5}}>এই কোডে ({WOOD[c.wood]?.bn}, {c.w}″ চওড়া) কোন হাইট থেকে কোন হাইট পর্যন্ত একসাথে রাখবেন? রেঞ্জের মধ্যে এই কার্ডের নিজের {c.h}″ থাকতে হবে — কোডে {c.h}″-ই থাকবে।</div>
                 <div style={{display:"flex",gap:5,alignItems:"flex-end"}}>
                   <div style={{flex:1}}><div style={{fontSize:8,color:"#3b5a9a",marginBottom:2}}>সর্বনিম্ন (″)</div><input type="number" value={bd.from||""} onChange={e=>setBandDraft({...bandDraft,[c.code]:{...bd,from:e.target.value}})} placeholder={String(c.h-3)} style={{width:"100%",border:"1px solid #bfdbfe",borderRadius:6,padding:"7px 6px",fontSize:11,boxSizing:"border-box",outline:"none"}}/></div>
@@ -3430,7 +3447,8 @@ function ManageDB({db,saveDb,galleries,saveGalleryEntry,onBack}){
   const[selCat,setSelCat]=useState("");
   const[selVar,setSelVar]=useState("");
   const[editSections,setEditSections]=useState(null);
-  const[newPiece,setNewPiece]=useState({sectionIdx:0,bn:"",pc:1,h:72,l:24,w:1,woodOverride:""});
+  const[newPiece,setNewPiece]=useState({sectionIdx:0,bn:"",pc:1,h:72,l:24,w:1});
+  const[expandedJointFor,setExpandedJointFor]=useState(null);
 
   const addCategory=()=>{
     if(!newCat.key||!newCat.bn)return;
@@ -3448,9 +3466,13 @@ function ManageDB({db,saveDb,galleries,saveGalleryEntry,onBack}){
   const openEdit=(catK,varK)=>{setSelCat(catK);setSelVar(varK);setEditSections(JSON.parse(JSON.stringify(db[catK].variants[varK].sections)));setTab("edit")};
   const saveEdit=()=>{const nd=JSON.parse(JSON.stringify(db));nd[selCat].variants[selVar].sections=editSections;saveDb(nd);setTab("list")};
   const addSection=()=>setEditSections(prev=>[...prev,{name:"নতুন সেকশন",pieces:[]}]);
-  const addPiece=()=>{const ns=JSON.parse(JSON.stringify(editSections));ns[newPiece.sectionIdx].pieces.push({bn:newPiece.bn,pc:parseInt(newPiece.pc)||1,h:parseFloat(newPiece.h)||72,l:parseFloat(newPiece.l)||24,w:parseFloat(newPiece.w)||1,woodOverride:newPiece.woodOverride||null});setEditSections(ns);setNewPiece({...newPiece,bn:"",woodOverride:""})};
+  const addPiece=()=>{const ns=JSON.parse(JSON.stringify(editSections));ns[newPiece.sectionIdx].pieces.push({bn:newPiece.bn,pc:parseInt(newPiece.pc)||1,h:parseFloat(newPiece.h)||72,l:parseFloat(newPiece.l)||24,w:parseFloat(newPiece.w)||1});setEditSections(ns);setNewPiece({...newPiece,bn:""})};
   const removePiece=(si,pi)=>{const ns=JSON.parse(JSON.stringify(editSections));ns[si].pieces.splice(pi,1);setEditSections(ns)};
-  const resetDb=()=>{if(window.confirm("সব কাস্টম ফার্নিচার মুছে ডিফল্টে ফিরে যাবে?"))saveDb(JSON.parse(JSON.stringify(DEFAULT_DB)))};
+  const resetDb=()=>{
+    const typed=window.prompt("⚠️ এটি আপনার তৈরি করা সব ফার্নিচার মডেল, কাঠের পিস তালিকা ও কাঠ-নির্ধারণ (woodOverride) স্থায়ীভাবে মুছে দেবে — এটি ফিরিয়ে আনা যাবে না।\n\nনিশ্চিত হলে নিচে ইংরেজিতে RESET লিখুন:");
+    if(!typed||typed.trim().toUpperCase()!=="RESET")return;
+    saveDb(JSON.parse(JSON.stringify(DEFAULT_DB)));
+  };
 
   // ── Gallery management ──
   const[galleryCat,setGalleryCat]=useState("");
@@ -3552,27 +3574,48 @@ function ManageDB({db,saveDb,galleries,saveGalleryEntry,onBack}){
       {tab==="edit"&&editSections&&<div>
         <div style={{fontWeight:700,fontSize:14,marginBottom:10}}>{db[selCat]?.variants[selVar]?.bn} — কাঠের তালিকা সম্পাদনা</div>
         {editSections.map((sec,si)=><div key={si} style={{background:"white",borderRadius:10,marginBottom:10,overflow:"hidden",boxShadow:"0 1px 4px rgba(0,0,0,.07)"}}>
-          <div style={{background:"#92400e",color:"white",padding:"7px 12px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-            <input value={sec.name} onChange={e=>{const ns=[...editSections];ns[si]={...ns[si],name:e.target.value};setEditSections(ns)}} style={{background:"transparent",border:"none",color:"white",fontWeight:700,fontSize:12,outline:"none",flex:1}}/>
-            
+          <div style={{background:"#92400e",color:"white",padding:"7px 12px"}}>
+            <input value={sec.name} onChange={e=>{const ns=[...editSections];ns[si]={...ns[si],name:e.target.value};setEditSections(ns)}} style={{background:"transparent",border:"none",color:"white",fontWeight:700,fontSize:12,outline:"none",width:"100%",marginBottom:6}}/>
+            <div style={{display:"flex",alignItems:"center",gap:6}}>
+              <span style={{fontSize:9,opacity:0.9,flexShrink:0}}>এই সেকশনের কাঠ:</span>
+              <select value={sec.woodOverride||""} onChange={e=>{const ns=[...editSections];ns[si]={...ns[si],woodOverride:e.target.value||null};setEditSections(ns)}} style={{border:"none",borderRadius:5,padding:"4px 6px",fontSize:9,flex:1,background:"rgba(255,255,255,.92)",color:"#333"}}>
+                <option value="">মূল কাঠ (অর্ডারে যা বাছা হবে)</option>
+                {Object.entries(WOOD).map(([wk,wv])=><option key={wk} value={wk}>সবসময় {wv.bn}</option>)}
+              </select>
+            </div>
           </div>
           <div style={{padding:"8px 12px"}}>
-            {sec.pieces.map((p,pi)=><div key={pi} style={{display:"flex",gap:4,alignItems:"center",marginBottom:4,fontSize:10}}>
-              <span style={{flex:2,color:"#333"}}>{p.bn}{p.woodOverride&&<span style={{marginLeft:5,background:"#ede9fe",color:"#6d28d9",borderRadius:4,padding:"1px 5px",fontSize:9,fontWeight:700}}>সবসময় {WOOD[p.woodOverride]?.bn}</span>}</span>
-              <span style={{fontFamily:"monospace",color:"#555",flexShrink:0}}>{p.w}×{p.h}×{p.l} × {p.pc}pc</span>
-              <button onClick={()=>removePiece(si,pi)} style={{background:"#fee2e2",border:"none",borderRadius:4,padding:"2px 6px",color:RED,fontSize:10,cursor:"pointer"}}>✕</button>
-            </div>)}
+            {sec.pieces.map((p,pi)=>{
+              const jointKey=`${si}-${pi}`;
+              const isJointOpen=expandedJointFor===jointKey;
+              const jr=p.jointRules||{};
+              const hasAnyJoint=Object.values(jr).some(v=>parseInt(v)>1);
+              return<div key={pi}>
+                <div style={{display:"flex",gap:4,alignItems:"center",marginBottom:4,fontSize:10}}>
+                  <span style={{flex:2,color:"#333"}}>{p.bn}</span>
+                  <span style={{fontFamily:"monospace",color:"#555",flexShrink:0}}>{p.w}×{p.h}×{p.l} × {p.pc}pc</span>
+                  <button onClick={()=>setExpandedJointFor(isJointOpen?null:jointKey)} title="জোড়ার নিয়ম" style={{background:hasAnyJoint?"#ede9fe":"#f3f4f6",border:"none",borderRadius:4,padding:"2px 6px",color:hasAnyJoint?"#6d28d9":"#999",fontSize:10,cursor:"pointer",flexShrink:0}}>🔗</button>
+                  <button onClick={()=>removePiece(si,pi)} style={{background:"#fee2e2",border:"none",borderRadius:4,padding:"2px 6px",color:RED,fontSize:10,cursor:"pointer",flexShrink:0}}>✕</button>
+                </div>
+                {isJointOpen&&<div style={{background:"#faf5ff",borderRadius:6,padding:"7px 8px",marginBottom:6}}>
+                  <div style={{fontSize:8,color:"#6d28d9",marginBottom:5,lineHeight:1.4}}>কাঠভেদে এই মাপে জোড়া দেওয়ার পিস সংখ্যা (১ = জোড়া ছাড়া, একটাই টুকরা):</div>
+                  <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                    {Object.entries(WOOD).map(([wk,wv])=><div key={wk} style={{display:"flex",alignItems:"center",gap:3}}>
+                      <span style={{fontSize:8,color:"#555"}}>{wv.bn}:</span>
+                      <input type="number" min="1" value={jr[wk]||1} onChange={e=>{
+                        const ns=JSON.parse(JSON.stringify(editSections));
+                        ns[si].pieces[pi].jointRules={...(ns[si].pieces[pi].jointRules||{}),[wk]:parseInt(e.target.value)||1};
+                        setEditSections(ns);
+                      }} style={{width:34,border:"1px solid #ddd",borderRadius:4,padding:"3px 4px",fontSize:9,textAlign:"center"}}/>
+                    </div>)}
+                  </div>
+                </div>}
+              </div>
+            })}
             <div style={{display:"grid",gridTemplateColumns:"2fr 1fr 1fr 1fr 1fr auto",gap:4,marginTop:6}}>
               <input placeholder="কাঠের নাম" value={newPiece.sectionIdx===si?newPiece.bn:""} onChange={e=>setNewPiece({...newPiece,sectionIdx:si,bn:e.target.value})} style={{...inp,padding:"5px 7px",fontSize:10}} onFocus={()=>setNewPiece(p=>({...p,sectionIdx:si}))}/>
               {[{k:"w",p:"W\""},{k:"h",p:"H\""},{k:"l",p:"L\""},{k:"pc",p:"পিস"}].map(f=><input key={f.k} type="number" step="0.25" placeholder={f.p} value={newPiece.sectionIdx===si?newPiece[f.k]:""} onChange={e=>setNewPiece({...newPiece,sectionIdx:si,[f.k]:e.target.value})} style={{...inp,padding:"5px 4px",fontSize:10}}/>)}
               <button onClick={addPiece} style={{background:"#6d28d9",color:"white",border:"none",borderRadius:6,padding:"5px 8px",fontSize:11}}>+</button>
-            </div>
-            <div style={{marginTop:5,display:"flex",alignItems:"center",gap:6}}>
-              <span style={{fontSize:9,color:"#888",flexShrink:0}}>এই পিসের কাঠ:</span>
-              <select value={newPiece.sectionIdx===si?(newPiece.woodOverride||""):""} onChange={e=>setNewPiece({...newPiece,sectionIdx:si,woodOverride:e.target.value})} style={{border:"1px solid #ddd",borderRadius:6,padding:"4px 6px",fontSize:9,flex:1}}>
-                <option value="">মূল কাঠ (অর্ডারে যা বাছা হবে)</option>
-                {Object.entries(WOOD).map(([wk,wv])=><option key={wk} value={wk}>সবসময় {wv.bn}</option>)}
-              </select>
             </div>
           </div>
         </div>)}
@@ -3741,7 +3784,10 @@ function Form({onSave,onBack,db,saveDb,galleries,woodSettings,laborSettings,orde
     // যাতে ভবিষ্যতে দাম বাড়লেও এই অর্ডারের হিসাব বদলে না যায়
     const itemsWithRate=items.map(it=>{
       const usedWoods=new Set([it.wood]);
-      (it.sections||[]).forEach(sec=>(sec.pieces||[]).forEach(p=>{if(p.woodOverride)usedWoods.add(p.woodOverride)}));
+      (it.sections||[]).forEach(sec=>{
+        if(sec.woodOverride)usedWoods.add(sec.woodOverride);
+        (sec.pieces||[]).forEach(p=>{if(p.woodOverride)usedWoods.add(p.woodOverride)});
+      });
       const snapshots={};
       usedWoods.forEach(w=>{snapshots[w]=woodRateOn(woodSettings,w,c.date)||0});
       return{...it,woodRateSnapshot:snapshots[it.wood]||null,woodRateSnapshots:snapshots};
