@@ -74,7 +74,7 @@ function compressImage(file,maxDim=1200,quality=0.82){
 /* ── FULL-RESOLUTION LOCAL FOLDER STORAGE (desktop Chrome/Edge/Brave only) ──
    Original, uncompressed images are saved as real files in a folder you choose
    on your computer. Only a small compressed thumbnail syncs to the cloud/mobile. */
-const BUILD_TAG="3.44";
+const BUILD_TAG="3.60";
 const FS_SUPPORTED=typeof window!=="undefined"&&"showDirectoryPicker" in window;
 function idbOpen(){
   return new Promise((resolve,reject)=>{
@@ -315,6 +315,12 @@ const deptRank=(d)=>{const i=PAYROLL_DEPTS.indexOf(d);return i===-1?PAYROLL_DEPT
 // আগে deptProgress পুরো অর্ডারের জন্য একটাই ছিল; এখন প্রতিটা ফার্নিচারের জন্য আলাদা itemProgress।
 // itemProgress এখনো ফাঁকা কিন্তু পুরনো deptProgress এ ডেটা থাকলে, সেটা প্রথম ফার্নিচারের সাথে যুক্ত করে দেখানো হয় —
 // পুরনো অর্ডারের অগ্রগতি হারিয়ে যাওয়ার বদলে দেখা যাবে।
+// ── সতর্কতার সীমা: মালিক নিজে ঠিক না করলে এই ডিফল্টগুলো ব্যবহার হয় ──
+const ALERT_DEFAULTS={stockMonths:2,stuckMultiplier:1.8,stuckFallbackDays:21,woodPricePct:5};
+const AL=(alertSettings,key)=>{
+  const v=alertSettings&&alertSettings[key];
+  return(v===undefined||v===null||v==="")?ALERT_DEFAULTS[key]:parseFloat(v);
+};
 function effectiveItemProgress(order){
   const ip=order.itemProgress||{};
   if(Object.keys(ip).length>0)return ip;
@@ -1361,6 +1367,8 @@ function App({firebaseConfig,onResetConfig}){
   const[galleries,setGalleries]=useState({});
   const[woodSettings,setWoodSettings]=useState({});
   const[laborSettings,setLaborSettings]=useState({});
+  const[alertSettings,setAlertSettings]=useState({});
+  const[backupFailed,setBackupFailed]=useState(false);
   const[rackSplits,setRackSplits]=useState([]);
   const[rackBands,setRackBands]=useState([]);
   const fsRef=useRef(null);
@@ -1399,6 +1407,10 @@ function App({firebaseConfig,onResetConfig}){
     const{__rackBands,...clean}=newSettings||{};
     setWoodSettings(clean);
     if(fsRef.current)fsRef.current.doc("meta/woodSettings").set(clean).catch(err=>alert("⚠️ কাঠের সেটিংস সেভ করতে সমস্যা হয়েছে: "+err.message));
+  };
+  const saveAlertSettings=(s)=>{
+    setAlertSettings(s);
+    if(fsRef.current)fsRef.current.doc("meta/alertSettings").set(s).catch(err=>alert("⚠️ সতর্কতার সীমা সেভ করতে সমস্যা হয়েছে: "+err.message));
   };
   const saveLaborSettings=(newSettings)=>{
     setLaborSettings(newSettings);
@@ -1454,9 +1466,13 @@ function App({firebaseConfig,onResetConfig}){
     const timer=setTimeout(async()=>{
       const snapshot=buildBackupSnapshot(true);
       const json=JSON.stringify(snapshot,null,2);
+      let cloudOk=false;
       if(fsRef.current){
-        fsRef.current.collection("backups").doc(todayD).set(JSON.parse(json)).catch(()=>{});
+        try{await fsRef.current.collection("backups").doc(todayD).set(JSON.parse(json));cloudOk=true}catch(e){cloudOk=false}
       }
+      // ব্যতিক্রম দিয়ে ব্যবস্থাপনা: সফল হলে চুপচাপ, ব্যর্থ হলেই কেবল উপরে সতর্কতা দেখাবে
+      setBackupFailed(!cloudOk);
+      if(!cloudOk)return; // আজকের চিহ্ন বসানো হবে না, যাতে পরে আবার চেষ্টা হয়
       try{
         const folder=await getImageFolderHandle();
         if(folder){
@@ -1545,6 +1561,10 @@ function App({firebaseConfig,onResetConfig}){
         setWoodSettings(snap.exists?snap.data():{});
       },err=>{});
 
+      const unsubAlertSettings=firestore.doc("meta/alertSettings").onSnapshot(snap=>{
+        setAlertSettings(snap.exists?snap.data():{});
+      },err=>{});
+
       const unsubLaborSettings=firestore.doc("meta/laborSettings").onSnapshot(snap=>{
         setLaborSettings(snap.exists?snap.data():{});
       },err=>{});
@@ -1584,7 +1604,7 @@ function App({firebaseConfig,onResetConfig}){
         localStorage.setItem("rf_migrated_to_cloud","true");
       })();
 
-      return()=>{clearTimeout(timer);unsubOrders();unsubExpenses();unsubLots();unsubDb();unsubGalleries();unsubWoodSettings();unsubLaborSettings();unsubRackSplits();unsubRackBands();unsubCarp();unsubWorkers();unsubPayroll()};
+      return()=>{clearTimeout(timer);unsubOrders();unsubExpenses();unsubLots();unsubDb();unsubGalleries();unsubWoodSettings();unsubLaborSettings();unsubAlertSettings();unsubRackSplits();unsubRackBands();unsubCarp();unsubWorkers();unsubPayroll()};
     }catch(e){
       clearTimeout(timer);
       setConnError(e.message);
@@ -1770,11 +1790,11 @@ function App({firebaseConfig,onResetConfig}){
   if(page==="expense")return<ExpensePage expenses={expenses} onSave={saveExpense} onBack={goBack}/>;
   if(page==="payroll")return<PayrollPage workers={workers} saveWorker={saveWorker} deleteWorker={deleteWorker} payrollWeeks={payrollWeeks} savePayrollWeek={savePayrollWeek} updateAttendance={updateAttendance} addAdvanceEntry={addAdvanceEntry} removeAdvanceEntry={removeAdvanceEntry} onBack={goBack}/>;
   if(page==="plreport")return<PLReportPage orders={orders} expenses={expenses} workers={workers} payrollWeeks={payrollWeeks} woodLots={woodLots} woodSettings={woodSettings} laborSettings={laborSettings} onBack={goBack}/>;
-  return<Home orders={orders} expenses={expenses} woodLots={woodLots} db={db} woodSettings={woodSettings} laborSettings={laborSettings} workers={workers} payrollWeeks={payrollWeeks} onNew={()=>navigate({page:"form"})} onHist={()=>navigate({page:"history"})} onManage={()=>navigate({page:"manage"})} onExpense={()=>navigate({page:"expense"})} onWoodStock={()=>navigate({page:"woodstock",view:"list"})} onPayroll={()=>navigate({page:"payroll"})} onPLReport={()=>navigate({page:"plreport"})} onView={o=>navigate({page:"preview",orderNo:o.no,slip:0})} online={online} connError={connError} onResetConfig={onResetConfig} folderStatus={folderStatus} connectFolder={connectFolder} highlightNo={highlightNo} onBackupData={backupData}/>;
+  return<Home orders={orders} expenses={expenses} woodLots={woodLots} db={db} woodSettings={woodSettings} laborSettings={laborSettings} workers={workers} payrollWeeks={payrollWeeks} alertSettings={alertSettings} saveAlertSettings={saveAlertSettings} backupFailed={backupFailed} onNew={()=>navigate({page:"form"})} onHist={()=>navigate({page:"history"})} onManage={()=>navigate({page:"manage"})} onExpense={()=>navigate({page:"expense"})} onWoodStock={()=>navigate({page:"woodstock",view:"list"})} onPayroll={()=>navigate({page:"payroll"})} onPLReport={()=>navigate({page:"plreport"})} onView={o=>navigate({page:"preview",orderNo:o.no,slip:0})} online={online} connError={connError} onResetConfig={onResetConfig} folderStatus={folderStatus} connectFolder={connectFolder} highlightNo={highlightNo} onBackupData={backupData}/>;
 }
 
 /* ── HOME / DASHBOARD ── */
-function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,payrollWeeks,onNew,onHist,onManage,onExpense,onWoodStock,onPayroll,onPLReport,onView,online,connError,onResetConfig,folderStatus,connectFolder,highlightNo,onBackupData}){
+function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,payrollWeeks,alertSettings,saveAlertSettings,backupFailed,onNew,onHist,onManage,onExpense,onWoodStock,onPayroll,onPLReport,onView,online,connError,onResetConfig,folderStatus,connectFolder,highlightNo,onBackupData}){
   const now=new Date();
   const[showAllRunning,setShowAllRunning]=useState(false);
   const stats=useMemo(()=>{
@@ -1918,7 +1938,7 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
       const oldR=parseFloat(baseline.rate)||0,newR=parseFloat(latest.rate)||0;
       if(oldR<=0||newR<=0)return;
       const pct=((newR-oldR)/oldR)*100;
-      if(Math.abs(pct)>=5)woodPriceAlerts.push({wood:wv.bn,oldRate:oldR,newRate:newR,pct,since:baseline.from});
+      if(Math.abs(pct)>=AL(alertSettings,"woodPricePct"))woodPriceAlerts.push({wood:wv.bn,oldRate:oldR,newRate:newR,pct,since:baseline.from});
     });
     woodPriceAlerts.sort((a,b)=>b.pct-a.pct);
 
@@ -2055,8 +2075,8 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
     // ── ৩. আটকে থাকা অর্ডার — শুরু হয়েছে কিন্তু শেষ হয়নি, নিজের বিভাগের স্বাভাবিক সময়ের চেয়ে অনেক বেশি সময় ধরে ──
     const stuckThreshold=(deptId)=>{
       const d=deptAvg.find(x=>x.id===deptId);
-      if(d&&d.avg&&d.count>=3)return Math.max(14,d.avg*1.8);
-      return 21; // যথেষ্ট ইতিহাস না থাকলে একটা যুক্তিসঙ্গত ডিফল্ট সীমা
+      if(d&&d.avg&&d.count>=3)return Math.max(14,d.avg*AL(alertSettings,"stuckMultiplier"));
+      return AL(alertSettings,"stuckFallbackDays"); // যথেষ্ট ইতিহাস না থাকলে এই সীমা
     };
     const stuckItems=[];
     activeOrders.forEach(o=>{
@@ -2166,7 +2186,7 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
     const expensePie=Object.entries(expByCat).sort((a,b)=>b[1]-a[1]).map(([label,value],i)=>({label,value,color:EXP_PIE_COLORS[i%EXP_PIE_COLORS.length]}));
 
     return{running:withDays,monthlyOrders,monthlyExpense,yoy,totalRevenue,totalExpense,catPie,thisMonthCount:thisMonthOrders.length,avgOrderValue,totalOutstanding,topCategoryRanked,yearly,bestMonthCompare,stockPie,expensePie,payables,totalPayable,deptAvg,deptAvgMax,stuckItems,payrollProdByMonth,validPerCft,setLabourRate,emptyWoodModels,repeatRate,repeatCount:repeatCusts.length,totalCustCount:custList.length,repeatRevenueShare,stockAlerts,readyNotCollected,readyValueStuck,avgProdDays,recentAvgProd,olderAvgProd,prodCount:prodTimes.length,seasonal,seasonalMax,seasonalYearSpan,woodPriceAlerts,catProfitRanked,workerRanked};
-  },[orders,expenses,db,woodLots,woodSettings,laborSettings,workers,payrollWeeks]);
+  },[orders,expenses,db,woodLots,woodSettings,laborSettings,workers,payrollWeeks,alertSettings]);
 
   return<div style={{minHeight:"100vh",background:`linear-gradient(150deg,${RED} 0%,#8B0020 100%)`,position:"relative"}}>
     <div style={{position:"absolute",top:8,right:10,fontSize:9,color:"rgba(255,255,255,0.55)",fontWeight:600,letterSpacing:0.3,zIndex:5}}>v{BUILD_TAG}</div>
@@ -2176,6 +2196,31 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
       <div style={{fontSize:10,opacity:.8,marginTop:2}}>Rupali Furniture · Sirajganj | সাদমান সাকিব</div>
     </div>
     <div style={{background:"white",borderRadius:"20px 20px 0 0",minHeight:"calc(100vh - 160px)",padding:"18px 14px",maxWidth:720,margin:"0 auto"}}>
+      {(()=>{
+        // ── ৫-সেকেন্ডের নিয়ম: এক নজরে "সব ঠিক আছে কি না" — ট্যাপ করলে সংশ্লিষ্ট অংশে চলে যাবে ──
+        const issues=[];
+        if(backupFailed)issues.push({t:"ব্যাকআপ ব্যর্থ হয়েছে",z:"z-sys"});
+        if(stats.stuckItems&&stats.stuckItems.length)issues.push({t:`${stats.stuckItems.length}টা কাজ আটকে আছে`,z:"z-today"});
+        const lowStock=(stats.stockAlerts||[]).filter(a=>a.monthsLeft<AL(alertSettings,"stockMonths"));
+        if(lowStock.length)issues.push({t:`${lowStock.map(a=>a.wood).join(", ")} কাঠ কম`,z:"z-wood"});
+        if(stats.readyNotCollected&&stats.readyNotCollected.length)issues.push({t:`${stats.readyNotCollected.length}টা পণ্য পড়ে আছে`,z:"z-urgent"});
+        if(stats.emptyWoodModels&&stats.emptyWoodModels.length)issues.push({t:`${stats.emptyWoodModels.length}টা মডেলে কাঠের মাপ নেই`,z:"z-wood"});
+        const ok=issues.length===0;
+        return<div style={{background:ok?"#f0fdf4":"#fef2f2",border:`1.5px solid ${ok?"#86efac":"#fca5a5"}`,borderRadius:11,padding:"11px 13px",marginBottom:14}}>
+          <div style={{fontSize:13,fontWeight:800,color:ok?"#166534":"#991b1b",marginBottom:ok?0:6}}>{ok?"✅ সব ঠিক আছে":`⚠️ ${issues.length}টা বিষয়ে নজর দরকার`}</div>
+          {!ok&&<div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+            {issues.map((it,i)=><button key={i} onClick={()=>document.getElementById(it.z)?.scrollIntoView({behavior:"smooth",block:"start"})} style={{background:"white",border:"1px solid #fecaca",borderRadius:20,padding:"8px 13px",fontSize:11,fontWeight:600,color:"#991b1b",minHeight:36}}>{it.t} →</button>)}
+          </div>}
+        </div>
+      })()}
+
+      {/* স্তরে লাফ দেওয়ার বার — লম্বা স্ক্রলে নিচের অংশ যাতে হারিয়ে না যায় */}
+      <div style={{position:"sticky",top:0,zIndex:20,background:"rgba(255,255,255,0.97)",backdropFilter:"blur(4px)",margin:"0 -16px 12px",padding:"7px 10px",borderBottom:"1px solid #eee",display:"flex",gap:4,overflowX:"auto"}}>
+        {[{e:"⚡",z:"z-urgent"},{e:"🔥",z:"z-today"},{e:"🪵",z:"z-wood"},{e:"💼",z:"z-dues"},{e:"📊",z:"z-health"},{e:"🚧",z:"z-perf"},{e:"📅",z:"z-trend"},{e:"⚙️",z:"z-sys"}].map(b=>
+          <button key={b.z} onClick={()=>document.getElementById(b.z)?.scrollIntoView({behavior:"smooth",block:"start"})} style={{background:"#f8fafc",border:"1px solid #e5e7eb",borderRadius:9,minWidth:44,minHeight:38,fontSize:17,flexShrink:0,cursor:"pointer"}}>{b.e}</button>
+        )}
+      </div>
+
       {/* Action buttons */}
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:14}}>
         <button onClick={onNew} style={{background:RED,color:"white",border:"none",borderRadius:11,padding:"13px 8px",fontSize:13,fontWeight:700}}>+ নতুন অর্ডার</button>
@@ -2187,6 +2232,15 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
         <button onClick={onPLReport} style={{background:"#B45309",color:"white",border:"none",borderRadius:11,padding:"13px 8px",fontSize:13,fontWeight:700,gridColumn:"span 2"}}>📊 লাভ-ক্ষতি রিপোর্ট</button>
       </div>
 
+      <div id="z-urgent" style={{scrollMarginTop:56,fontSize:11,fontWeight:800,color:"#b91c1c",letterSpacing:"0.3px",margin:"18px 0 8px",paddingBottom:4,borderBottom:"2px solid #b91c1c22"}}>⚡ এখনই নজর দিন</div>
+      {/* Pie chart - running orders by category */}
+      {stats.catPie.length>0&&<div style={{marginBottom:18}}>
+        <div style={{fontWeight:700,fontSize:13,color:"#222",marginBottom:8}}>🥧 চলমান অর্ডার — ক্যাটাগরি অনুযায়ী</div>
+        <div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"14px"}}>
+          <PieChart3D data={stats.catPie} showCount={true} countSuffix="টি"/>
+        </div>
+      </div>}
+
       {/* Quick Stats */}
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:10}}>
         {[{l:"মোট অর্ডার",v:orders.length,c:RED},{l:"চলমান অর্ডার",v:stats.running.length,c:"#f97316"},{l:"মোট মূল্য",v:money(stats.totalRevenue),c:"#166534",small:true}].map(s=><div key={s.l} style={{background:s.c+"12",borderRadius:10,padding:"10px 6px",borderLeft:`3px solid ${s.c}`,textAlign:"center"}}><div style={{fontSize:s.small?14:22,fontWeight:800,color:s.c}}>{s.v}</div><div style={{fontSize:9,color:"#666",marginTop:1}}>{s.l}</div></div>)}
@@ -2194,85 +2248,6 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:16}}>
         {[{l:"এই মাসে অর্ডার",v:stats.thisMonthCount,c:"#1d4ed8"},{l:"গড় অর্ডার মূল্য",v:money(stats.avgOrderValue),c:"#6d28d9",small:true},{l:"গ্রাহকের কাছে পাওনা",v:money(stats.totalOutstanding),c:RED,small:true}].map(s=><div key={s.l} style={{background:s.c+"12",borderRadius:10,padding:"10px 6px",borderLeft:`3px solid ${s.c}`,textAlign:"center"}}><div style={{fontSize:s.small?14:22,fontWeight:800,color:s.c}}>{s.v}</div><div style={{fontSize:9,color:"#666",marginTop:1}}>{s.l}</div></div>)}
       </div>
-      {stats.payables&&stats.payables.length>0&&<div style={{background:"#fef2f2",border:"1.5px solid #fecaca",borderRadius:10,padding:"12px 14px",marginBottom:14}}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:3}}>
-          <span style={{fontSize:12,fontWeight:700,color:"#991b1b"}}>🧾 আমার নিজের দেনা</span>
-          <span style={{fontSize:15,fontWeight:800,color:RED}}>{money(stats.totalPayable)}</span>
-        </div>
-        <div style={{fontSize:9,color:"#a35",marginBottom:8}}>বাকিতে কেনা হার্ডওয়্যার/বার্নিশ + কাঠের লটে সাপ্লায়ারকে বাকি — সব একসাথে।</div>
-        {stats.payables.slice(0,8).map(p=><div key={p.name} style={{background:"white",borderRadius:8,padding:"7px 10px",marginBottom:5,border:"1px solid #fee2e2"}}>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-            <div style={{flex:1,minWidth:0}}>
-              <div style={{fontSize:11,fontWeight:700,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.name}</div>
-              <div style={{fontSize:9,color:"#999",marginTop:1}}>{p.kind} · {p.items}টি এন্ট্রি</div>
-            </div>
-            <div style={{textAlign:"right",flexShrink:0,marginLeft:8}}>
-              <div style={{fontSize:12,fontWeight:800,color:RED}}>{money(p.amount)}</div>
-              {p.phone&&<a href={`tel:${p.phone}`} style={{fontSize:9,color:"#1d4ed8",textDecoration:"none"}}>📱 {p.phone}</a>}
-            </div>
-          </div>
-        </div>)}
-        {stats.payables.length>8&&<div style={{fontSize:9,color:"#a35",textAlign:"center"}}>...ও আরও {stats.payables.length-8}টি</div>}
-        {stats.totalOutstanding>0&&<div style={{marginTop:7,paddingTop:7,borderTop:"1px dashed #fecaca",fontSize:10,color:"#555"}}>
-          গ্রাহকের কাছে পাওনা <strong style={{color:"#166534"}}>{money(stats.totalOutstanding)}</strong> − নিজের দেনা <strong style={{color:RED}}>{money(stats.totalPayable)}</strong> = <strong style={{color:stats.totalOutstanding-stats.totalPayable>=0?"#166534":RED}}>{money(stats.totalOutstanding-stats.totalPayable)}</strong> নিট
-        </div>}
-      </div>}
-
-      {stats.emptyWoodModels&&stats.emptyWoodModels.length>0&&<div onClick={onManage} style={{background:"#fef2f2",border:"1.5px solid #fca5a5",borderRadius:10,padding:"12px 14px",marginBottom:14,cursor:"pointer"}}>
-        <div style={{fontSize:12,fontWeight:700,color:"#991b1b",marginBottom:3}}>⚠️ {stats.emptyWoodModels.length}টা মডেলে কাঠের মাপ বসানো নেই</div>
-        <div style={{fontSize:9,color:"#a35",marginBottom:6}}>এই মডেলে অর্ডার এলে খরচ ও র‍্যাক-হিসাব ভুল হবে। ট্যাপ করে ডেটাবেসে গিয়ে ঠিক করুন:</div>
-        <div style={{fontSize:10,color:"#991b1b"}}>{stats.emptyWoodModels.slice(0,5).map(m=>`${m.catBn} · ${m.varBn}`).join(" · ")}{stats.emptyWoodModels.length>5?` ...ও আরও ${stats.emptyWoodModels.length-5}টা`:""}</div>
-      </div>}
-
-      {stats.stuckItems&&stats.stuckItems.length>0&&<div style={{background:"#fff7ed",border:"1.5px solid #fdba74",borderRadius:10,padding:"12px 14px",marginBottom:14}}>
-        <div style={{fontSize:12,fontWeight:700,color:"#9a3412",marginBottom:3}}>🐌 আটকে থাকা কাজ ({stats.stuckItems.length}টা)</div>
-        <div style={{fontSize:9,color:"#a16207",marginBottom:8}}>শুরু হয়েছে কিন্তু স্বাভাবিকের চেয়ে অনেক বেশি সময় ধরে শেষ হচ্ছে না।</div>
-        {stats.stuckItems.slice(0,6).map((s,i)=><div key={i} onClick={()=>onView(s.order)} style={{background:"white",borderRadius:8,padding:"7px 10px",marginBottom:5,cursor:"pointer",border:"1px solid #fed7aa"}}>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-            <div style={{flex:1,minWidth:0}}>
-              <div style={{fontSize:11,fontWeight:700,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{s.order.cust.name} — {s.itemName}</div>
-              <div style={{fontSize:9,color:"#999",marginTop:1}}>{s.deptBn} বিভাগে {s.pct}%-এ থেমে আছে</div>
-            </div>
-            <div style={{fontSize:12,fontWeight:800,color:RED,flexShrink:0,marginLeft:8}}>{s.daysSince} দিন</div>
-          </div>
-        </div>)}
-        {stats.stuckItems.length>6&&<div style={{fontSize:9,color:"#a16207",textAlign:"center"}}>...ও আরও {stats.stuckItems.length-6}টা</div>}
-      </div>}
-
-      {stats.stockAlerts&&stats.stockAlerts.length>0&&<div style={{background:"#f0fdf4",border:"1px solid #a7d8b8",borderRadius:10,padding:"12px 14px",marginBottom:14}}>
-        <div style={{fontSize:12,fontWeight:700,color:"#166534",marginBottom:3}}>🪵 কাঠের মজুদ আর কত দিন চলবে</div>
-        <div style={{fontSize:9,color:"#4d7c5f",marginBottom:8}}>না-কাটা গুড়ির মজুদ ÷ গত ৬ মাসের মাসিক গড় ব্যবহার। ২ মাসের কম হলে কেনার প্রস্তুতি নিন।</div>
-        {stats.stockAlerts.map(a=>{
-          const urgent=a.monthsLeft<1,warn=a.monthsLeft<2;
-          return<div key={a.key} style={{display:"flex",justifyContent:"space-between",alignItems:"center",fontSize:11,padding:"5px 0",borderTop:"1px dashed #d1e7d9"}}>
-            <span style={{fontWeight:600}}>{urgent?"🔴":warn?"🟠":"🟢"} {a.wood}</span>
-            <span style={{fontSize:9,color:"#666"}}>মজুদ {a.stock.toFixed(1)} · মাসে ~{a.monthlyUse.toFixed(1)} CFT</span>
-            <strong style={{color:urgent?RED:warn?"#f97316":"#166534"}}>{a.monthsLeft<0.1?"শেষ":`${a.monthsLeft.toFixed(1)} মাস`}</strong>
-          </div>
-        })}
-      </div>}
-
-      {stats.totalCustCount>0&&<div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 14px",marginBottom:14}}>
-        <div style={{fontSize:12,fontWeight:700,color:"#1d4ed8",marginBottom:3}}>🔁 পুনরাবৃত্ত গ্রাহক</div>
-        <div style={{fontSize:9,color:"#999",marginBottom:8}}>যেসব গ্রাহক একবারের বেশি অর্ডার করেছেন — সন্তুষ্ট গ্রাহকের সবচেয়ে সরাসরি প্রমাণ।</div>
-        <div style={{display:"flex",alignItems:"baseline",gap:8,marginBottom:6}}>
-          <span style={{fontSize:26,fontWeight:800,color:"#1d4ed8"}}>{stats.repeatRate.toFixed(0)}%</span>
-          <span style={{fontSize:11,color:"#666"}}>{stats.totalCustCount} জনের মধ্যে {stats.repeatCount} জন</span>
-        </div>
-        <div style={{background:"#f0f0f0",borderRadius:4,height:7,overflow:"hidden",marginBottom:6}}><div style={{width:`${Math.min(100,stats.repeatRate)}%`,height:"100%",background:"#1d4ed8"}}></div></div>
-        {stats.repeatCount>0&&<div style={{fontSize:10,color:"#166534",fontWeight:600}}>মোট আয়ের {stats.repeatRevenueShare.toFixed(0)}% এসেছে এই পুনরাবৃত্ত গ্রাহকদের থেকে</div>}
-      </div>}
-
-      {stats.woodPriceAlerts&&stats.woodPriceAlerts.length>0&&<div style={{background:"#fff7ed",border:"1px solid #fed7aa",borderRadius:10,padding:"12px 14px",marginBottom:14}}>
-        <div style={{fontSize:12,fontWeight:700,color:"#9a3412",marginBottom:3}}>📈 কাঠের দাম বদলেছে (গত ৬ মাসে)</div>
-        <div style={{fontSize:9,color:"#a16207",marginBottom:8}}>দাম বাড়লে বিক্রয়মূল্য বাড়ানোর কথা ভাবুন — নাহলে লাভ চুপিসারে কমে যায়।</div>
-        {stats.woodPriceAlerts.map(a=><div key={a.wood} style={{display:"flex",justifyContent:"space-between",alignItems:"center",fontSize:11,padding:"4px 0",borderTop:"1px dashed #fed7aa"}}>
-          <span style={{fontWeight:600}}>{a.wood}</span>
-          <span style={{color:"#666",fontSize:10}}>{money(a.oldRate)} → {money(a.newRate)}</span>
-          <strong style={{color:a.pct>0?RED:"#166534"}}>{a.pct>0?"↑":"↓"} {Math.abs(a.pct).toFixed(0)}%</strong>
-        </div>)}
-      </div>}
-
       {stats.readyNotCollected&&stats.readyNotCollected.length>0&&<div style={{background:"#eff6ff",border:"1.5px solid #93c5fd",borderRadius:10,padding:"12px 14px",marginBottom:14}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:3}}>
           <span style={{fontSize:12,fontWeight:700,color:"#1d4ed8"}}>📦 তৈরি শেষ, গ্রাহক নেননি ({stats.readyNotCollected.length}টি)</span>
@@ -2290,118 +2265,14 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
             </div>
           </div>
           <div style={{display:"flex",gap:6,marginTop:5}} onClick={e=>e.stopPropagation()}>
-            <a href={`tel:${o.cust.phone}`} style={{background:"#eff6ff",color:"#1d4ed8",borderRadius:6,padding:"2px 8px",fontSize:9,fontWeight:700,textDecoration:"none"}}>📱 কল</a>
-            <a href={`https://wa.me/${toIntlPhone(o.cust.phone)}`} target="_blank" rel="noopener noreferrer" style={{background:"#f0fdf4",color:"#166534",borderRadius:6,padding:"2px 8px",fontSize:9,fontWeight:700,textDecoration:"none"}}>💬 WhatsApp</a>
+            <a href={`tel:${o.cust.phone}`} style={{background:"#eff6ff",color:"#1d4ed8",borderRadius:6,padding:"8px 10px",minHeight:38,fontSize:9,fontWeight:700,textDecoration:"none"}}>📱 কল</a>
+            <a href={`https://wa.me/${toIntlPhone(o.cust.phone)}`} target="_blank" rel="noopener noreferrer" style={{background:"#f0fdf4",color:"#166534",borderRadius:6,padding:"8px 10px",minHeight:38,fontSize:9,fontWeight:700,textDecoration:"none"}}>💬 WhatsApp</a>
           </div>
         </div>)}
         {stats.readyNotCollected.length>6&&<div style={{fontSize:9,color:"#3b5a9a",textAlign:"center"}}>...ও আরও {stats.readyNotCollected.length-6}টি</div>}
       </div>}
 
-      {stats.avgProdDays!==null&&<div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 14px",marginBottom:14}}>
-        <div style={{fontSize:12,fontWeight:700,color:"#0f766e",marginBottom:3}}>⚙️ উৎপাদনের গতি</div>
-        <div style={{fontSize:9,color:"#999",marginBottom:8}}>অর্ডার নেওয়া থেকে কাজ ১০০% শেষ হতে গড়ে কত দিন — গ্রাহকের দেরি এতে ধরা হয় না।</div>
-        <div style={{display:"flex",alignItems:"baseline",gap:8}}>
-          <span style={{fontSize:26,fontWeight:800,color:"#0f766e"}}>{stats.avgProdDays}</span>
-          <span style={{fontSize:11,color:"#666"}}>দিন গড়ে ({stats.prodCount}টি সম্পন্ন কাজ থেকে)</span>
-        </div>
-        {stats.recentAvgProd!==null&&stats.olderAvgProd!==null&&<div style={{fontSize:10,marginTop:6,color:stats.recentAvgProd<stats.olderAvgProd?"#166534":stats.recentAvgProd>stats.olderAvgProd?RED:"#666",fontWeight:600}}>
-          {stats.recentAvgProd<stats.olderAvgProd?`✅ গতি বেড়েছে — আগে ${stats.olderAvgProd} দিন, এখন ${stats.recentAvgProd} দিন`:stats.recentAvgProd>stats.olderAvgProd?`⚠️ গতি কমেছে — আগে ${stats.olderAvgProd} দিন, এখন ${stats.recentAvgProd} দিন`:"গতি একই আছে"}
-        </div>}
-      </div>}
-
-      {stats.catProfitRanked&&stats.catProfitRanked.length>0&&<div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 14px",marginBottom:14}}>
-        <div style={{fontSize:12,fontWeight:700,color:"#166534",marginBottom:3}}>💰 কোন ফার্নিচারে লাভ বেশি</div>
-        <div style={{fontSize:9,color:"#999",marginBottom:8}}>শুধু ডেলিভারি হওয়া অর্ডার থেকে — বেশি বিক্রি মানেই বেশি লাভ নয়।</div>
-        {stats.catProfitRanked.slice(0,6).map(c=><div key={c.label} style={{marginBottom:7}}>
-          <div style={{display:"flex",justifyContent:"space-between",fontSize:11,marginBottom:2}}>
-            <span style={{fontWeight:600}}>{c.label} <span style={{color:"#aaa",fontSize:9}}>({c.count}টি)</span></span>
-            <span style={{fontWeight:700,color:c.margin>=0?"#166534":RED}}>{c.margin.toFixed(0)}% লাভ</span>
-          </div>
-          <div style={{background:"#f0f0f0",borderRadius:4,height:6,overflow:"hidden"}}><div style={{width:`${Math.max(0,Math.min(100,c.margin))}%`,height:"100%",background:c.margin>=30?"#16a34a":c.margin>=15?"#f59e0b":RED}}></div></div>
-        </div>)}
-      </div>}
-
-      {stats.workerRanked&&stats.workerRanked.length>0&&<div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 14px",marginBottom:14}}>
-        <div style={{fontSize:12,fontWeight:700,color:"#6d28d9",marginBottom:3}}>👷 কর্মী-ভিত্তিক কাজের পরিমাণ (গত ৬ মাস)</div>
-        <div style={{fontSize:9,color:"#999",marginBottom:8}}>সম্পন্ন কাজের CFT কর্মীদের মধ্যে ভাগ করে হিসাব — আনুমানিক, শুধু আপনার নিজের বোঝার জন্য।</div>
-        {stats.workerRanked.slice(0,8).map((w,i)=><div key={w.name} style={{display:"flex",justifyContent:"space-between",alignItems:"center",fontSize:11,padding:"4px 0",borderTop:i>0?"1px dashed #f0f0f0":"none"}}>
-          <span style={{fontWeight:600}}>{w.name}</span>
-          <span style={{color:"#6d28d9",fontWeight:700}}>{w.cft.toFixed(1)} CFT</span>
-        </div>)}
-      </div>}
-
-      {stats.deptAvg&&stats.deptAvg.some(d=>d.avg!==null)&&<div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 14px",marginBottom:14}}>
-        <div style={{fontSize:12,fontWeight:700,color:"#0f766e",marginBottom:3}}>🚧 কোন বিভাগে সময় বেশি লাগছে</div>
-        <div style={{fontSize:9,color:"#999",marginBottom:8}}>বিভাগভিত্তিক গড় সময় (সম্পন্ন কাজ থেকে) — যেটাতে সবচেয়ে বেশি সময় লাগছে, সেটাই আসল বাধা।</div>
-        {stats.deptAvg.map(d=>d.avg!==null&&<div key={d.id} style={{marginBottom:7}}>
-          <div style={{display:"flex",justifyContent:"space-between",fontSize:11,marginBottom:2}}>
-            <span style={{fontWeight:600}}>{d.bn}</span>
-            <span style={{fontWeight:700,color:"#0f766e"}}>{d.avg.toFixed(1)} দিন <span style={{color:"#aaa",fontWeight:400,fontSize:9}}>({d.count}টি)</span></span>
-          </div>
-          <div style={{background:"#f0f0f0",borderRadius:4,height:6,overflow:"hidden"}}><div style={{width:`${(d.avg/stats.deptAvgMax)*100}%`,height:"100%",background:d.avg===stats.deptAvgMax?RED:"#0f766e"}}></div></div>
-        </div>)}
-      </div>}
-
-      {stats.validPerCft&&stats.validPerCft.length>=2&&<div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 14px",marginBottom:14}}>
-        <div style={{fontSize:12,fontWeight:700,color:"#b45309",marginBottom:3}}>💵 প্রকৃত শ্রম খরচ/CFT (মাসভিত্তিক)</div>
-        <div style={{fontSize:9,color:"#999",marginBottom:8}}>মাসিক মোট মজুরি ÷ সেই মাসে সম্পন্ন কাজের CFT — আপনার নির্ধারিত হার ({stats.setLabourRate>0?money(stats.setLabourRate):"বসানো নেই"}/CFT) এর সাথে মিলিয়ে দেখুন।</div>
-        <div style={{display:"flex",alignItems:"flex-end",gap:4,height:60}}>
-          {stats.payrollProdByMonth.map((p,i)=>{
-            const maxV=Math.max(...stats.validPerCft.map(v=>v.perCft),stats.setLabourRate,0.001);
-            return<div key={i} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"flex-end",height:"100%"}}>
-              <div style={{fontSize:7,color:"#666",marginBottom:2}}>{p.perCft!==null?money(Math.round(p.perCft)):"—"}</div>
-              <div style={{width:"100%",height:p.perCft!==null?`${(p.perCft/maxV)*100}%`:"2px",background:p.perCft===null?"#eee":"#b45309",borderRadius:"3px 3px 0 0",minHeight:3}}></div>
-              <div style={{fontSize:7,color:"#999",marginTop:2}}>{monthName(p.m)}</div>
-            </div>
-          })}
-        </div>
-      </div>}
-
-      {stats.seasonalYearSpan>=1&&stats.seasonalMax>0&&<div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 14px",marginBottom:14}}>
-        <div style={{fontSize:12,fontWeight:700,color:"#b45309",marginBottom:3}}>📅 মৌসুমি প্রবণতা — কোন মাসে অর্ডার বেশি</div>
-        <div style={{fontSize:9,color:"#999",marginBottom:8}}>{stats.seasonalYearSpan>=2?`${stats.seasonalYearSpan} বছরের গড় — আগে থেকে কাঠ ও কর্মী পরিকল্পনায় কাজে লাগবে।`:"এখনো ১ বছরের কম তথ্য — আরও ডেটা জমলে প্রবণতা স্পষ্ট হবে।"}</div>
-        <div style={{display:"flex",alignItems:"flex-end",gap:3,height:70}}>
-          {stats.seasonal.map(s=><div key={s.month} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"flex-end",height:"100%"}}>
-            <div style={{fontSize:7,color:"#666",marginBottom:2}}>{s.avg>0?s.avg.toFixed(s.avg<10?1:0):""}</div>
-            <div style={{width:"100%",height:`${stats.seasonalMax>0?(s.avg/stats.seasonalMax)*100:0}%`,background:s.avg>=stats.seasonalMax*0.75?"#b45309":"#fcd9a8",borderRadius:"3px 3px 0 0",minHeight:s.avg>0?3:0}}></div>
-            <div style={{fontSize:7,color:"#999",marginTop:2}}>{monthName(s.month)}</div>
-          </div>)}
-        </div>
-      </div>}
-
-      {stats.topCategoryRanked&&stats.topCategoryRanked.length>0&&<div style={{background:"#fffbeb",border:"1px solid #fde68a",borderRadius:10,padding:"12px 14px",marginBottom:18}}>
-        <div style={{fontSize:12,fontWeight:700,color:"#92400e",marginBottom:8}}>🏆 জনপ্রিয় ফার্নিচার (গত ১ বছর)</div>
-        {stats.topCategoryRanked.slice(0,6).map((c,i)=><div key={c.label} style={{display:"flex",alignItems:"center",gap:8,marginBottom:i<stats.topCategoryRanked.length-1?6:0}}>
-          <div style={{width:20,height:20,borderRadius:"50%",background:i===0?"#f59e0b":i===1?"#94a3b8":i===2?"#b45309":"#e5e7eb",color:i<3?"white":"#666",display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,fontWeight:800,flexShrink:0}}>{i+1}</div>
-          <span style={{flex:1,fontSize:12,color:"#333",fontWeight:600}}>{c.label}</span>
-          <span style={{fontSize:11,color:"#92400e",fontWeight:700}}>{c.count} অর্ডার</span>
-        </div>)}
-      </div>}
-
-      {/* Pie chart - running orders by category */}
-      {stats.catPie.length>0&&<div style={{marginBottom:18}}>
-        <div style={{fontWeight:700,fontSize:13,color:"#222",marginBottom:8}}>🥧 চলমান অর্ডার — ক্যাটাগরি অনুযায়ী</div>
-        <div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"14px"}}>
-          <PieChart3D data={stats.catPie} showCount={true} countSuffix="টি"/>
-        </div>
-      </div>}
-
-      {/* Pie chart - wood stock by type */}
-      {stats.stockPie&&stats.stockPie.length>0&&<div style={{marginBottom:18}}>
-        <div style={{fontWeight:700,fontSize:13,color:"#222",marginBottom:8}}>🪵 কাঠের মজুদ — ধরন অনুযায়ী</div>
-        <div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"14px"}}>
-          <PieChart3D data={stats.stockPie} showCount={true} countSuffix=" CFT"/>
-        </div>
-      </div>}
-
-      {/* Pie chart - expense by category */}
-      {stats.expensePie&&stats.expensePie.length>0&&<div style={{marginBottom:18}}>
-        <div style={{fontWeight:700,fontSize:13,color:"#222",marginBottom:8}}>💸 খরচ — ক্যাটাগরি অনুযায়ী (গত ১ বছর)</div>
-        <div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"14px"}}>
-          <PieChart3D data={stats.expensePie}/>
-        </div>
-      </div>}
-
+      <div id="z-today" style={{scrollMarginTop:56,fontSize:11,fontWeight:800,color:"#0f766e",letterSpacing:"0.3px",margin:"18px 0 8px",paddingBottom:4,borderBottom:"2px solid #0f766e22"}}>🔥 আজকের কাজ</div>
       {/* Running Orders Ranked Table */}
       <div style={{marginBottom:18}}>
         <div style={{fontWeight:700,fontSize:13,color:"#222",marginBottom:8,display:"flex",alignItems:"center",gap:6}}>🔥 চলমান অর্ডার — ডেলিভারি অনুযায়ী র‍্যাংক</div>
@@ -2436,13 +2307,127 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
         </div>}
       </div>
 
-      {/* Monthly Orders Chart */}
-      <div style={{marginBottom:18}}>
-        <div style={{fontWeight:700,fontSize:13,color:"#222",marginBottom:8}}>📊 গত ৬ মাসের অর্ডার সংখ্যা</div>
-        <div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 8px"}}>
-          <BarChart data={stats.monthlyOrders.map(m=>({label:m.label,value:m.count,color:RED}))} formatY={v=>v}/>
+      {stats.stuckItems&&stats.stuckItems.length>0&&<div style={{background:"#fff7ed",border:"1.5px solid #fdba74",borderRadius:10,padding:"12px 14px",marginBottom:14}}>
+        <div style={{fontSize:12,fontWeight:700,color:"#9a3412",marginBottom:3}}>🐌 আটকে থাকা কাজ ({stats.stuckItems.length}টা)</div>
+        <div style={{fontSize:9,color:"#a16207",marginBottom:8}}>শুরু হয়েছে কিন্তু স্বাভাবিকের চেয়ে অনেক বেশি সময় ধরে শেষ হচ্ছে না।</div>
+        {stats.stuckItems.slice(0,6).map((s,i)=><div key={i} onClick={()=>onView(s.order)} style={{background:"white",borderRadius:8,padding:"7px 10px",marginBottom:5,cursor:"pointer",border:"1px solid #fed7aa"}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontSize:11,fontWeight:700,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{s.order.cust.name} — {s.itemName}</div>
+              <div style={{fontSize:9,color:"#999",marginTop:1}}>{s.deptBn} বিভাগে {s.pct}%-এ থেমে আছে</div>
+            </div>
+            <div style={{fontSize:12,fontWeight:800,color:RED,flexShrink:0,marginLeft:8}}>{s.daysSince} দিন</div>
+          </div>
+        </div>)}
+        {stats.stuckItems.length>6&&<div style={{fontSize:9,color:"#a16207",textAlign:"center"}}>...ও আরও {stats.stuckItems.length-6}টা</div>}
+      </div>}
+
+      <div id="z-wood" style={{scrollMarginTop:56,fontSize:11,fontWeight:800,color:"#065f46",letterSpacing:"0.3px",margin:"18px 0 8px",paddingBottom:4,borderBottom:"2px solid #065f4622"}}>🪵 কাঠ ও মজুদ</div>
+      {/* Pie chart - wood stock by type */}
+      {stats.stockPie&&stats.stockPie.length>0&&<div style={{marginBottom:18}}>
+        <div style={{fontWeight:700,fontSize:13,color:"#222",marginBottom:8}}>🪵 কাঠের মজুদ — ধরন অনুযায়ী</div>
+        <div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"14px"}}>
+          <PieChart3D data={stats.stockPie} showCount={true} countSuffix=" CFT"/>
         </div>
-      </div>
+      </div>}
+
+      {stats.stockAlerts&&stats.stockAlerts.length>0&&<div style={{background:"#f0fdf4",border:"1px solid #a7d8b8",borderRadius:10,padding:"12px 14px",marginBottom:14}}>
+        <div style={{fontSize:12,fontWeight:700,color:"#166534",marginBottom:3}}>🪵 কাঠের মজুদ আর কত দিন চলবে</div>
+        <div style={{fontSize:9,color:"#4d7c5f",marginBottom:8}}>না-কাটা গুড়ির মজুদ ÷ গত ৬ মাসের মাসিক গড় ব্যবহার। {AL(alertSettings,"stockMonths")} মাসের কম হলে কেনার প্রস্তুতি নিন।</div>
+        {stats.stockAlerts.map(a=>{
+          const warnMo=AL(alertSettings,"stockMonths");const urgent=a.monthsLeft<warnMo/2,warn=a.monthsLeft<warnMo;
+          return<div key={a.key} style={{display:"flex",justifyContent:"space-between",alignItems:"center",fontSize:11,padding:"5px 0",borderTop:"1px dashed #d1e7d9"}}>
+            <span style={{fontWeight:600}}>{urgent?"🔴":warn?"🟠":"🟢"} {a.wood}</span>
+            <span style={{fontSize:9,color:"#666"}}>মজুদ {a.stock.toFixed(1)} · মাসে ~{a.monthlyUse.toFixed(1)} CFT</span>
+            <strong style={{color:urgent?RED:warn?"#f97316":"#166534"}}>{a.monthsLeft<0.1?"শেষ":`${a.monthsLeft.toFixed(1)} মাস`}</strong>
+          </div>
+        })}
+      </div>}
+
+      {stats.woodPriceAlerts&&stats.woodPriceAlerts.length>0&&<div style={{background:"#fff7ed",border:"1px solid #fed7aa",borderRadius:10,padding:"12px 14px",marginBottom:14}}>
+        <div style={{fontSize:12,fontWeight:700,color:"#9a3412",marginBottom:3}}>📈 কাঠের দাম বদলেছে (গত ৬ মাসে)</div>
+        <div style={{fontSize:9,color:"#a16207",marginBottom:8}}>দাম বাড়লে বিক্রয়মূল্য বাড়ানোর কথা ভাবুন — নাহলে লাভ চুপিসারে কমে যায়।</div>
+        {stats.woodPriceAlerts.map(a=><div key={a.wood} style={{display:"flex",justifyContent:"space-between",alignItems:"center",fontSize:11,padding:"4px 0",borderTop:"1px dashed #fed7aa"}}>
+          <span style={{fontWeight:600}}>{a.wood}</span>
+          <span style={{color:"#666",fontSize:10}}>{money(a.oldRate)} → {money(a.newRate)}</span>
+          <strong style={{color:a.pct>0?RED:"#166534"}}>{a.pct>0?"↑":"↓"} {Math.abs(a.pct).toFixed(0)}%</strong>
+        </div>)}
+      </div>}
+
+      {stats.emptyWoodModels&&stats.emptyWoodModels.length>0&&<div onClick={onManage} style={{background:"#fef2f2",border:"1.5px solid #fca5a5",borderRadius:10,padding:"12px 14px",marginBottom:14,cursor:"pointer"}}>
+        <div style={{fontSize:12,fontWeight:700,color:"#991b1b",marginBottom:3}}>⚠️ {stats.emptyWoodModels.length}টা মডেলে কাঠের মাপ বসানো নেই</div>
+        <div style={{fontSize:9,color:"#a35",marginBottom:6}}>এই মডেলে অর্ডার এলে খরচ ও র‍্যাক-হিসাব ভুল হবে। ট্যাপ করে ডেটাবেসে গিয়ে ঠিক করুন:</div>
+        <div style={{fontSize:10,color:"#991b1b"}}>{stats.emptyWoodModels.slice(0,5).map(m=>`${m.catBn} · ${m.varBn}`).join(" · ")}{stats.emptyWoodModels.length>5?` ...ও আরও ${stats.emptyWoodModels.length-5}টা`:""}</div>
+      </div>}
+
+      <div id="z-dues" style={{scrollMarginTop:56,fontSize:11,fontWeight:800,color:"#991b1b",letterSpacing:"0.3px",margin:"18px 0 8px",paddingBottom:4,borderBottom:"2px solid #991b1b22"}}>💼 পাওনা ও দেনা</div>
+      {stats.payables&&stats.payables.length>0&&<div style={{background:"#fef2f2",border:"1.5px solid #fecaca",borderRadius:10,padding:"12px 14px",marginBottom:14}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:3}}>
+          <span style={{fontSize:12,fontWeight:700,color:"#991b1b"}}>🧾 আমার নিজের দেনা</span>
+          <span style={{fontSize:15,fontWeight:800,color:RED}}>{money(stats.totalPayable)}</span>
+        </div>
+        <div style={{fontSize:9,color:"#a35",marginBottom:8}}>বাকিতে কেনা হার্ডওয়্যার/বার্নিশ + কাঠের লটে সাপ্লায়ারকে বাকি — সব একসাথে।</div>
+        {stats.payables.slice(0,8).map(p=><div key={p.name} style={{background:"white",borderRadius:8,padding:"7px 10px",marginBottom:5,border:"1px solid #fee2e2"}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontSize:11,fontWeight:700,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.name}</div>
+              <div style={{fontSize:9,color:"#999",marginTop:1}}>{p.kind} · {p.items}টি এন্ট্রি</div>
+            </div>
+            <div style={{textAlign:"right",flexShrink:0,marginLeft:8}}>
+              <div style={{fontSize:12,fontWeight:800,color:RED}}>{money(p.amount)}</div>
+              {p.phone&&<a href={`tel:${p.phone}`} style={{fontSize:9,color:"#1d4ed8",textDecoration:"none"}}>📱 {p.phone}</a>}
+            </div>
+          </div>
+        </div>)}
+        {stats.payables.length>8&&<div style={{fontSize:9,color:"#a35",textAlign:"center"}}>...ও আরও {stats.payables.length-8}টি</div>}
+        {stats.totalOutstanding>0&&<div style={{marginTop:7,paddingTop:7,borderTop:"1px dashed #fecaca",fontSize:10,color:"#555"}}>
+          গ্রাহকের কাছে পাওনা <strong style={{color:"#166534"}}>{money(stats.totalOutstanding)}</strong> − নিজের দেনা <strong style={{color:RED}}>{money(stats.totalPayable)}</strong> = <strong style={{color:stats.totalOutstanding-stats.totalPayable>=0?"#166534":RED}}>{money(stats.totalOutstanding-stats.totalPayable)}</strong> নিট
+        </div>}
+      </div>}
+
+      <div id="z-health" style={{scrollMarginTop:56,fontSize:11,fontWeight:800,color:"#1d4ed8",letterSpacing:"0.3px",margin:"18px 0 8px",paddingBottom:4,borderBottom:"2px solid #1d4ed822"}}>📊 ব্যবসার স্বাস্থ্য</div>
+      {stats.avgProdDays!==null&&<div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 14px",marginBottom:14}}>
+        <div style={{fontSize:12,fontWeight:700,color:"#0f766e",marginBottom:3}}>⚙️ উৎপাদনের গতি</div>
+        <div style={{fontSize:9,color:"#999",marginBottom:8}}>অর্ডার নেওয়া থেকে কাজ ১০০% শেষ হতে গড়ে কত দিন — গ্রাহকের দেরি এতে ধরা হয় না।</div>
+        <div style={{display:"flex",alignItems:"baseline",gap:8}}>
+          <span style={{fontSize:26,fontWeight:800,color:"#0f766e"}}>{stats.avgProdDays}</span>
+          <span style={{fontSize:11,color:"#666"}}>দিন গড়ে ({stats.prodCount}টি সম্পন্ন কাজ থেকে)</span>
+        </div>
+        {stats.recentAvgProd!==null&&stats.olderAvgProd!==null&&<div style={{fontSize:10,marginTop:6,color:stats.recentAvgProd<stats.olderAvgProd?"#166534":stats.recentAvgProd>stats.olderAvgProd?RED:"#666",fontWeight:600}}>
+          {stats.recentAvgProd<stats.olderAvgProd?`✅ গতি বেড়েছে — আগে ${stats.olderAvgProd} দিন, এখন ${stats.recentAvgProd} দিন`:stats.recentAvgProd>stats.olderAvgProd?`⚠️ গতি কমেছে — আগে ${stats.olderAvgProd} দিন, এখন ${stats.recentAvgProd} দিন`:"গতি একই আছে"}
+        </div>}
+      </div>}
+
+      {stats.totalCustCount>0&&<div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 14px",marginBottom:14}}>
+        <div style={{fontSize:12,fontWeight:700,color:"#1d4ed8",marginBottom:3}}>🔁 পুনরাবৃত্ত গ্রাহক</div>
+        <div style={{fontSize:9,color:"#999",marginBottom:8}}>যেসব গ্রাহক একবারের বেশি অর্ডার করেছেন — সন্তুষ্ট গ্রাহকের সবচেয়ে সরাসরি প্রমাণ।</div>
+        <div style={{display:"flex",alignItems:"baseline",gap:8,marginBottom:6}}>
+          <span style={{fontSize:26,fontWeight:800,color:"#1d4ed8"}}>{stats.repeatRate.toFixed(0)}%</span>
+          <span style={{fontSize:11,color:"#666"}}>{stats.totalCustCount} জনের মধ্যে {stats.repeatCount} জন</span>
+        </div>
+        <div style={{background:"#f0f0f0",borderRadius:4,height:7,overflow:"hidden",marginBottom:6}}><div style={{width:`${Math.min(100,stats.repeatRate)}%`,height:"100%",background:"#1d4ed8"}}></div></div>
+        {stats.repeatCount>0&&<div style={{fontSize:10,color:"#166534",fontWeight:600}}>মোট আয়ের {stats.repeatRevenueShare.toFixed(0)}% এসেছে এই পুনরাবৃত্ত গ্রাহকদের থেকে</div>}
+      </div>}
+
+      {stats.catProfitRanked&&stats.catProfitRanked.length>0&&<div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 14px",marginBottom:14}}>
+        <div style={{fontSize:12,fontWeight:700,color:"#166534",marginBottom:3}}>💰 কোন ফার্নিচারে লাভ বেশি</div>
+        <div style={{fontSize:9,color:"#999",marginBottom:8}}>শুধু ডেলিভারি হওয়া অর্ডার থেকে — বেশি বিক্রি মানেই বেশি লাভ নয়।</div>
+        {stats.catProfitRanked.slice(0,6).map(c=><div key={c.label} style={{marginBottom:7}}>
+          <div style={{display:"flex",justifyContent:"space-between",fontSize:11,marginBottom:2}}>
+            <span style={{fontWeight:600}}>{c.label} <span style={{color:"#aaa",fontSize:9}}>({c.count}টি)</span></span>
+            <span style={{fontWeight:700,color:c.margin>=0?"#166534":RED}}>{c.margin.toFixed(0)}% লাভ</span>
+          </div>
+          <div style={{background:"#f0f0f0",borderRadius:4,height:6,overflow:"hidden"}}><div style={{width:`${Math.max(0,Math.min(100,c.margin))}%`,height:"100%",background:c.margin>=30?"#16a34a":c.margin>=15?"#f59e0b":RED}}></div></div>
+        </div>)}
+      </div>}
+
+      {/* Pie chart - expense by category */}
+      {stats.expensePie&&stats.expensePie.length>0&&<div style={{marginBottom:18}}>
+        <div style={{fontWeight:700,fontSize:13,color:"#222",marginBottom:8}}>💸 খরচ — ক্যাটাগরি অনুযায়ী (গত ১ বছর)</div>
+        <div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"14px"}}>
+          <PieChart3D data={stats.expensePie}/>
+        </div>
+      </div>}
 
       {/* Revenue vs Expense */}
       <div style={{marginBottom:18}}>
@@ -2454,6 +2439,73 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
           </div>
         </div>
       </div>
+
+      <div id="z-perf" style={{scrollMarginTop:56,fontSize:11,fontWeight:800,color:"#7c2d12",letterSpacing:"0.3px",margin:"18px 0 8px",paddingBottom:4,borderBottom:"2px solid #7c2d1222"}}>🚧 কর্মক্ষমতা ও খরচ বিশ্লেষণ</div>
+      {stats.deptAvg&&stats.deptAvg.some(d=>d.avg!==null)&&<div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 14px",marginBottom:14}}>
+        <div style={{fontSize:12,fontWeight:700,color:"#0f766e",marginBottom:3}}>🚧 কোন বিভাগে সময় বেশি লাগছে</div>
+        <div style={{fontSize:9,color:"#999",marginBottom:8}}>বিভাগভিত্তিক গড় সময় (সম্পন্ন কাজ থেকে) — যেটাতে সবচেয়ে বেশি সময় লাগছে, সেটাই আসল বাধা।</div>
+        {stats.deptAvg.map(d=>d.avg!==null&&<div key={d.id} style={{marginBottom:7}}>
+          <div style={{display:"flex",justifyContent:"space-between",fontSize:11,marginBottom:2}}>
+            <span style={{fontWeight:600}}>{d.bn}</span>
+            <span style={{fontWeight:700,color:"#0f766e"}}>{d.avg.toFixed(1)} দিন <span style={{color:"#aaa",fontWeight:400,fontSize:9}}>({d.count}টি)</span></span>
+          </div>
+          <div style={{background:"#f0f0f0",borderRadius:4,height:6,overflow:"hidden"}}><div style={{width:`${(d.avg/stats.deptAvgMax)*100}%`,height:"100%",background:d.avg===stats.deptAvgMax?RED:"#0f766e"}}></div></div>
+        </div>)}
+      </div>}
+
+      {stats.workerRanked&&stats.workerRanked.length>0&&<div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 14px",marginBottom:14}}>
+        <div style={{fontSize:12,fontWeight:700,color:"#6d28d9",marginBottom:3}}>👷 কর্মী-ভিত্তিক কাজের পরিমাণ (গত ৬ মাস)</div>
+        <div style={{fontSize:9,color:"#999",marginBottom:8}}>সম্পন্ন কাজের CFT কর্মীদের মধ্যে ভাগ করে হিসাব — আনুমানিক, শুধু আপনার নিজের বোঝার জন্য।</div>
+        {stats.workerRanked.slice(0,8).map((w,i)=><div key={w.name} style={{display:"flex",justifyContent:"space-between",alignItems:"center",fontSize:11,padding:"4px 0",borderTop:i>0?"1px dashed #f0f0f0":"none"}}>
+          <span style={{fontWeight:600}}>{w.name}</span>
+          <span style={{color:"#6d28d9",fontWeight:700}}>{w.cft.toFixed(1)} CFT</span>
+        </div>)}
+      </div>}
+
+      {stats.validPerCft&&stats.validPerCft.length>=2&&<div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 14px",marginBottom:14}}>
+        <div style={{fontSize:12,fontWeight:700,color:"#b45309",marginBottom:3}}>💵 প্রকৃত শ্রম খরচ/CFT (মাসভিত্তিক)</div>
+        <div style={{fontSize:9,color:"#999",marginBottom:8}}>মাসিক মোট মজুরি ÷ সেই মাসে সম্পন্ন কাজের CFT — আপনার নির্ধারিত হার ({stats.setLabourRate>0?money(stats.setLabourRate):"বসানো নেই"}/CFT) এর সাথে মিলিয়ে দেখুন।</div>
+        <div style={{display:"flex",alignItems:"flex-end",gap:4,height:60}}>
+          {stats.payrollProdByMonth.map((p,i)=>{
+            const maxV=Math.max(...stats.validPerCft.map(v=>v.perCft),stats.setLabourRate,0.001);
+            return<div key={i} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"flex-end",height:"100%"}}>
+              <div style={{fontSize:7,color:"#666",marginBottom:2}}>{p.perCft!==null?money(Math.round(p.perCft)):"—"}</div>
+              <div style={{width:"100%",height:p.perCft!==null?`${(p.perCft/maxV)*100}%`:"2px",background:p.perCft===null?"#eee":"#b45309",borderRadius:"3px 3px 0 0",minHeight:3}}></div>
+              <div style={{fontSize:7,color:"#999",marginTop:2}}>{monthName(p.m)}</div>
+            </div>
+          })}
+        </div>
+      </div>}
+
+      <div id="z-trend" style={{scrollMarginTop:56,fontSize:11,fontWeight:800,color:"#b45309",letterSpacing:"0.3px",margin:"18px 0 8px",paddingBottom:4,borderBottom:"2px solid #b4530922"}}>📅 প্রবণতা ও পরিকল্পনা</div>
+      {/* Monthly Orders Chart */}
+      <div style={{marginBottom:18}}>
+        <div style={{fontWeight:700,fontSize:13,color:"#222",marginBottom:8}}>📊 গত ৬ মাসের অর্ডার সংখ্যা</div>
+        <div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 8px"}}>
+          <BarChart data={stats.monthlyOrders.map(m=>({label:m.label,value:m.count,color:RED}))} formatY={v=>v}/>
+        </div>
+      </div>
+
+      {stats.seasonalYearSpan>=1&&stats.seasonalMax>0&&<div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 14px",marginBottom:14}}>
+        <div style={{fontSize:12,fontWeight:700,color:"#b45309",marginBottom:3}}>📅 মৌসুমি প্রবণতা — কোন মাসে অর্ডার বেশি</div>
+        <div style={{fontSize:9,color:"#999",marginBottom:8}}>{stats.seasonalYearSpan>=2?`${stats.seasonalYearSpan} বছরের গড় — আগে থেকে কাঠ ও কর্মী পরিকল্পনায় কাজে লাগবে।`:"এখনো ১ বছরের কম তথ্য — আরও ডেটা জমলে প্রবণতা স্পষ্ট হবে।"}</div>
+        <div style={{display:"flex",alignItems:"flex-end",gap:3,height:70}}>
+          {stats.seasonal.map(s=><div key={s.month} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"flex-end",height:"100%"}}>
+            <div style={{fontSize:7,color:"#666",marginBottom:2}}>{s.avg>0?s.avg.toFixed(s.avg<10?1:0):""}</div>
+            <div style={{width:"100%",height:`${stats.seasonalMax>0?(s.avg/stats.seasonalMax)*100:0}%`,background:s.avg>=stats.seasonalMax*0.75?"#b45309":"#fcd9a8",borderRadius:"3px 3px 0 0",minHeight:s.avg>0?3:0}}></div>
+            <div style={{fontSize:7,color:"#999",marginTop:2}}>{monthName(s.month)}</div>
+          </div>)}
+        </div>
+      </div>}
+
+      {stats.topCategoryRanked&&stats.topCategoryRanked.length>0&&<div style={{background:"#fffbeb",border:"1px solid #fde68a",borderRadius:10,padding:"12px 14px",marginBottom:18}}>
+        <div style={{fontSize:12,fontWeight:700,color:"#92400e",marginBottom:8}}>🏆 জনপ্রিয় ফার্নিচার (গত ১ বছর)</div>
+        {stats.topCategoryRanked.slice(0,6).map((c,i)=><div key={c.label} style={{display:"flex",alignItems:"center",gap:8,marginBottom:i<stats.topCategoryRanked.length-1?6:0}}>
+          <div style={{width:20,height:20,borderRadius:"50%",background:i===0?"#f59e0b":i===1?"#94a3b8":i===2?"#b45309":"#e5e7eb",color:i<3?"white":"#666",display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,fontWeight:800,flexShrink:0}}>{i+1}</div>
+          <span style={{flex:1,fontSize:12,color:"#333",fontWeight:600}}>{c.label}</span>
+          <span style={{fontSize:11,color:"#92400e",fontWeight:700}}>{c.count} অর্ডার</span>
+        </div>)}
+      </div>}
 
       {/* Year over Year */}
       <div style={{marginBottom:16}}>
@@ -2504,6 +2556,7 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
         </div>
       </div>}
 
+      <div id="z-sys" style={{scrollMarginTop:56,fontSize:11,fontWeight:800,color:"#666",letterSpacing:"0.3px",margin:"18px 0 8px",paddingBottom:4,borderBottom:"2px solid #dddddd"}}>⚙️ সিস্টেম ও ব্যাকআপ</div>
       {/* Full-resolution image folder (desktop only) */}
       {folderStatus.supported&&<div style={{marginTop:16,background:"#fffbeb",border:"1px solid #fde68a",borderRadius:10,padding:"12px 14px"}}>
         <div style={{fontSize:12,fontWeight:700,color:"#92400e",marginBottom:6}}>🖥️ ফুল রেজোলিউশন ছবি ফোল্ডার (এই কম্পিউটার)</div>
@@ -2511,6 +2564,20 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
         <div style={{fontSize:10,color:"#78350f",marginBottom:8,lineHeight:1.5}}>এখানে একটা ফোল্ডার সেট করুন — অর্ডারে যেকোনো ছবি যুক্ত করলে তার আসল (ফুল রেজোলিউশন) কপি এই ফোল্ডারে সেভ হবে, যা পরে প্রিন্ট করে মিস্ত্রিকে দিতে পারবেন। এই ফোল্ডার নিয়মিত অন্য জায়গায় ব্যাকআপ রাখুন।</div>
         <button onClick={connectFolder} style={{width:"100%",background:"#92400e",color:"white",border:"none",borderRadius:8,padding:"9px",fontSize:12,fontWeight:700}}>{folderStatus.connected?"ভিন্ন ফোল্ডার বেছে নিন":"ফোল্ডার নির্বাচন করুন"}</button>
       </div>}
+
+      <div style={{marginTop:12,background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 14px"}}>
+        <div style={{fontSize:12,fontWeight:700,color:"#444",marginBottom:3}}>🔔 সতর্কতার সীমা</div>
+        <div style={{fontSize:9,color:"#999",marginBottom:10,lineHeight:1.5}}>কখন সতর্কতা দেখাবে সেটা আপনার ব্যবসা অনুযায়ী ঠিক করুন। খালি রাখলে ডিফল্ট মান কাজ করবে।</div>
+        {[{k:"stockMonths",l:"কাঠের মজুদ কত মাসের কম হলে সতর্কতা",u:"মাস"},
+          {k:"stuckMultiplier",l:"স্বাভাবিকের কত গুণ সময় নিলে 'আটকে আছে'",u:"গুণ"},
+          {k:"stuckFallbackDays",l:"ইতিহাস না থাকলে কত দিনে 'আটকে আছে'",u:"দিন"},
+          {k:"woodPricePct",l:"কাঠের দাম কত % বদলালে সতর্কতা",u:"%"}].map(f=>
+          <div key={f.k} style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
+            <span style={{flex:1,fontSize:10,color:"#555",lineHeight:1.4}}>{f.l}</span>
+            <input type="number" step="0.1" value={(alertSettings&&alertSettings[f.k])??""} placeholder={String(ALERT_DEFAULTS[f.k])} onChange={e=>saveAlertSettings({...alertSettings,[f.k]:e.target.value===""?null:parseFloat(e.target.value)})} style={{width:58,minHeight:40,border:"1.5px solid #e0e0e0",borderRadius:8,padding:"8px 6px",fontSize:13,textAlign:"center",outline:"none",flexShrink:0}}/>
+            <span style={{fontSize:9,color:"#aaa",width:26,flexShrink:0}}>{f.u}</span>
+          </div>)}
+      </div>
 
       {/* Automatic sync status */}
       <div style={{marginTop:10,paddingTop:16,borderTop:"1px solid #eee",textAlign:"center"}}>
@@ -2524,7 +2591,7 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
 
       {/* Data backup */}
       <div style={{marginTop:10,background:"#eff6ff",border:"1px solid #bfdbfe",borderRadius:10,padding:"12px 14px"}}>
-        <div style={{fontSize:12,fontWeight:700,color:"#1d4ed8",marginBottom:6}}>✅ স্বয়ংক্রিয় দৈনিক ব্যাকআপ চালু আছে</div>
+        <div style={{fontSize:12,fontWeight:700,color:backupFailed?"#991b1b":"#1d4ed8",marginBottom:6}}>{backupFailed?"🔴 আজকের স্বয়ংক্রিয় ব্যাকআপ ব্যর্থ হয়েছে":"✅ স্বয়ংক্রিয় দৈনিক ব্যাকআপ চালু আছে"}</div>
         <div style={{fontSize:10,color:"#555",marginBottom:8,lineHeight:1.5}}>প্রতিদিন একবার আপনার সব তথ্যের একটা কপি নিজে থেকেই ক্লাউডে জমা হয়ে যায় — কিছু করার দরকার নেই। কম্পিউটারে ছবির ফোল্ডার সংযুক্ত থাকলে সেখানেও একটা আসল ফাইল সেভ হয়। চাইলে এখনই একটা কপি হাতে রাখতে নিচের বাটনে চাপুন।</div>
         <button onClick={onBackupData} style={{width:"100%",background:"#1d4ed8",color:"white",border:"none",borderRadius:8,padding:"10px",fontSize:12,fontWeight:700}}>💾 এখনই একটা ব্যাকআপ ডাউনলোড করুন</button>
       </div>
@@ -3198,7 +3265,7 @@ function WoodStockPage({woodLots,saveWoodLots,addLotPayment,woodSettings,saveWoo
                   if(opening&&myBand)setBandDraft({...bandDraft,[c.code]:{from:String(myBand.from),to:String(myBand.to)}});
                 }} style={{background:"#eff6ff",color:"#1d4ed8",border:"1px solid #bfdbfe",borderRadius:7,padding:"5px 11px",fontSize:10,fontWeight:700}}>{isEditingBand?"বন্ধ করুন":myBand?"✏️ রেঞ্জ এডিট করুন":"📏 হাইট রেঞ্জ"}</button>}
                 {showSplitSuggestion&&<>
-                  <button onClick={approveSplit} style={{background:"#f0fdfa",color:"#0d9488",border:"1px solid #99f6e4",borderRadius:7,padding:"5px 11px",fontSize:10,fontWeight:700}}>+ আলাদা র‍্যাক করুন</button>
+                  <button onClick={approveSplit} style={{background:"#f0fdfa",color:"#0d9488",border:"1px solid #99f6e4",borderRadius:7,padding:"8px 11px",minHeight:36,fontSize:10,fontWeight:700}}>+ আলাদা র‍্যাক করুন</button>
                   <span style={{fontSize:8,color:"#999",lineHeight:1.4}}>{domL.pct.toFixed(0)}%-ই {domL.len}″ ওসার</span>
                 </>}
               </div>
@@ -3747,8 +3814,8 @@ function PayrollPage({workers,saveWorker,deleteWorker,payrollWeeks,savePayrollWe
               <div style={{fontSize:11,color:"#888",marginTop:2,display:"flex",alignItems:"center",gap:5}}><span style={{width:8,height:8,borderRadius:"50%",background:deptColor(w.department),display:"inline-block",flexShrink:0}}></span>{w.department} · দৈনিক {money(w.dailyRate)}</div>
               {w.voterId&&<div style={{fontSize:11,color:"#888",marginTop:1}}>ভোটার আইডি: {w.voterId}</div>}
               <div style={{display:"flex",gap:8,marginTop:4,flexWrap:"wrap"}}>
-                {w.phone1&&<a href={`tel:${w.phone1}`} style={{fontSize:11,color:"#1d4ed8",textDecoration:"none",fontWeight:600,background:"#eff6ff",borderRadius:6,padding:"2px 8px"}}>📱 {w.phone1}</a>}
-                {w.phone2&&<a href={`tel:${w.phone2}`} style={{fontSize:11,color:"#1d4ed8",textDecoration:"none",fontWeight:600,background:"#eff6ff",borderRadius:6,padding:"2px 8px"}}>📱 {w.phone2}</a>}
+                {w.phone1&&<a href={`tel:${w.phone1}`} style={{fontSize:11,color:"#1d4ed8",textDecoration:"none",fontWeight:600,background:"#eff6ff",borderRadius:6,padding:"8px 10px",minHeight:38}}>📱 {w.phone1}</a>}
+                {w.phone2&&<a href={`tel:${w.phone2}`} style={{fontSize:11,color:"#1d4ed8",textDecoration:"none",fontWeight:600,background:"#eff6ff",borderRadius:6,padding:"8px 10px",minHeight:38}}>📱 {w.phone2}</a>}
                 {w.idCardImg&&<button onClick={()=>setViewingIdCard(w)} style={{fontSize:11,color:PAY_DARK,fontWeight:600,background:PAY_LIGHT,border:"none",borderRadius:6,padding:"2px 8px"}}>🪪 আইডি কার্ড</button>}
               </div>
             </div>
@@ -4076,7 +4143,7 @@ function ManageDB({db,saveDb,galleries,saveGalleryEntry,onBack}){
             <div style={{display:"grid",gridTemplateColumns:"2fr 1fr 1fr 1fr 1fr auto",gap:4,marginTop:6}}>
               <input placeholder="কাঠের নাম" value={newPiece.sectionIdx===si?newPiece.bn:""} onChange={e=>setNewPiece({...newPiece,sectionIdx:si,bn:e.target.value})} style={{...inp,padding:"5px 7px",fontSize:10}} onFocus={()=>setNewPiece(p=>({...p,sectionIdx:si}))}/>
               {[{k:"w",p:"W\""},{k:"h",p:"H\""},{k:"l",p:"L\""},{k:"pc",p:"পিস"}].map(f=><input key={f.k} type="number" step="0.25" placeholder={f.p} value={newPiece.sectionIdx===si?newPiece[f.k]:""} onChange={e=>setNewPiece({...newPiece,sectionIdx:si,[f.k]:e.target.value})} style={{...inp,padding:"5px 4px",fontSize:10}}/>)}
-              <button onClick={addPiece} style={{background:"#6d28d9",color:"white",border:"none",borderRadius:6,padding:"5px 8px",fontSize:11}}>+</button>
+              <button onClick={addPiece} style={{background:"#6d28d9",color:"white",border:"none",borderRadius:6,padding:"8px 10px",minHeight:36,fontSize:11}}>+</button>
             </div>
           </div>
         </div>)}
