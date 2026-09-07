@@ -74,7 +74,7 @@ function compressImage(file,maxDim=1200,quality=0.82){
 /* ── FULL-RESOLUTION LOCAL FOLDER STORAGE (desktop Chrome/Edge/Brave only) ──
    Original, uncompressed images are saved as real files in a folder you choose
    on your computer. Only a small compressed thumbnail syncs to the cloud/mobile. */
-const BUILD_TAG="3.60";
+const BUILD_TAG="3.72";
 const FS_SUPPORTED=typeof window!=="undefined"&&"showDirectoryPicker" in window;
 function idbOpen(){
   return new Promise((resolve,reject)=>{
@@ -131,13 +131,13 @@ function sanitizeFolderName(name){
 }
 // ছবি যতগুলোই থাকুক, A4 পেজের একটা নির্দিষ্ট বরাদ্দের মধ্যেই থাকবে — বেশি ছবি হলে গ্রিড নিজে থেকেই ছোট হয়ে সমন্বয় করে নেয়
 function computePhotoGrid(count){
-  if(count<=1)return{cols:1,imgHeight:150};
-  if(count===2)return{cols:2,imgHeight:120};
-  if(count<=4)return{cols:2,imgHeight:95};
-  if(count<=6)return{cols:3,imgHeight:80};
-  if(count<=9)return{cols:3,imgHeight:64};
-  if(count<=12)return{cols:4,imgHeight:54};
-  return{cols:4,imgHeight:46};
+  if(count<=1)return{cols:1,imgHeight:230};
+  if(count===2)return{cols:2,imgHeight:175};
+  if(count<=4)return{cols:2,imgHeight:135};
+  if(count<=6)return{cols:3,imgHeight:105};
+  if(count<=9)return{cols:3,imgHeight:82};
+  if(count<=12)return{cols:4,imgHeight:66};
+  return{cols:4,imgHeight:54};
 }
 // অর্ডারের প্রথম ফার্নিচারের ক্যাটাগরি অনুযায়ী ফোল্ডারের নাম — ছবি সেই ক্যাটাগরির সাবফোল্ডারে সেভ হয়
 function orderCategoryFolder(order,db){
@@ -316,7 +316,7 @@ const deptRank=(d)=>{const i=PAYROLL_DEPTS.indexOf(d);return i===-1?PAYROLL_DEPT
 // itemProgress এখনো ফাঁকা কিন্তু পুরনো deptProgress এ ডেটা থাকলে, সেটা প্রথম ফার্নিচারের সাথে যুক্ত করে দেখানো হয় —
 // পুরনো অর্ডারের অগ্রগতি হারিয়ে যাওয়ার বদলে দেখা যাবে।
 // ── সতর্কতার সীমা: মালিক নিজে ঠিক না করলে এই ডিফল্টগুলো ব্যবহার হয় ──
-const ALERT_DEFAULTS={stockMonths:2,stuckMultiplier:1.8,stuckFallbackDays:21,woodPricePct:5};
+const ALERT_DEFAULTS={stockMonths:2,stuckMultiplier:1.8,stuckFallbackDays:21,woodPricePct:5,supplyLeadDays:21,safetyPct:20};
 const AL=(alertSettings,key)=>{
   const v=alertSettings&&alertSettings[key];
   return(v===undefined||v===null||v==="")?ALERT_DEFAULTS[key]:parseFloat(v);
@@ -1670,10 +1670,27 @@ function App({firebaseConfig,onResetConfig}){
     navigate({page:"preview",orderNo:o.no,slip:0,from:"home"});
     if(fsRef.current)fsRef.current.collection("orders").doc(o.no).set(o).catch(err=>alert("⚠️ অর্ডার সিঙ্ক করতে সমস্যা হয়েছে: "+err.message+" — ইন্টারনেট সংযোগ ফিরে আসলে এটি নিজে থেকেই সিঙ্ক হবে।"));
   };
+  // ── অর্ডার আপডেট — সুরক্ষিত পদ্ধতি ──
+  // আগে পুরো ডকুমেন্ট মুছে নতুন করে লেখা হতো। ফলে কোনো স্ক্রিন যদি অর্ডারের একটু পুরনো কপি
+  // ধরে রাখত, সেই কপি দিয়ে লিখলে পরে যোগ হওয়া পেমেন্ট বা ডেলিভারি স্ট্যাটাস মুছে যেতে পারত।
+  // এখন: (১) সর্বশেষ পরিচিত কপির উপরে পরিবর্তন বসানো হয়, (২) টাকার হিসাব ও স্ট্যাটাসের মতো
+  // জরুরি ক্ষেত্র কখনোই ঢাকা পড়ে না, (৩) merge:true — অনুপস্থিত ক্ষেত্র সার্ভারে মুছে যায় না।
+  const PROTECTED_ORDER_FIELDS=["payments","delivered","deliveredAt","cancelled","cancelledAt"];
   const updateOrder=(updated)=>{
-    setOrders(prev=>prev.map(o=>o.no===updated.no?updated:o));
-    if(draft&&draft.no===updated.no)setDraft(updated);
-    if(fsRef.current)fsRef.current.collection("orders").doc(updated.no).set(updated).catch(err=>alert("⚠️ পরিবর্তন সিঙ্ক করতে সমস্যা হয়েছে: "+err.message));
+    const live=orders.find(o=>o.no===updated.no)||null;
+    let safe={...(live||{}),...updated};
+    if(live){
+      PROTECTED_ORDER_FIELDS.forEach(f=>{
+        const incomingHasIt=Object.prototype.hasOwnProperty.call(updated,f)&&updated[f]!==undefined;
+        // ইচ্ছাকৃতভাবে এই ক্ষেত্র বদলানো হলে (যেমন বাতিল করা) সেটাই মানা হবে,
+        // নাহলে সার্ভারের সর্বশেষ মানটাই অক্ষত থাকবে
+        if(!incomingHasIt&&live[f]!==undefined)safe[f]=live[f];
+      });
+    }
+    Object.keys(safe).forEach(k=>{if(safe[k]===undefined)delete safe[k]}); // Firestore undefined নেয় না
+    setOrders(prev=>prev.map(o=>o.no===safe.no?safe:o));
+    if(draft&&draft.no===safe.no)setDraft(safe);
+    if(fsRef.current)fsRef.current.collection("orders").doc(safe.no).set(safe,{merge:true}).catch(err=>alert("⚠️ পরিবর্তন সিঙ্ক করতে সমস্যা হয়েছে: "+err.message));
   };
   // ── এই দুটো atomic — টাকার হিসাব ও ডেলিভারি স্ট্যাটাসের মতো জরুরি তথ্যের জন্য।
   // পুরো অর্ডার নতুন করে না লিখে শুধু নির্দিষ্ট অংশটাই সার্ভারে পাঠানো হয়, তাই অন্য কোনো
@@ -1943,6 +1960,21 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
     woodPriceAlerts.sort((a,b)=>b.pct-a.pct);
 
     // ── ৬. কোন ফার্নিচারে লাভের হার বেশি (ডেলিভারি হওয়া অর্ডার থেকে) ──
+    // বাধা বিভাগ চিহ্নিতকরণ (Goldratt-এর ৫ ধাপের ১ম ধাপ) — যেটাতে গড়ে সবচেয়ে বেশি সময় লাগে
+    const bnDur={};
+    DEPTS.forEach(d=>bnDur[d.id]=[]);
+    activeOrders.forEach(o=>{
+      const ipx=effectiveItemProgress(o);
+      Object.values(ipx).forEach(itp=>DEPTS.forEach(d=>{
+        const cur=itp&&itp[d.id];
+        if(cur&&cur.start&&cur.end){const dd=daysBetween(cur.start,cur.end);if(dd>=0)bnDur[d.id].push(dd)}
+      }));
+    });
+    let bottleneckDeptId=null,bottleneckDeptBn=null,bnBest=0;
+    DEPTS.forEach(d=>{
+      const l=bnDur[d.id];
+      if(l.length>=2){const av=l.reduce((s,v)=>s+v,0)/l.length;if(av>bnBest){bnBest=av;bottleneckDeptId=d.id;bottleneckDeptBn=d.bn}}
+    });
     const catProfit={};
     activeOrders.filter(o=>o.delivered).forEach(o=>{
       const lRate=orderLabourRate(o,laborSettings);
@@ -1952,13 +1984,29 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
         const labourCost=totalCft(it.sections||[])*(it.qty||1)*lRate;
         const revenue=parseFloat(it.price)||0;
         if(revenue<=0)return;
-        if(!catProfit[catLabel])catProfit[catLabel]={label:catLabel,revenue:0,cost:0,count:0};
+        if(!catProfit[catLabel])catProfit[catLabel]={label:catLabel,revenue:0,cost:0,count:0,bottleneckDays:0,bnSamples:0};
         catProfit[catLabel].revenue+=revenue;
         catProfit[catLabel].cost+=woodCost+labourCost;
         catProfit[catLabel].count+=1;
+        // থ্রুপুট অ্যাকাউন্টিং (Goldratt): এই আইটেম বাধা-বিভাগে কত দিন দখল করেছিল
+        if(bottleneckDeptId){
+          const ipx=effectiveItemProgress(o);
+          const ikey=it.itemId||"idx_0";
+          const bn=(ipx[ikey]||{})[bottleneckDeptId];
+          if(bn&&bn.start&&bn.end){
+            const dd=daysBetween(bn.start,bn.end);
+            if(dd>=0){catProfit[catLabel].bottleneckDays+=Math.max(dd,0.5);catProfit[catLabel].bnSamples+=1}
+          }
+        }
       });
     });
-    const catProfitRanked=Object.values(catProfit).map(c=>({...c,profit:c.revenue-c.cost,margin:c.revenue>0?((c.revenue-c.cost)/c.revenue)*100:0})).sort((a,b)=>b.margin-a.margin);
+    const catProfitRanked=Object.values(catProfit).map(c=>({...c,
+      profit:c.revenue-c.cost,
+      margin:c.revenue>0?((c.revenue-c.cost)/c.revenue)*100:0,
+      // বাধার প্রতিদিনে কত টাকা লাভ — Goldratt-এর মতে এটাই আসল অগ্রাধিকারের মাপ
+      profitPerBnDay:c.bottleneckDays>0?(c.revenue-c.cost)/c.bottleneckDays:null
+    })).sort((a,b)=>b.margin-a.margin);
+    const throughputRanked=catProfitRanked.filter(c=>c.profitPerBnDay!==null).sort((a,b)=>b.profitPerBnDay-a.profitPerBnDay);
 
     // ── ৭. কর্মী-ভিত্তিক উৎপাদনশীলতা: কে কত CFT কাজে যুক্ত ছিলেন (গত ৬ মাস) ──
     const workerCft={};
@@ -2168,11 +2216,22 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
         });
       });
     });
+    // ── পুনঃক্রয় বিন্দু: গড় ব্যবহার × সরবরাহে লাগা সময় + নিরাপত্তা মজুদ ──
+    // কাঠ কিনে স'মিলে কাটিয়ে ব্যবহারের উপযোগী হতে যে সময় লাগে, সেটাও হিসাবে ধরা হয়
+    const leadDays=AL(alertSettings,"supplyLeadDays");
+    const safetyPct=AL(alertSettings,"safetyPct");
     const stockAlerts=Object.keys(WOOD).map(wt=>{
       const stock=stockByType[wt]||0;
       const monthlyUse=(consumedByType[wt]||0)/6;
       if(monthlyUse<=0)return null; // ব্যবহার না থাকলে সতর্কতার দরকার নেই
-      return{wood:WOOD[wt].bn,key:wt,stock,monthlyUse,monthsLeft:stock/monthlyUse};
+      const dailyUse=monthlyUse/30;
+      const leadNeed=dailyUse*leadDays;                 // কাঠ আসতে আসতে যতটা লাগবে
+      const safety=leadNeed*(safetyPct/100);            // দেরি/হঠাৎ চাহিদার জন্য বাফার
+      const reorderPoint=leadNeed+safety;               // এই মজুদে নামলেই কেনার সময়
+      const daysLeft=dailyUse>0?stock/dailyUse:null;
+      return{wood:WOOD[wt].bn,key:wt,stock,monthlyUse,monthsLeft:stock/monthlyUse,
+        reorderPoint,daysLeft,shouldOrderNow:stock<=reorderPoint,
+        daysUntilOrder:dailyUse>0?Math.round((stock-reorderPoint)/dailyUse):null};
     }).filter(Boolean).sort((a,b)=>a.monthsLeft-b.monthsLeft);
 
     // Expense category pie (last 1 year)
@@ -2185,7 +2244,7 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
     const EXP_PIE_COLORS=["#0f766e","#1d4ed8","#f97316","#6d28d9","#db2777","#64748b","#eab308","#16a34a"];
     const expensePie=Object.entries(expByCat).sort((a,b)=>b[1]-a[1]).map(([label,value],i)=>({label,value,color:EXP_PIE_COLORS[i%EXP_PIE_COLORS.length]}));
 
-    return{running:withDays,monthlyOrders,monthlyExpense,yoy,totalRevenue,totalExpense,catPie,thisMonthCount:thisMonthOrders.length,avgOrderValue,totalOutstanding,topCategoryRanked,yearly,bestMonthCompare,stockPie,expensePie,payables,totalPayable,deptAvg,deptAvgMax,stuckItems,payrollProdByMonth,validPerCft,setLabourRate,emptyWoodModels,repeatRate,repeatCount:repeatCusts.length,totalCustCount:custList.length,repeatRevenueShare,stockAlerts,readyNotCollected,readyValueStuck,avgProdDays,recentAvgProd,olderAvgProd,prodCount:prodTimes.length,seasonal,seasonalMax,seasonalYearSpan,woodPriceAlerts,catProfitRanked,workerRanked};
+    return{running:withDays,monthlyOrders,monthlyExpense,yoy,totalRevenue,totalExpense,catPie,thisMonthCount:thisMonthOrders.length,avgOrderValue,totalOutstanding,topCategoryRanked,yearly,bestMonthCompare,stockPie,expensePie,payables,totalPayable,deptAvg,deptAvgMax,stuckItems,payrollProdByMonth,validPerCft,setLabourRate,emptyWoodModels,repeatRate,repeatCount:repeatCusts.length,totalCustCount:custList.length,repeatRevenueShare,stockAlerts,readyNotCollected,readyValueStuck,avgProdDays,recentAvgProd,olderAvgProd,prodCount:prodTimes.length,seasonal,seasonalMax,seasonalYearSpan,woodPriceAlerts,catProfitRanked,throughputRanked,bottleneckDeptBn,workerRanked};
   },[orders,expenses,db,woodLots,woodSettings,laborSettings,workers,payrollWeeks,alertSettings]);
 
   return<div style={{minHeight:"100vh",background:`linear-gradient(150deg,${RED} 0%,#8B0020 100%)`,position:"relative"}}>
@@ -2216,8 +2275,8 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
 
       {/* স্তরে লাফ দেওয়ার বার — লম্বা স্ক্রলে নিচের অংশ যাতে হারিয়ে না যায় */}
       <div style={{position:"sticky",top:0,zIndex:20,background:"rgba(255,255,255,0.97)",backdropFilter:"blur(4px)",margin:"0 -16px 12px",padding:"7px 10px",borderBottom:"1px solid #eee",display:"flex",gap:4,overflowX:"auto"}}>
-        {[{e:"⚡",z:"z-urgent"},{e:"🔥",z:"z-today"},{e:"🪵",z:"z-wood"},{e:"💼",z:"z-dues"},{e:"📊",z:"z-health"},{e:"🚧",z:"z-perf"},{e:"📅",z:"z-trend"},{e:"⚙️",z:"z-sys"}].map(b=>
-          <button key={b.z} onClick={()=>document.getElementById(b.z)?.scrollIntoView({behavior:"smooth",block:"start"})} style={{background:"#f8fafc",border:"1px solid #e5e7eb",borderRadius:9,minWidth:44,minHeight:38,fontSize:17,flexShrink:0,cursor:"pointer"}}>{b.e}</button>
+        {[{e:"⚡",z:"z-urgent",c:"#b91c1c"},{e:"🔥",z:"z-today",c:"#0f766e"},{e:"📅",z:"z-trend",c:"#b45309"},{e:"🪵",z:"z-wood",c:"#065f46"},{e:"💼",z:"z-dues",c:"#991b1b"},{e:"📊",z:"z-health",c:"#1d4ed8"},{e:"🚧",z:"z-perf",c:"#7c2d12"},{e:"⚙️",z:"z-sys",c:"#666"}].map(b=>
+          <button key={b.z} onClick={()=>document.getElementById(b.z)?.scrollIntoView({behavior:"smooth",block:"start"})} style={{background:b.c+"14",border:`1.5px solid ${b.c}55`,borderRadius:9,minWidth:44,minHeight:38,fontSize:17,flexShrink:0,cursor:"pointer"}}>{b.e}</button>
         )}
       </div>
 
@@ -2322,6 +2381,85 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
         {stats.stuckItems.length>6&&<div style={{fontSize:9,color:"#a16207",textAlign:"center"}}>...ও আরও {stats.stuckItems.length-6}টা</div>}
       </div>}
 
+      <div id="z-trend" style={{scrollMarginTop:56,fontSize:11,fontWeight:800,color:"#b45309",letterSpacing:"0.3px",margin:"18px 0 8px",paddingBottom:4,borderBottom:"2px solid #b4530922"}}>📅 প্রবণতা ও পরিকল্পনা</div>
+      {/* Monthly Orders Chart */}
+      <div style={{marginBottom:18}}>
+        <div style={{fontWeight:700,fontSize:13,color:"#222",marginBottom:8}}>📊 গত ৬ মাসের অর্ডার সংখ্যা</div>
+        <div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 8px"}}>
+          <BarChart data={stats.monthlyOrders.map(m=>({label:m.label,value:m.count,color:RED}))} formatY={v=>v}/>
+        </div>
+      </div>
+
+      {stats.seasonalYearSpan>=1&&stats.seasonalMax>0&&<div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 14px",marginBottom:14}}>
+        <div style={{fontSize:12,fontWeight:700,color:"#b45309",marginBottom:3}}>📅 মৌসুমি প্রবণতা — কোন মাসে অর্ডার বেশি</div>
+        <div style={{fontSize:9,color:"#999",marginBottom:8}}>{stats.seasonalYearSpan>=2?`${stats.seasonalYearSpan} বছরের গড় — আগে থেকে কাঠ ও কর্মী পরিকল্পনায় কাজে লাগবে।`:"এখনো ১ বছরের কম তথ্য — আরও ডেটা জমলে প্রবণতা স্পষ্ট হবে।"}</div>
+        <div style={{display:"flex",alignItems:"flex-end",gap:3,height:70}}>
+          {stats.seasonal.map(s=><div key={s.month} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"flex-end",height:"100%"}}>
+            <div style={{fontSize:7,color:"#666",marginBottom:2}}>{s.avg>0?s.avg.toFixed(s.avg<10?1:0):""}</div>
+            <div style={{width:"100%",height:`${stats.seasonalMax>0?(s.avg/stats.seasonalMax)*100:0}%`,background:s.avg>=stats.seasonalMax*0.75?"#b45309":"#fcd9a8",borderRadius:"3px 3px 0 0",minHeight:s.avg>0?3:0}}></div>
+            <div style={{fontSize:7,color:"#999",marginTop:2}}>{monthName(s.month)}</div>
+          </div>)}
+        </div>
+      </div>}
+
+      {stats.topCategoryRanked&&stats.topCategoryRanked.length>0&&<div style={{background:"#fffbeb",border:"1px solid #fde68a",borderRadius:10,padding:"12px 14px",marginBottom:18}}>
+        <div style={{fontSize:12,fontWeight:700,color:"#92400e",marginBottom:8}}>🏆 জনপ্রিয় ফার্নিচার (গত ১ বছর)</div>
+        {stats.topCategoryRanked.slice(0,6).map((c,i)=><div key={c.label} style={{display:"flex",alignItems:"center",gap:8,marginBottom:i<stats.topCategoryRanked.length-1?6:0}}>
+          <div style={{width:20,height:20,borderRadius:"50%",background:i===0?"#f59e0b":i===1?"#94a3b8":i===2?"#b45309":"#e5e7eb",color:i<3?"white":"#666",display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,fontWeight:800,flexShrink:0}}>{i+1}</div>
+          <span style={{flex:1,fontSize:12,color:"#333",fontWeight:600}}>{c.label}</span>
+          <span style={{fontSize:11,color:"#92400e",fontWeight:700}}>{c.count} অর্ডার</span>
+        </div>)}
+      </div>}
+
+      {/* Year over Year */}
+      <div style={{marginBottom:16}}>
+        <div style={{fontWeight:700,fontSize:13,color:"#222",marginBottom:8}}>📈 বছর অনুযায়ী তুলনা (একই মাস)</div>
+        <div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 8px"}}>
+          <DualBarChart data={stats.yoy}/>
+        </div>
+      </div>
+
+      {/* Yearly totals */}
+      {stats.yearly&&stats.yearly.length>1&&<>
+        <div style={{marginBottom:16}}>
+          <div style={{fontWeight:700,fontSize:13,color:"#222",marginBottom:8}}>📅 বাৎসরিক মোট অর্ডার সংখ্যা</div>
+          <div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 8px"}}>
+            <BarChart data={stats.yearly.map(y=>({label:y.label,value:y.count,color:"#1d4ed8"}))} formatY={v=>v}/>
+          </div>
+        </div>
+        <div style={{marginBottom:16}}>
+          <div style={{fontWeight:700,fontSize:13,color:"#222",marginBottom:8}}>📅 বাৎসরিক মোট মূল্য</div>
+          <div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 8px"}}>
+            <BarChart data={stats.yearly.map(y=>({label:y.label,value:y.revenue,color:"#166534"}))} formatY={v=>money(v)}/>
+          </div>
+        </div>
+      </>}
+
+      {/* Best month comparison */}
+      {stats.bestMonthCompare&&stats.bestMonthCompare.bestCount>0&&<div style={{marginBottom:18}}>
+        <div style={{fontWeight:700,fontSize:13,color:"#222",marginBottom:8}}>🏅 সর্বোচ্চ অর্ডারের মাস — বনাম এই বছর</div>
+        <div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"14px"}}>
+          <div style={{fontSize:12,color:"#666",marginBottom:10,textAlign:"center"}}>
+            <strong>{stats.bestMonthCompare.monthLabel}</strong> মাসে সর্বোচ্চ অর্ডার হয়েছিল <strong>{stats.bestMonthCompare.bestYear}</strong> সালে
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:12}}>
+            <div style={{background:"#f8fafc",borderRadius:9,padding:"10px",textAlign:"center"}}>
+              <div style={{fontSize:10,color:"#888"}}>{stats.bestMonthCompare.bestYear} ({stats.bestMonthCompare.monthLabel})</div>
+              <div style={{fontSize:20,fontWeight:800,color:"#94a3b8"}}>{stats.bestMonthCompare.bestCount} অর্ডার</div>
+              <div style={{fontSize:11,color:"#64748b",marginTop:2}}>{money(stats.bestMonthCompare.bestRevenue)}</div>
+            </div>
+            <div style={{background:"#fff0f0",borderRadius:9,padding:"10px",textAlign:"center"}}>
+              <div style={{fontSize:10,color:"#888"}}>{stats.bestMonthCompare.thisYear} ({stats.bestMonthCompare.monthLabel})</div>
+              <div style={{fontSize:20,fontWeight:800,color:RED}}>{stats.bestMonthCompare.thisCount} অর্ডার</div>
+              <div style={{fontSize:11,color:RED,marginTop:2}}>{money(stats.bestMonthCompare.thisRevenue)}</div>
+            </div>
+          </div>
+          <DualBarChart data={[{label:stats.bestMonthCompare.monthLabel,a:stats.bestMonthCompare.bestCount,b:stats.bestMonthCompare.thisCount}]} labelA={`${stats.bestMonthCompare.bestYear} (সর্বোচ্চ)`} labelB={`${stats.bestMonthCompare.thisYear}`}/>
+          <div style={{fontSize:11,fontWeight:700,color:"#444",marginTop:14,marginBottom:6,textAlign:"center"}}>মোট মূল্যের তুলনা</div>
+          <DualBarChart data={[{label:stats.bestMonthCompare.monthLabel,a:stats.bestMonthCompare.bestRevenue,b:stats.bestMonthCompare.thisRevenue}]} labelA={`${stats.bestMonthCompare.bestYear} (সর্বোচ্চ)`} labelB={`${stats.bestMonthCompare.thisYear}`}/>
+        </div>
+      </div>}
+
       <div id="z-wood" style={{scrollMarginTop:56,fontSize:11,fontWeight:800,color:"#065f46",letterSpacing:"0.3px",margin:"18px 0 8px",paddingBottom:4,borderBottom:"2px solid #065f4622"}}>🪵 কাঠ ও মজুদ</div>
       {/* Pie chart - wood stock by type */}
       {stats.stockPie&&stats.stockPie.length>0&&<div style={{marginBottom:18}}>
@@ -2333,13 +2471,20 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
 
       {stats.stockAlerts&&stats.stockAlerts.length>0&&<div style={{background:"#f0fdf4",border:"1px solid #a7d8b8",borderRadius:10,padding:"12px 14px",marginBottom:14}}>
         <div style={{fontSize:12,fontWeight:700,color:"#166534",marginBottom:3}}>🪵 কাঠের মজুদ আর কত দিন চলবে</div>
-        <div style={{fontSize:9,color:"#4d7c5f",marginBottom:8}}>না-কাটা গুড়ির মজুদ ÷ গত ৬ মাসের মাসিক গড় ব্যবহার। {AL(alertSettings,"stockMonths")} মাসের কম হলে কেনার প্রস্তুতি নিন।</div>
+        <div style={{fontSize:9,color:"#4d7c5f",marginBottom:8}}>না-কাটা গুড়ির মজুদ ÷ গত ৬ মাসের মাসিক গড় ব্যবহার। কাঠ কিনে কাটিয়ে ব্যবহারযোগ্য হতে {AL(alertSettings,"supplyLeadDays")} দিন ধরা হয়েছে — সেই সময়টা হিসাবে রেখেই "এখনই কিনুন" বলা হয়।</div>
         {stats.stockAlerts.map(a=>{
-          const warnMo=AL(alertSettings,"stockMonths");const urgent=a.monthsLeft<warnMo/2,warn=a.monthsLeft<warnMo;
-          return<div key={a.key} style={{display:"flex",justifyContent:"space-between",alignItems:"center",fontSize:11,padding:"5px 0",borderTop:"1px dashed #d1e7d9"}}>
-            <span style={{fontWeight:600}}>{urgent?"🔴":warn?"🟠":"🟢"} {a.wood}</span>
-            <span style={{fontSize:9,color:"#666"}}>মজুদ {a.stock.toFixed(1)} · মাসে ~{a.monthlyUse.toFixed(1)} CFT</span>
-            <strong style={{color:urgent?RED:warn?"#f97316":"#166534"}}>{a.monthsLeft<0.1?"শেষ":`${a.monthsLeft.toFixed(1)} মাস`}</strong>
+          const warnMo=AL(alertSettings,"stockMonths");const urgent=a.shouldOrderNow,warn=!urgent&&a.monthsLeft<warnMo;
+          return<div key={a.key} style={{padding:"6px 0",borderTop:"1px dashed #d1e7d9"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",fontSize:11}}>
+              <span style={{fontWeight:600}}>{urgent?"🔴":warn?"🟠":"🟢"} {a.wood}</span>
+              <span style={{fontSize:9,color:"#666"}}>মজুদ {a.stock.toFixed(1)} · মাসে ~{a.monthlyUse.toFixed(1)} CFT</span>
+              <strong style={{color:urgent?RED:warn?"#f97316":"#166534"}}>{a.monthsLeft<0.1?"শেষ":`${a.monthsLeft.toFixed(1)} মাস`}</strong>
+            </div>
+            <div style={{fontSize:9,marginTop:2,color:urgent?RED:"#4d7c5f",fontWeight:urgent?700:400}}>
+              {urgent?`⚠ এখনই কেনার সময় — পুনঃক্রয় সীমা ${a.reorderPoint.toFixed(1)} CFT`
+                :a.daysUntilOrder!==null?`আর ~${a.daysUntilOrder} দিন পর কেনার সময় (সীমা ${a.reorderPoint.toFixed(1)} CFT)`
+                :`পুনঃক্রয় সীমা ${a.reorderPoint.toFixed(1)} CFT`}
+            </div>
           </div>
         })}
       </div>}
@@ -2421,6 +2566,23 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
         </div>)}
       </div>}
 
+      {stats.throughputRanked&&stats.throughputRanked.length>0&&stats.bottleneckDeptBn&&<div style={{background:"#fffbeb",border:"1.5px solid #fcd34d",borderRadius:10,padding:"12px 14px",marginBottom:14}}>
+        <div style={{fontSize:12,fontWeight:700,color:"#92400e",marginBottom:3}}>🎯 বাধার প্রতিদিনে কোনটা বেশি টাকা আনে</div>
+        <div style={{fontSize:9,color:"#a16207",marginBottom:8,lineHeight:1.5}}>আপনার সবচেয়ে ধীর বিভাগ <strong>{stats.bottleneckDeptBn}</strong> — এটাই আপনার উৎপাদনের আসল সীমা। তাই শতাংশ লাভ নয়, <strong>এই বিভাগের প্রতিদিনে কত টাকা লাভ আসে</strong> সেটাই অগ্রাধিকারের সঠিক মাপ (Goldratt-এর থ্রুপুট নীতি)।</div>
+        {stats.throughputRanked.slice(0,6).map((c,i)=>{
+          const maxV=stats.throughputRanked[0].profitPerBnDay||1;
+          return<div key={c.label} style={{marginBottom:8}}>
+            <div style={{display:"flex",justifyContent:"space-between",fontSize:11,marginBottom:2}}>
+              <span style={{fontWeight:600}}>{i===0?"🥇 ":""}{c.label} <span style={{color:"#aaa",fontSize:9}}>({c.bnSamples}টি)</span></span>
+              <span style={{fontWeight:700,color:"#92400e"}}>{money(Math.round(c.profitPerBnDay))}/দিন</span>
+            </div>
+            <div style={{background:"#f0f0f0",borderRadius:4,height:6,overflow:"hidden"}}><div style={{width:`${Math.max(0,Math.min(100,(c.profitPerBnDay/maxV)*100))}%`,height:"100%",background:i===0?"#b45309":"#fcd34d"}}></div></div>
+            <div style={{fontSize:8,color:"#999",marginTop:1}}>শতাংশ লাভ {c.margin.toFixed(0)}% · {stats.bottleneckDeptBn}-এ গড়ে {(c.bottleneckDays/c.bnSamples).toFixed(1)} দিন</div>
+          </div>
+        })}
+        <div style={{fontSize:9,color:"#a16207",marginTop:6,paddingTop:6,borderTop:"1px dashed #fcd34d",lineHeight:1.5}}>💡 কাজের চাপ বেশি থাকলে উপরের দিকের ফার্নিচারগুলো আগে নিন — শতাংশ লাভ কম হলেও মোট আয় বেশি হবে।</div>
+      </div>}
+
       {/* Pie chart - expense by category */}
       {stats.expensePie&&stats.expensePie.length>0&&<div style={{marginBottom:18}}>
         <div style={{fontWeight:700,fontSize:13,color:"#222",marginBottom:8}}>💸 খরচ — ক্যাটাগরি অনুযায়ী (গত ১ বছর)</div>
@@ -2477,85 +2639,6 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
         </div>
       </div>}
 
-      <div id="z-trend" style={{scrollMarginTop:56,fontSize:11,fontWeight:800,color:"#b45309",letterSpacing:"0.3px",margin:"18px 0 8px",paddingBottom:4,borderBottom:"2px solid #b4530922"}}>📅 প্রবণতা ও পরিকল্পনা</div>
-      {/* Monthly Orders Chart */}
-      <div style={{marginBottom:18}}>
-        <div style={{fontWeight:700,fontSize:13,color:"#222",marginBottom:8}}>📊 গত ৬ মাসের অর্ডার সংখ্যা</div>
-        <div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 8px"}}>
-          <BarChart data={stats.monthlyOrders.map(m=>({label:m.label,value:m.count,color:RED}))} formatY={v=>v}/>
-        </div>
-      </div>
-
-      {stats.seasonalYearSpan>=1&&stats.seasonalMax>0&&<div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 14px",marginBottom:14}}>
-        <div style={{fontSize:12,fontWeight:700,color:"#b45309",marginBottom:3}}>📅 মৌসুমি প্রবণতা — কোন মাসে অর্ডার বেশি</div>
-        <div style={{fontSize:9,color:"#999",marginBottom:8}}>{stats.seasonalYearSpan>=2?`${stats.seasonalYearSpan} বছরের গড় — আগে থেকে কাঠ ও কর্মী পরিকল্পনায় কাজে লাগবে।`:"এখনো ১ বছরের কম তথ্য — আরও ডেটা জমলে প্রবণতা স্পষ্ট হবে।"}</div>
-        <div style={{display:"flex",alignItems:"flex-end",gap:3,height:70}}>
-          {stats.seasonal.map(s=><div key={s.month} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"flex-end",height:"100%"}}>
-            <div style={{fontSize:7,color:"#666",marginBottom:2}}>{s.avg>0?s.avg.toFixed(s.avg<10?1:0):""}</div>
-            <div style={{width:"100%",height:`${stats.seasonalMax>0?(s.avg/stats.seasonalMax)*100:0}%`,background:s.avg>=stats.seasonalMax*0.75?"#b45309":"#fcd9a8",borderRadius:"3px 3px 0 0",minHeight:s.avg>0?3:0}}></div>
-            <div style={{fontSize:7,color:"#999",marginTop:2}}>{monthName(s.month)}</div>
-          </div>)}
-        </div>
-      </div>}
-
-      {stats.topCategoryRanked&&stats.topCategoryRanked.length>0&&<div style={{background:"#fffbeb",border:"1px solid #fde68a",borderRadius:10,padding:"12px 14px",marginBottom:18}}>
-        <div style={{fontSize:12,fontWeight:700,color:"#92400e",marginBottom:8}}>🏆 জনপ্রিয় ফার্নিচার (গত ১ বছর)</div>
-        {stats.topCategoryRanked.slice(0,6).map((c,i)=><div key={c.label} style={{display:"flex",alignItems:"center",gap:8,marginBottom:i<stats.topCategoryRanked.length-1?6:0}}>
-          <div style={{width:20,height:20,borderRadius:"50%",background:i===0?"#f59e0b":i===1?"#94a3b8":i===2?"#b45309":"#e5e7eb",color:i<3?"white":"#666",display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,fontWeight:800,flexShrink:0}}>{i+1}</div>
-          <span style={{flex:1,fontSize:12,color:"#333",fontWeight:600}}>{c.label}</span>
-          <span style={{fontSize:11,color:"#92400e",fontWeight:700}}>{c.count} অর্ডার</span>
-        </div>)}
-      </div>}
-
-      {/* Year over Year */}
-      <div style={{marginBottom:16}}>
-        <div style={{fontWeight:700,fontSize:13,color:"#222",marginBottom:8}}>📈 বছর অনুযায়ী তুলনা (একই মাস)</div>
-        <div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 8px"}}>
-          <DualBarChart data={stats.yoy}/>
-        </div>
-      </div>
-
-      {/* Yearly totals */}
-      {stats.yearly&&stats.yearly.length>1&&<>
-        <div style={{marginBottom:16}}>
-          <div style={{fontWeight:700,fontSize:13,color:"#222",marginBottom:8}}>📅 বাৎসরিক মোট অর্ডার সংখ্যা</div>
-          <div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 8px"}}>
-            <BarChart data={stats.yearly.map(y=>({label:y.label,value:y.count,color:"#1d4ed8"}))} formatY={v=>v}/>
-          </div>
-        </div>
-        <div style={{marginBottom:16}}>
-          <div style={{fontWeight:700,fontSize:13,color:"#222",marginBottom:8}}>📅 বাৎসরিক মোট মূল্য</div>
-          <div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 8px"}}>
-            <BarChart data={stats.yearly.map(y=>({label:y.label,value:y.revenue,color:"#166534"}))} formatY={v=>money(v)}/>
-          </div>
-        </div>
-      </>}
-
-      {/* Best month comparison */}
-      {stats.bestMonthCompare&&stats.bestMonthCompare.bestCount>0&&<div style={{marginBottom:18}}>
-        <div style={{fontWeight:700,fontSize:13,color:"#222",marginBottom:8}}>🏅 সর্বোচ্চ অর্ডারের মাস — বনাম এই বছর</div>
-        <div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"14px"}}>
-          <div style={{fontSize:12,color:"#666",marginBottom:10,textAlign:"center"}}>
-            <strong>{stats.bestMonthCompare.monthLabel}</strong> মাসে সর্বোচ্চ অর্ডার হয়েছিল <strong>{stats.bestMonthCompare.bestYear}</strong> সালে
-          </div>
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:12}}>
-            <div style={{background:"#f8fafc",borderRadius:9,padding:"10px",textAlign:"center"}}>
-              <div style={{fontSize:10,color:"#888"}}>{stats.bestMonthCompare.bestYear} ({stats.bestMonthCompare.monthLabel})</div>
-              <div style={{fontSize:20,fontWeight:800,color:"#94a3b8"}}>{stats.bestMonthCompare.bestCount} অর্ডার</div>
-              <div style={{fontSize:11,color:"#64748b",marginTop:2}}>{money(stats.bestMonthCompare.bestRevenue)}</div>
-            </div>
-            <div style={{background:"#fff0f0",borderRadius:9,padding:"10px",textAlign:"center"}}>
-              <div style={{fontSize:10,color:"#888"}}>{stats.bestMonthCompare.thisYear} ({stats.bestMonthCompare.monthLabel})</div>
-              <div style={{fontSize:20,fontWeight:800,color:RED}}>{stats.bestMonthCompare.thisCount} অর্ডার</div>
-              <div style={{fontSize:11,color:RED,marginTop:2}}>{money(stats.bestMonthCompare.thisRevenue)}</div>
-            </div>
-          </div>
-          <DualBarChart data={[{label:stats.bestMonthCompare.monthLabel,a:stats.bestMonthCompare.bestCount,b:stats.bestMonthCompare.thisCount}]} labelA={`${stats.bestMonthCompare.bestYear} (সর্বোচ্চ)`} labelB={`${stats.bestMonthCompare.thisYear}`}/>
-          <div style={{fontSize:11,fontWeight:700,color:"#444",marginTop:14,marginBottom:6,textAlign:"center"}}>মোট মূল্যের তুলনা</div>
-          <DualBarChart data={[{label:stats.bestMonthCompare.monthLabel,a:stats.bestMonthCompare.bestRevenue,b:stats.bestMonthCompare.thisRevenue}]} labelA={`${stats.bestMonthCompare.bestYear} (সর্বোচ্চ)`} labelB={`${stats.bestMonthCompare.thisYear}`}/>
-        </div>
-      </div>}
-
       <div id="z-sys" style={{scrollMarginTop:56,fontSize:11,fontWeight:800,color:"#666",letterSpacing:"0.3px",margin:"18px 0 8px",paddingBottom:4,borderBottom:"2px solid #dddddd"}}>⚙️ সিস্টেম ও ব্যাকআপ</div>
       {/* Full-resolution image folder (desktop only) */}
       {folderStatus.supported&&<div style={{marginTop:16,background:"#fffbeb",border:"1px solid #fde68a",borderRadius:10,padding:"12px 14px"}}>
@@ -2571,7 +2654,9 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
         {[{k:"stockMonths",l:"কাঠের মজুদ কত মাসের কম হলে সতর্কতা",u:"মাস"},
           {k:"stuckMultiplier",l:"স্বাভাবিকের কত গুণ সময় নিলে 'আটকে আছে'",u:"গুণ"},
           {k:"stuckFallbackDays",l:"ইতিহাস না থাকলে কত দিনে 'আটকে আছে'",u:"দিন"},
-          {k:"woodPricePct",l:"কাঠের দাম কত % বদলালে সতর্কতা",u:"%"}].map(f=>
+          {k:"woodPricePct",l:"কাঠের দাম কত % বদলালে সতর্কতা",u:"%"},
+          {k:"supplyLeadDays",l:"কাঠ কিনে কাটিয়ে ব্যবহারযোগ্য হতে কত দিন",u:"দিন"},
+          {k:"safetyPct",l:"নিরাপত্তা মজুদ (দেরির জন্য বাফার)",u:"%"}].map(f=>
           <div key={f.k} style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
             <span style={{flex:1,fontSize:10,color:"#555",lineHeight:1.4}}>{f.l}</span>
             <input type="number" step="0.1" value={(alertSettings&&alertSettings[f.k])??""} placeholder={String(ALERT_DEFAULTS[f.k])} onChange={e=>saveAlertSettings({...alertSettings,[f.k]:e.target.value===""?null:parseFloat(e.target.value)})} style={{width:58,minHeight:40,border:"1.5px solid #e0e0e0",borderRadius:8,padding:"8px 6px",fontSize:13,textAlign:"center",outline:"none",flexShrink:0}}/>
@@ -4189,6 +4274,7 @@ function Form({onSave,onBack,db,saveDb,galleries,woodSettings,laborSettings,orde
   const[c,setC]=useState({name:"",phone:"",phone2:"",address:"",date:today,delivery:addDays(today,60),notes:""});
   const[emergency,setEmergency]=useState(false);
   const[useRealistic,setUseRealistic]=useState(false);
+  const[customDelivery,setCustomDelivery]=useState(false);
   const realisticEst=useMemo(()=>computeRealisticDeliveryDays(orders),[orders]);
   const[payments,setPayments]=useState([{date:today,amount:"",note:"অগ্রিম"}]);
   const[items,setItems]=useState([]);
@@ -4273,15 +4359,22 @@ function Form({onSave,onBack,db,saveDb,galleries,woodSettings,laborSettings,orde
   const days=c.delivery?daysBetween(c.date,c.delivery):null;
 
   const onDateChange=(newDate)=>{
-    if(emergency){setC({...c,date:newDate})}
+    if(emergency||customDelivery){setC({...c,date:newDate})} // ডেলিভারি তারিখ হাতে ঠিক করা আছে — বদলানো হবে না
     else{
       const days=useRealistic&&realisticEst?realisticEst.realisticDays:60;
       setC({...c,date:newDate,delivery:addDays(newDate,days)})
     }
   };
+  const toggleCustomDelivery=(checked)=>{
+    setCustomDelivery(checked);
+    if(!checked&&!emergency){
+      const days=useRealistic&&realisticEst?realisticEst.realisticDays:60;
+      setC(prev=>({...prev,delivery:addDays(prev.date,days)}));
+    }
+  };
   const toggleRealistic=(checked)=>{
     setUseRealistic(checked);
-    if(!emergency){
+    if(!emergency&&!customDelivery){
       const days=checked&&realisticEst?realisticEst.realisticDays:60;
       setC(prev=>({...prev,delivery:addDays(prev.date,days)}));
     }
@@ -4373,7 +4466,13 @@ function Form({onSave,onBack,db,saveDb,galleries,woodSettings,laborSettings,orde
             <input type="checkbox" checked={emergency} onChange={e=>setEmergency(e.target.checked)}/>⚡ ইমারজেন্সি অর্ডার (ডেলিভারি ডেট ম্যানুয়াল)
           </label>
         </div>
-        {!emergency&&realisticEst&&<div style={{background:"#faf5ff",borderRadius:10,padding:"10px 12px",marginBottom:14}}>
+        {!emergency&&<div style={{background:"#f0f9ff",borderRadius:10,padding:"10px 12px",marginBottom:14}}>
+          <label style={{display:"flex",alignItems:"center",gap:8,fontSize:12,fontWeight:600,color:"#0369a1",cursor:"pointer"}}>
+            <input type="checkbox" checked={customDelivery} onChange={e=>toggleCustomDelivery(e.target.checked)}/>📅 ডেলিভারির তারিখ নিজে ঠিক করুন
+          </label>
+          <div style={{fontSize:9,color:"#3b7fa8",marginTop:4,marginLeft:24}}>টিক দিলে নিচের ডেলিভারি তারিখের ঘরটা খুলে যাবে — যা খুশি তারিখ বসাতে পারবেন।</div>
+        </div>}
+        {!emergency&&!customDelivery&&realisticEst&&<div style={{background:"#faf5ff",borderRadius:10,padding:"10px 12px",marginBottom:14}}>
           <label style={{display:"flex",alignItems:"center",gap:8,fontSize:12,fontWeight:600,color:"#6d28d9",cursor:"pointer"}}>
             <input type="checkbox" checked={useRealistic} onChange={e=>toggleRealistic(e.target.checked)}/>📊 বাস্তবসম্মত ডেলিভারি ব্যবহার করুন (~{realisticEst.realisticDays} দিন)
           </label>
@@ -4381,10 +4480,10 @@ function Form({onSave,onBack,db,saveDb,galleries,woodSettings,laborSettings,orde
         </div>}
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:6}}>
           <div>{lbl("অর্ডারের তারিখ")}<DateInput value={c.date} onChange={v=>onDateChange(v)} accent={RED}/></div>
-          <div>{lbl("ডেলিভারির তারিখ")}<DateInput value={c.delivery} disabled={!emergency} onChange={v=>setC({...c,delivery:v})} accent={RED}/></div>
+          <div>{lbl("ডেলিভারির তারিখ")}<DateInput value={c.delivery} disabled={!emergency&&!customDelivery} onChange={v=>setC({...c,delivery:v})} accent={RED}/></div>
         </div>
         <div style={{background:days<0?"#fee2e2":"#f0fdf4",borderRadius:8,padding:"7px 12px",marginBottom:14,fontSize:12,color:days<0?RED:"#166534",fontWeight:600,textAlign:"center"}}>
-          {days!==null&&(days<0?`⚠ ডেলিভারি তারিখ অতীতে!`:`ডেলিভারি হবে ${days} দিন পরে${emergency?" (ইমারজেন্সি — ম্যানুয়াল)":useRealistic&&realisticEst?" (বাস্তবসম্মত হিসাব)":" (স্বয়ংক্রিয় ৬০ দিন)"}`)}
+          {days!==null&&(days<0?`⚠ ডেলিভারি তারিখ অতীতে!`:`ডেলিভারি হবে ${days} দিন পরে${emergency?" (ইমারজেন্সি — ম্যানুয়াল)":customDelivery?" (নিজে ঠিক করা)":useRealistic&&realisticEst?" (বাস্তবসম্মত হিসাব)":" (স্বয়ংক্রিয় ৬০ দিন)"}`)}
         </div>
         <div style={{marginBottom:(custPickJustDone||customerSuggestions.length===0||activeField!=="phone")?11:0,position:"relative"}}>
           {lbl("মোবাইল *")}
