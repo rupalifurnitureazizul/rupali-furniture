@@ -37,6 +37,17 @@ button{cursor:pointer}
 <script type="text/babel">
 const {useState,useEffect,useRef,useMemo}=React;
 const RED="#C41E3A";
+// ── চার্টের জন্য নরম/হালকা রঙ — মৌসুমি প্রবণতা চার্টের ধাঁচ অনুসরণ করে। এগুলো শুধু
+// চার্ট/গ্রাফের বার-রঙে ব্যবহার হয়; বাটন-ব্যাজের মতো UI-এর অন্য জায়গায় RED/PAY আগের
+// মতোই অপরিবর্তিত থাকে ──
+const CHART_SOFT_RED="#c17a5f";
+const CHART_SOFT_BLUE="#7ba7c9";
+const CHART_SOFT_ORANGE="#dba86c";
+const CHART_SOFT_GREEN="#8caa8a";
+const CHART_SOFT_PURPLE="#a695c4";
+const CHART_SOFT_TEAL="#7fa8a3";
+const CHART_SOFT_GREY="#a8b0ba";
+const CHART_SOFT_PINK="#c98fa0";
 const PAY="#0E7490";
 const PAY_DARK="#155E75";
 const PAY_LIGHT="#ECFEFF";
@@ -74,7 +85,7 @@ function compressImage(file,maxDim=1200,quality=0.82){
 /* ── FULL-RESOLUTION LOCAL FOLDER STORAGE (desktop Chrome/Edge/Brave only) ──
    Original, uncompressed images are saved as real files in a folder you choose
    on your computer. Only a small compressed thumbnail syncs to the cloud/mobile. */
-const BUILD_TAG="4.00";
+const BUILD_TAG="4.20";
 const FS_SUPPORTED=typeof window!=="undefined"&&"showDirectoryPicker" in window;
 function idbOpen(){
   return new Promise((resolve,reject)=>{
@@ -193,7 +204,10 @@ const WOOD_COLORS={
   E:{bg:"#faf5ff",border:"#cbb4e8",accent:"#7c3aed",name:"#6b21a8"}
 };
 const woodColor=(w)=>WOOD_COLORS[w]||{bg:"#fafafa",border:"#ddd",accent:"#666",name:"#444"};
-const DEPTS=[{id:"carpenter",bn:"ছুতার বিভাগ",payDept:"ছুতার"},{id:"craftsmen",bn:"কারিগর বিভাগ",payDept:"কারিগর"},{id:"burnish",bn:"বার্নিশ বিভাগ",payDept:"বার্নিশ"},{id:"transport",bn:"পরিবহন বিভাগ",payDept:"পরিবহন"}];
+const DEPTS=[{id:"transport",bn:"পরিবহন বিভাগ",payDept:"পরিবহন"},{id:"carpenter",bn:"ছুতার বিভাগ",payDept:"ছুতার"},{id:"craftsmen",bn:"নকশা বিভাগ",payDept:"কারিগর"},{id:"burnish",bn:"বার্নিশ বিভাগ",payDept:"বার্নিশ"}];
+// ── প্রতিটা বিভাগ মূল ফার্নিচারের সামগ্রিক শতাংশে কতটুকু অবদান রাখে — সমান ভাগ না,
+// বাস্তব সময়-গুরুত্ব অনুযায়ী ভারিত্ব (weighted) ──
+const DEPT_WEIGHTS={transport:0.05,carpenter:0.60,craftsmen:0.20,burnish:0.15};
 const EXP_CATS=[
   {id:"hardware",bn:"হার্ডওয়্যার",group:"other"},{id:"varnish",bn:"বার্নিশ আইটেম",group:"other"},
   {id:"glass",bn:"গ্লাস",group:"other"},
@@ -617,7 +631,7 @@ function S1({order,onPrint}){
       {items.map((it,i)=><div key={i} style={{border:"1px solid #fcc",borderRadius:6,padding:"6px 9px",marginBottom:5,fontSize:10}}>
         <div style={{fontWeight:700}}>[{it.code}] {it.variantBn}</div>
         <div style={{color:"#555",marginTop:1}}>কাঠ: {it.woodBn} | পরিমাণ: {it.qty} পিস</div>
-        {it.price&&<div style={{color:"#166534",fontWeight:700,marginTop:1}}>মূল্য: {money(it.price)}</div>}
+        {it.price&&<div style={{color:"#166534",fontWeight:700,marginTop:1}}>মূল্য: {money((parseFloat(it.price)||0)*(parseFloat(it.qty)||1))}</div>}
         {it.notes&&<div style={{color:"#888",marginTop:1}}>⚙ {it.notes}</div>}
       </div>)}
       <div style={{background:"#fff0f0",borderRadius:7,padding:"8px",marginTop:4}}>
@@ -646,12 +660,12 @@ function S2({order,onPrint,db,saveDb,galleries,onUpdateOrder,woodSettings,laborS
   const[editingImages,setEditingImages]=useState(false);
   const imgInputRef=useRef();
   const[addingNew,setAddingNew]=useState(false);
-  const[newItem,setNewItem]=useState({catKey:"",varKey:"",wood:"S",qty:1,price:"",notes:""});
+  const[newItem,setNewItem]=useState({catKey:"",varKey:"",wood:"S",qty:"",price:"",notes:""});
   const[newCatMode,setNewCatMode]=useState(false);
   const[newCatName,setNewCatName]=useState("");
   const[newCatVarName,setNewCatVarName]=useState("");
 
-  const recalcTotal=(newItems)=>newItems.reduce((s,it)=>s+(parseFloat(it.price)||0),0);
+  const recalcTotal=(newItems)=>newItems.reduce((s,it)=>s+(parseFloat(it.price)||0)*(parseFloat(it.qty)||1),0);
   const startEditItem=(i)=>{
     const it=items[i];
     setEditIdx(i);
@@ -662,7 +676,7 @@ function S2({order,onPrint,db,saveDb,galleries,onUpdateOrder,woodSettings,laborS
     const variant=cat.variants[editForm.varKey];
     const newItems=[...items];
     const keepSections=newItems[editIdx].varKey===editForm.varKey?newItems[editIdx].sections:JSON.parse(JSON.stringify(variant.sections));
-    newItems[editIdx]={...newItems[editIdx],catKey:editForm.catKey,varKey:editForm.varKey,variantBn:variant.bn,code:variant.code,tier:variant.tier||"M",wood:editForm.wood,woodBn:WOOD[editForm.wood].bn,qty:editForm.qty,price:editForm.price,notes:editForm.notes,sections:keepSections,itemId:newItems[editIdx].itemId||("item_"+Date.now()+"_"+Math.random().toString(36).slice(2,7))};
+    newItems[editIdx]={...newItems[editIdx],catKey:editForm.catKey,varKey:editForm.varKey,variantBn:variant.bn,code:variant.code,tier:variant.tier||"M",wood:editForm.wood,woodBn:WOOD[editForm.wood].bn,qty:parseInt(editForm.qty)||1,price:editForm.price,notes:editForm.notes,sections:keepSections,itemId:newItems[editIdx].itemId||("item_"+Date.now()+"_"+Math.random().toString(36).slice(2,7))};
     onUpdateOrder({...order,items:newItems,cust:{...cust,total:recalcTotal(newItems)}});
     setEditIdx(null);setEditForm(null);
   };
@@ -687,7 +701,7 @@ function S2({order,onPrint,db,saveDb,galleries,onUpdateOrder,woodSettings,laborS
     const cat=db[newItem.catKey];
     const variant=cat?.variants[newItem.varKey];
     if(!variant)return;
-    const item={catKey:newItem.catKey,varKey:newItem.varKey,variantBn:variant.bn,code:variant.code,tier:variant.tier||"M",wood:newItem.wood,woodBn:WOOD[newItem.wood].bn,qty:newItem.qty,price:newItem.price,notes:newItem.notes,sections:JSON.parse(JSON.stringify(variant.sections)),itemId:"item_"+Date.now()+"_"+Math.random().toString(36).slice(2,7)};
+    const item={catKey:newItem.catKey,varKey:newItem.varKey,variantBn:variant.bn,code:variant.code,tier:variant.tier||"M",wood:newItem.wood,woodBn:WOOD[newItem.wood].bn,qty:parseInt(newItem.qty)||1,price:newItem.price,notes:newItem.notes,sections:JSON.parse(JSON.stringify(variant.sections)),itemId:"item_"+Date.now()+"_"+Math.random().toString(36).slice(2,7)};
     const newItems=[...items,item];
     onUpdateOrder({...order,items:newItems,cust:{...cust,total:recalcTotal(newItems)}});
     setNewItem({catKey:"",varKey:"",wood:"S",qty:1,price:"",notes:""});setAddingNew(false);
@@ -757,7 +771,7 @@ function S2({order,onPrint,db,saveDb,galleries,onUpdateOrder,woodSettings,laborS
             <select value={editForm.wood} onChange={e=>setEditForm({...editForm,wood:e.target.value})} style={{border:"1px solid #ddd",borderRadius:6,padding:"6px 8px",fontSize:10}}>
               {Object.entries(WOOD).map(([k,v])=><option key={k} value={k}>{v.bn}</option>)}
             </select>
-            <input type="number" min={1} value={editForm.qty} onChange={e=>setEditForm({...editForm,qty:parseInt(e.target.value)||1})} style={{border:"1px solid #ddd",borderRadius:6,padding:"6px 8px",fontSize:10}}/>
+            <input type="number" min={1} value={editForm.qty} placeholder="1" onChange={e=>setEditForm({...editForm,qty:e.target.value})} style={{border:"1px solid #ddd",borderRadius:6,padding:"6px 8px",fontSize:10}}/>
           </div>
           <div style={{marginBottom:6}}><input type="number" value={editForm.price} onChange={e=>setEditForm({...editForm,price:e.target.value})} placeholder="মূল্য (৳)" style={{width:"100%",border:"1px solid #ddd",borderRadius:6,padding:"7px 8px",fontSize:11,fontWeight:700,color:"#166534",boxSizing:"border-box"}}/></div>
           <textarea rows={2} value={editForm.notes} onChange={e=>setEditForm({...editForm,notes:e.target.value})} placeholder="বিশেষ নির্দেশনা" style={{width:"100%",border:"1px solid #ddd",borderRadius:6,padding:"6px 8px",fontSize:10,marginBottom:6,resize:"vertical"}}/>
@@ -770,7 +784,7 @@ function S2({order,onPrint,db,saveDb,galleries,onUpdateOrder,woodSettings,laborS
             <div style={{flex:1}}>
               <div style={{fontWeight:700}}>[{it.code}] {it.variantBn}</div>
               <div style={{color:"#555",marginTop:1}}>কাঠ: {it.woodBn} ({it.wood}) | পরিমাণ: {it.qty} | CFT: {(totalCft(it.sections)*it.qty).toFixed(3)}</div>
-              {it.price&&<div style={{color:"#166534",fontWeight:700,marginTop:1}}>মূল্য: {money(it.price)}</div>}
+              {it.price&&<div style={{color:"#166534",fontWeight:700,marginTop:1}}>মূল্য: {money((parseFloat(it.price)||0)*(parseFloat(it.qty)||1))}</div>}
               {(()=>{
                 const woodCost=itemWoodCost(it,order,woodSettings);
                 const lRate=orderLabourRate(order,laborSettings);
@@ -778,7 +792,7 @@ function S2({order,onPrint,db,saveDb,galleries,onUpdateOrder,woodSettings,laborS
                 const cftVal=totalCft(it.sections)*it.qty;
                 const labourCost=cftVal*lRate;
                 const totalCost=woodCost+labourCost;
-                const profit=it.price?(parseFloat(it.price)||0)-totalCost:null;
+                const profit=it.price?((parseFloat(it.price)||0)*(parseFloat(it.qty)||1))-totalCost:null;
                 return<div className="no-print" style={{fontSize:9,color:"#777",marginTop:2,background:"#f9fafb",borderRadius:5,padding:"3px 6px",display:"inline-block"}}>
                   কাঠ {money(woodCost.toFixed(0))} + শ্রম {money(labourCost.toFixed(0))} = খরচ {money(totalCost.toFixed(0))}{profit!==null&&<span style={{marginLeft:6,color:profit>=0?"#166534":RED,fontWeight:700}}>| লাভ: {money(profit.toFixed(0))}</span>}
                 </div>
@@ -800,7 +814,7 @@ function S2({order,onPrint,db,saveDb,galleries,onUpdateOrder,woodSettings,laborS
             <select value={newItem.wood} onChange={e=>setNewItem({...newItem,wood:e.target.value})} style={{border:"1px solid #ddd",borderRadius:6,padding:"6px 8px",fontSize:10}}>
               {Object.entries(WOOD).map(([k,v])=><option key={k} value={k}>{v.bn}</option>)}
             </select>
-            <input type="number" min={1} value={newItem.qty} onChange={e=>setNewItem({...newItem,qty:parseInt(e.target.value)||1})} style={{border:"1px solid #ddd",borderRadius:6,padding:"6px 8px",fontSize:10}}/>
+            <input type="number" min={1} value={newItem.qty} placeholder="1" onChange={e=>setNewItem({...newItem,qty:e.target.value})} style={{border:"1px solid #ddd",borderRadius:6,padding:"6px 8px",fontSize:10}}/>
           </div>
           <div style={{marginBottom:6}}><input type="number" value={newItem.price} onChange={e=>setNewItem({...newItem,price:e.target.value})} placeholder="মূল্য (৳)" style={{width:"100%",border:"1px solid #ddd",borderRadius:6,padding:"7px 8px",fontSize:11,fontWeight:700,color:"#166534",boxSizing:"border-box"}}/></div>
           <textarea rows={2} value={newItem.notes} onChange={e=>setNewItem({...newItem,notes:e.target.value})} placeholder="বিশেষ নির্দেশনা" style={{width:"100%",border:"1px solid #ddd",borderRadius:6,padding:"6px 8px",fontSize:10,marginBottom:7,resize:"vertical"}}/>
@@ -825,6 +839,9 @@ function S2({order,onPrint,db,saveDb,galleries,onUpdateOrder,woodSettings,laborS
 /* ── SLIP 3: DEPT TRACKING ── */
 function S3({order,onPrint,onUpdateOrder,workers}){
   const{cust,items,no,printLogs}=order;
+  // বাড়ানোর সময় কোনো বাধা নেই, কিন্তু কমানোর সময় নিশ্চিত করে নেওয়া হয় — ভুলবশত টেনে
+  // কমে গেলে যাতে অজান্তেই সংরক্ষিত অগ্রগতি হারিয়ে না যায়
+  const dragStartRef=useRef({});
   const ip=effectiveItemProgress(order);
   const itemKey=(it,idx)=>it.itemId||`idx_${idx}`;
 
@@ -856,9 +873,13 @@ function S3({order,onPrint,onUpdateOrder,workers}){
     return matched.length?matched:active;
   };
   // সামগ্রিক অগ্রগতি: সব ফার্নিচারের সব বিভাগের গড়
-  const allPcts=[];
-  items.forEach((it,idx)=>DEPTS.forEach(d=>allPcts.push(getDept(itemKey(it,idx),d.id).pct||0)));
-  const overallPct=allPcts.length?Math.round(allPcts.reduce((s,v)=>s+v,0)/allPcts.length):0;
+  // প্রতিটা আইটেমের ওজনযুক্ত % বের করে, তারপর সব আইটেম মিলিয়ে সাধারণ গড় — যাতে একটা
+  // আইটেমের বিভাগীয় ওজন অন্য আইটেমের সংখ্যায় প্রভাব না ফেলে
+  const itemWeightedPcts=items.map((it,idx)=>{
+    const ikey=itemKey(it,idx);
+    return DEPTS.reduce((s,d)=>s+(getDept(ikey,d.id).pct||0)*(DEPT_WEIGHTS[d.id]||0),0);
+  });
+  const overallPct=itemWeightedPcts.length?Math.round(itemWeightedPcts.reduce((s,v)=>s+v,0)/itemWeightedPcts.length):0;
 
   return<div style={{fontSize:11}}>
     <div className="no-print" style={{padding:"8px 14px",background:"#fff",borderBottom:"1px solid #eee",display:"flex",justifyContent:"space-between",alignItems:"center",color:"#6d28d9"}}>
@@ -877,7 +898,7 @@ function S3({order,onPrint,onUpdateOrder,workers}){
         {items.map((it,idx)=>{
           const ikey=itemKey(it,idx);
           const itemAllPcts=DEPTS.map(d=>getDept(ikey,d.id).pct||0);
-          const itemPct=Math.round(itemAllPcts.reduce((s,v)=>s+v,0)/DEPTS.length);
+          const itemPct=Math.round(DEPTS.reduce((s,d,i)=>s+itemAllPcts[i]*(DEPT_WEIGHTS[d.id]||0),0));
           return<div key={ikey} style={{marginBottom:18}}>
             <div style={{background:"#6d28d9",color:"white",borderRadius:"9px 9px 0 0",padding:"9px 12px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
               <div style={{fontWeight:700,fontSize:12}}>[{it.code}] {it.variantBn}<span style={{fontWeight:400,opacity:0.85}}> · {it.woodBn} × {it.qty}</span></div>
@@ -902,7 +923,25 @@ function S3({order,onPrint,onUpdateOrder,workers}){
                     <div><div style={{fontSize:8,color:"#888",marginBottom:2}}>শুরুর তারিখ</div><DateInput value={cur.start} onChange={v=>setStart(ikey,d.id,v)} accent="#6d28d9"/></div>
                     <div><div style={{fontSize:8,color:"#888",marginBottom:2}}>শেষের তারিখ</div><DateInput value={cur.end} onChange={v=>setEnd(ikey,d.id,v)} accent="#6d28d9"/></div>
                   </div>
-                  <input type="range" min="0" max="100" value={cur.pct} onChange={e=>setPct(ikey,d.id,e.target.value)} style={{width:"100%",accentColor:barColor}}/>
+                  <input type="range" min="0" max="100" value={cur.pct}
+                    onMouseDown={()=>{dragStartRef.current[`${ikey}_${d.id}`]=cur.pct}}
+                    onTouchStart={()=>{dragStartRef.current[`${ikey}_${d.id}`]=cur.pct}}
+                    onChange={e=>setPct(ikey,d.id,e.target.value)}
+                    onMouseUp={e=>{
+                      const key=`${ikey}_${d.id}`;const startVal=dragStartRef.current[key];const endVal=parseInt(e.target.value);
+                      if(startVal!==undefined&&endVal<startVal){
+                        if(!window.confirm(`অগ্রগতি ${startVal}% থেকে কমিয়ে ${endVal}% করতে চান?`))setPct(ikey,d.id,startVal);
+                      }
+                      delete dragStartRef.current[key];
+                    }}
+                    onTouchEnd={e=>{
+                      const key=`${ikey}_${d.id}`;const startVal=dragStartRef.current[key];const endVal=cur.pct;
+                      if(startVal!==undefined&&endVal<startVal){
+                        if(!window.confirm(`অগ্রগতি ${startVal}% থেকে কমিয়ে ${endVal}% করতে চান?`))setPct(ikey,d.id,startVal);
+                      }
+                      delete dragStartRef.current[key];
+                    }}
+                    style={{width:"100%",accentColor:barColor}}/>
                   <div style={{textAlign:"right",fontSize:10,fontWeight:800,color:barColor,marginBottom:6}}>{cur.pct}%{cur.pct>=100?" ✅":""}</div>
                   <div style={{fontSize:8,color:"#888",marginBottom:4}}>{d.payDept} বিভাগের কর্মী</div>
                   {pool.length===0?<div style={{fontSize:9,color:"#aaa"}}>পে-রোলে এই বিভাগের কোনো কর্মী নেই</div>:
@@ -1076,14 +1115,6 @@ function S6({order,onPrint,onUpdateOrder,onSetDelivered,onPhotoChange,onRemovePh
     </div>
     {printLocked&&<div className="no-print" style={{padding:"7px 14px",background:"#fff7ed",borderBottom:"1px solid #fed7aa",fontSize:10,color:"#9a3412"}}>⚠️ ফুল পেমেন্ট হওয়ার আগে ডেলিভারি রিসিপ্ট প্রিন্ট করা যাবে না — বাকি আছে {money(due)}। ছবি যোগ করা ও দেখা এখনই করতে পারবেন।</div>}
     {!order.delivered&&<div className="no-print" style={{padding:"8px 14px",background:"#f0fdfa",borderBottom:"1px solid #eee"}}><button onClick={markDelivered} style={{width:"100%",background:"#0f766e",color:"white",border:"none",borderRadius:8,padding:"9px",fontSize:12,fontWeight:700}}>✅ ডেলিভারি সম্পন্ন হয়েছে — চিহ্নিত করুন</button></div>}
-    {!order.delivered&&<div className="no-print" style={{padding:"10px 14px",background:"#eff6ff",borderBottom:"1px solid #dbeafe"}}>
-      <button onClick={()=>{
-        const msg=encodeURIComponent("সম্মানিত গ্রাহক, আপনার অর্ডারটি ডেলিভারির জন্য প্রস্তুত হয়েছে।");
-        window.open(`https://wa.me/${toIntlPhone(cust.phone)}?text=${msg}`,"_blank");
-        onUpdateOrder({...order,readyNotifiedAt:todayStr()});
-      }} style={{width:"100%",background:"#25D366",color:"white",border:"none",borderRadius:8,padding:"9px",fontSize:12,fontWeight:700}}>💬 গ্রাহককে "প্রস্তুত হয়েছে" জানান (WhatsApp)</button>
-      {order.readyNotifiedAt&&<div style={{fontSize:9,color:"#1d4ed8",marginTop:5,textAlign:"center"}}>সর্বশেষ জানানো হয়েছে: {fmtDate(order.readyNotifiedAt)}</div>}
-    </div>}
     {order.delivered&&<div className="no-print" style={{padding:"8px 14px",background:"#dcfce7",textAlign:"center",fontSize:11,fontWeight:700,color:"#166534"}}>✅ ডেলিভারি সম্পন্ন হয়েছে ({fmtDate(order.deliveredAt)})</div>}
     <div ref={captureRef}>
     <Hdr title="ডেলিভারি রশিদ" sub="Delivery Receipt" no={no} bg="#0f766e"/>
@@ -1129,7 +1160,7 @@ function S6({order,onPrint,onUpdateOrder,onSetDelivered,onPhotoChange,onRemovePh
 }
 
 /* ── SIMPLE BAR CHART (SVG) ── */
-function BarChart({data,height=140,color=RED,formatY}){
+function BarChart({data,height=140,color=CHART_SOFT_RED,formatY}){
   const max=Math.max(...data.map(d=>d.value),1);
   const w=100/data.length;
   return<div style={{width:"100%"}}>
@@ -1156,15 +1187,15 @@ function DualBarChart({data,height=150,labelA="গত বছর",labelB="এই 
         const hA=(d.a/max)*(height-24),hB=(d.b/max)*(height-24);
         const bw=w*0.32;
         return<g key={i}>
-          <rect x={i*w+w*0.14} y={height-24-hA} width={bw} height={hA} fill="#94a3b8" rx="1"/>
-          <rect x={i*w+w*0.14+bw+2} y={height-24-hB} width={bw} height={hB} fill={RED} rx="1"/>
+          <rect x={i*w+w*0.14} y={height-24-hA} width={bw} height={hA} fill={CHART_SOFT_GREY} rx="1"/>
+          <rect x={i*w+w*0.14+bw+2} y={height-24-hB} width={bw} height={hB} fill={CHART_SOFT_RED} rx="1"/>
           <text x={i*w+w*0.5} y={height-10} fontSize="4.2" textAnchor="middle" fill="#666">{d.label}</text>
         </g>
       })}
     </svg>
     <div style={{display:"flex",gap:14,justifyContent:"center",marginTop:4}}>
-      <div style={{display:"flex",alignItems:"center",gap:4,fontSize:10,color:"#666"}}><div style={{width:9,height:9,background:"#94a3b8",borderRadius:2}}></div>{labelA}</div>
-      <div style={{display:"flex",alignItems:"center",gap:4,fontSize:10,color:"#666"}}><div style={{width:9,height:9,background:RED,borderRadius:2}}></div>{labelB}</div>
+      <div style={{display:"flex",alignItems:"center",gap:4,fontSize:10,color:"#666"}}><div style={{width:9,height:9,background:CHART_SOFT_GREY,borderRadius:2}}></div>{labelA}</div>
+      <div style={{display:"flex",alignItems:"center",gap:4,fontSize:10,color:"#666"}}><div style={{width:9,height:9,background:CHART_SOFT_RED,borderRadius:2}}></div>{labelB}</div>
     </div>
   </div>
 }
@@ -1178,17 +1209,17 @@ function TripleBarChart({data,height=150,labelA,labelB,labelC}){
         const hA=(d.a/max)*(height-24),hB=(d.b/max)*(height-24),hC=(d.c/max)*(height-24);
         const bw=w*0.24;
         return<g key={i}>
-          <rect x={i*w+w*0.08} y={height-24-hA} width={bw} height={hA} fill="#94a3b8" rx="1"/>
-          <rect x={i*w+w*0.08+bw+2} y={height-24-hB} width={bw} height={hB} fill="#fb923c" rx="1"/>
-          <rect x={i*w+w*0.08+2*(bw+2)} y={height-24-hC} width={bw} height={hC} fill={RED} rx="1"/>
+          <rect x={i*w+w*0.08} y={height-24-hA} width={bw} height={hA} fill={CHART_SOFT_GREY} rx="1"/>
+          <rect x={i*w+w*0.08+bw+2} y={height-24-hB} width={bw} height={hB} fill={CHART_SOFT_ORANGE} rx="1"/>
+          <rect x={i*w+w*0.08+2*(bw+2)} y={height-24-hC} width={bw} height={hC} fill={CHART_SOFT_RED} rx="1"/>
           <text x={i*w+w*0.5} y={height-10} fontSize="4.2" textAnchor="middle" fill="#666">{d.label}</text>
         </g>
       })}
     </svg>
     <div style={{display:"flex",gap:12,justifyContent:"center",marginTop:4,flexWrap:"wrap"}}>
-      <div style={{display:"flex",alignItems:"center",gap:4,fontSize:10,color:"#666"}}><div style={{width:9,height:9,background:"#94a3b8",borderRadius:2}}></div>{labelA}</div>
-      <div style={{display:"flex",alignItems:"center",gap:4,fontSize:10,color:"#666"}}><div style={{width:9,height:9,background:"#fb923c",borderRadius:2}}></div>{labelB}</div>
-      <div style={{display:"flex",alignItems:"center",gap:4,fontSize:10,color:"#666"}}><div style={{width:9,height:9,background:RED,borderRadius:2}}></div>{labelC}</div>
+      <div style={{display:"flex",alignItems:"center",gap:4,fontSize:10,color:"#666"}}><div style={{width:9,height:9,background:CHART_SOFT_GREY,borderRadius:2}}></div>{labelA}</div>
+      <div style={{display:"flex",alignItems:"center",gap:4,fontSize:10,color:"#666"}}><div style={{width:9,height:9,background:CHART_SOFT_ORANGE,borderRadius:2}}></div>{labelB}</div>
+      <div style={{display:"flex",alignItems:"center",gap:4,fontSize:10,color:"#666"}}><div style={{width:9,height:9,background:CHART_SOFT_RED,borderRadius:2}}></div>{labelC}</div>
     </div>
   </div>
 }
@@ -1866,11 +1897,11 @@ function App({firebaseConfig,onResetConfig}){
   if(page==="expense")return<ExpensePage expenses={expenses} onSave={saveExpense} onBack={goBack}/>;
   if(page==="payroll")return<PayrollPage workers={workers} saveWorker={saveWorker} deleteWorker={deleteWorker} payrollWeeks={payrollWeeks} savePayrollWeek={savePayrollWeek} updateAttendance={updateAttendance} addAdvanceEntry={addAdvanceEntry} removeAdvanceEntry={removeAdvanceEntry} onBack={goBack}/>;
   if(page==="plreport")return<PLReportPage orders={orders} expenses={expenses} workers={workers} payrollWeeks={payrollWeeks} woodLots={woodLots} woodSettings={woodSettings} laborSettings={laborSettings} onBack={goBack}/>;
-  return<Home orders={orders} expenses={expenses} woodLots={woodLots} db={db} woodSettings={woodSettings} laborSettings={laborSettings} workers={workers} payrollWeeks={payrollWeeks} alertSettings={alertSettings} saveAlertSettings={saveAlertSettings} backupFailed={backupFailed} onNew={()=>navigate({page:"form"})} onHist={()=>navigate({page:"history"})} onManage={()=>navigate({page:"manage"})} onExpense={()=>navigate({page:"expense"})} onWoodStock={()=>navigate({page:"woodstock",view:"list"})} onPayroll={()=>navigate({page:"payroll"})} onPLReport={()=>navigate({page:"plreport"})} onView={o=>navigate({page:"preview",orderNo:o.no,slip:0})} onViewDelivery={o=>navigate({page:"preview",orderNo:o.no,slip:5})} online={online} connError={connError} onResetConfig={onResetConfig} folderStatus={folderStatus} connectFolder={connectFolder} highlightNo={highlightNo} onBackupData={backupData}/>;
+  return<Home orders={orders} expenses={expenses} woodLots={woodLots} db={db} woodSettings={woodSettings} laborSettings={laborSettings} workers={workers} payrollWeeks={payrollWeeks} alertSettings={alertSettings} saveAlertSettings={saveAlertSettings} backupFailed={backupFailed} onUpdateOrder={updateOrder} onNew={()=>navigate({page:"form"})} onHist={()=>navigate({page:"history"})} onManage={()=>navigate({page:"manage"})} onExpense={()=>navigate({page:"expense"})} onWoodStock={()=>navigate({page:"woodstock",view:"list"})} onPayroll={()=>navigate({page:"payroll"})} onPLReport={()=>navigate({page:"plreport"})} onView={o=>navigate({page:"preview",orderNo:o.no,slip:0})} onViewDelivery={o=>navigate({page:"preview",orderNo:o.no,slip:5})} online={online} connError={connError} onResetConfig={onResetConfig} folderStatus={folderStatus} connectFolder={connectFolder} highlightNo={highlightNo} onBackupData={backupData}/>;
 }
 
 /* ── HOME / DASHBOARD ── */
-function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,payrollWeeks,alertSettings,saveAlertSettings,backupFailed,onNew,onHist,onManage,onExpense,onWoodStock,onPayroll,onPLReport,onView,onViewDelivery,online,connError,onResetConfig,folderStatus,connectFolder,highlightNo,onBackupData}){
+function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,payrollWeeks,alertSettings,saveAlertSettings,backupFailed,onUpdateOrder,onNew,onHist,onManage,onExpense,onWoodStock,onPayroll,onPLReport,onView,onViewDelivery,online,connError,onResetConfig,folderStatus,connectFolder,highlightNo,onBackupData}){
   const now=new Date();
   const[showAllRunning,setShowAllRunning]=useState(false);
   const[showSystemZone,setShowSystemZone]=useState(false);
@@ -1953,7 +1984,7 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
     const totalExpense=expenses.reduce((s,e)=>s+(parseFloat(e.total)||0),0);
 
     // Category breakdown of running orders (pie chart) - use actual DB category names
-    const PIE_COLORS=[RED,"#1d4ed8","#6d28d9","#0f766e","#f97316","#eab308","#64748b","#db2777"];
+    const PIE_COLORS=[CHART_SOFT_RED,CHART_SOFT_BLUE,CHART_SOFT_PURPLE,CHART_SOFT_TEAL,CHART_SOFT_ORANGE,"#d4b26a",CHART_SOFT_GREY,CHART_SOFT_PINK];
     const catCount={};
     running.forEach(o=>o.items.forEach(it=>{
       const catLabel=(db&&it.catKey&&db[it.catKey])?db[it.catKey].bn:(it.variantBn.split(" ")[0]||it.code);
@@ -2085,7 +2116,7 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
         const catLabel=(db&&it.catKey&&db[it.catKey])?db[it.catKey].bn:(it.variantBn.split(" ")[0]||it.code);
         const woodCost=itemWoodCost(it,o,woodSettings);
         const labourCost=totalCft(it.sections||[])*(it.qty||1)*lRate;
-        const revenue=parseFloat(it.price)||0;
+        const revenue=(parseFloat(it.price)||0)*(parseFloat(it.qty)||1);
         if(revenue<=0)return;
         if(!catProfit[catLabel])catProfit[catLabel]={label:catLabel,revenue:0,cost:0,count:0,bottleneckDays:0,bnSamples:0};
         catProfit[catLabel].revenue+=revenue;
@@ -2378,7 +2409,7 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
 
       {/* স্তরে লাফ দেওয়ার বার — লম্বা স্ক্রলে নিচের অংশ যাতে হারিয়ে না যায় */}
       <div style={{position:"sticky",top:0,zIndex:20,background:"rgba(255,255,255,0.97)",backdropFilter:"blur(4px)",margin:"0 -16px 12px",padding:"7px 10px",borderBottom:"1px solid #eee",display:"flex",gap:4,overflowX:"auto"}}>
-        {[{e:"⚡",z:"z-urgent",c:"#b91c1c"},{e:"🔥",z:"z-today",c:"#0f766e"},{e:"📅",z:"z-trend",c:"#b45309"},{e:"🪵",z:"z-wood",c:"#065f46"},{e:"💼",z:"z-dues",c:"#991b1b"},{e:"📊",z:"z-health",c:"#1d4ed8"},{e:"🚧",z:"z-perf",c:"#7c2d12"},{e:"⚙️",z:"z-sys",c:"#666"}].map(b=>
+        {[{e:"⚡",z:"z-urgent",c:"#b91c1c"},{e:"🔥",z:"z-today",c:"#0f766e"},{e:"📅",z:"z-trend",c:"#b45309"},{e:"📊",z:"z-health",c:"#1d4ed8"},{e:"🪵",z:"z-wood",c:"#065f46"},{e:"🚧",z:"z-perf",c:"#7c2d12"},{e:"⚙️",z:"z-sys",c:"#666"}].map(b=>
           <button key={b.z} onClick={()=>document.getElementById(b.z)?.scrollIntoView({behavior:"smooth",block:"start"})} style={{background:b.c+"14",border:`1.5px solid ${b.c}55`,borderRadius:9,minWidth:44,minHeight:38,fontSize:17,flexShrink:0,cursor:"pointer"}}>{b.e}</button>
         )}
       </div>
@@ -2404,28 +2435,28 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
       </div>}
 
       {/* Quick Stats */}
-      <div style={{background:stats.cfNet<0?"#fef2f2":"#f0fdf4",border:`1.5px solid ${stats.cfNet<0?"#fca5a5":"#86efac"}`,borderRadius:10,padding:"10px 12px",marginBottom:8}}>
-        <div style={{fontSize:9,color:stats.cfNet<0?"#991b1b":"#166534",fontWeight:600,marginBottom:2}}>💰 আগামী ৩০ দিনের নগদ প্রবাহ পূর্বাভাস</div>
-        <div style={{fontSize:20,fontWeight:800,color:stats.cfNet<0?RED:"#166534"}}>{stats.cfNet<0?"−":""}{money(Math.abs(Math.round(stats.cfNet)))}</div>
-        <div style={{fontSize:9,color:"#777",marginTop:2}}>আসবে {money(Math.round(stats.cfInflow))} (কাছাকাছি ডেলিভারি) − খরচ হবে {money(Math.round(stats.cfOutflow))} (গড় মাসিক){stats.cfNet<0&&<strong style={{color:RED}}> — টান পড়তে পারে</strong>}</div>
-      </div>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:10}}>
         {[{l:"চলমান অর্ডার",v:stats.running.length,c:"#f97316"},{l:"এই মাসে অর্ডার",v:stats.thisMonthCount,c:"#1d4ed8"},{l:"গ্রাহকের কাছে পাওনা",v:money(stats.totalOutstanding),c:RED,small:true}].map(s=><div key={s.l} style={{background:s.c+"12",borderRadius:10,padding:"10px 6px",borderLeft:`3px solid ${s.c}`,textAlign:"center"}}><div style={{fontSize:s.small?14:22,fontWeight:800,color:s.c}}>{s.v}</div><div style={{fontSize:9,color:"#666",marginTop:1}}>{s.l}</div></div>)}
       </div>
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:16}}>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:16}}>
+        <div style={{background:(stats.cfNet<0?RED:"#166534")+"12",borderRadius:10,padding:"10px 6px",borderLeft:`3px solid ${stats.cfNet<0?RED:"#166534"}`,textAlign:"center"}}>
+          <div style={{fontSize:14,fontWeight:800,color:stats.cfNet<0?RED:"#166534"}}>{stats.cfNet<0?"−":""}{money(Math.abs(Math.round(stats.cfNet)))}</div>
+          <div style={{fontSize:9,color:"#666",marginTop:1}}>৩০ দিনের নগদ প্রবাহ</div>
+        </div>
         {[{l:"গড় অর্ডার মূল্য",v:money(stats.avgOrderValue),c:"#6d28d9",small:true},{l:"মোট মূল্য (সর্বকালের)",v:money(stats.totalRevenue),c:"#166534",small:true}].map(s=><div key={s.l} style={{background:s.c+"12",borderRadius:10,padding:"10px 6px",borderLeft:`3px solid ${s.c}`,textAlign:"center"}}><div style={{fontSize:s.small?14:22,fontWeight:800,color:s.c}}>{s.v}</div><div style={{fontSize:9,color:"#666",marginTop:1}}>{s.l}</div></div>)}
       </div>
-      {stats.readyNotCollected&&stats.readyNotCollected.length>0&&<div style={{background:"#eff6ff",border:"1.5px solid #93c5fd",borderRadius:10,padding:"12px 14px",marginBottom:14}}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:3}}>
+      {stats.readyNotCollected&&stats.readyNotCollected.length>0&&<div style={{background:"#eff6ff",border:"1.5px solid #93c5fd",borderRadius:10,padding:"12px 14px",marginBottom:14}}>        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:3}}>
           <span style={{fontSize:12,fontWeight:700,color:"#1d4ed8"}}>📦 তৈরি শেষ, গ্রাহক নেননি ({stats.readyNotCollected.length}টি)</span>
         </div>
         <div style={{fontSize:9,color:"#3b5a9a",marginBottom:8}}>দোকানে জায়গা দখল করে আছে · আটকে থাকা টাকা: <strong>{money(stats.readyValueStuck)}</strong></div>
-        {stats.readyNotCollected.slice(0,6).map(o=><div key={o.no} onClick={()=>onViewDelivery(o)} style={{background:"white",borderRadius:8,padding:"8px 10px",marginBottom:6,cursor:"pointer",border:"1px solid #dbeafe"}}>
+        {stats.readyNotCollected.slice(0,6).map(o=><div key={o.no} onClick={()=>onViewDelivery(o)} style={{background:"white",borderRadius:8,padding:"8px 10px",marginBottom:6,cursor:"pointer",border:"1px solid #dbeafe",minHeight:92}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-            {(o.deliveryImgs&&o.deliveryImgs[0])&&<img src={o.deliveryImgs[0].src} onClick={e=>{e.stopPropagation();openLightbox(o.deliveryImgs[0].src)}} style={{width:40,height:40,borderRadius:7,objectFit:"cover",flexShrink:0,marginRight:8,cursor:"pointer"}}/>}
+            {(o.deliveryImgs&&o.deliveryImgs[0])?
+              <img src={o.deliveryImgs[0].src} onClick={e=>{e.stopPropagation();openLightbox(o.deliveryImgs[0].src)}} style={{width:40,height:40,borderRadius:7,objectFit:"cover",flexShrink:0,marginRight:8,cursor:"pointer"}}/>
+              :<div style={{width:40,height:40,borderRadius:7,background:"#f1f5f9",flexShrink:0,marginRight:8,display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,color:"#cbd5e1"}}>📦</div>}
             <div style={{flex:1,minWidth:0}}>
               <div style={{fontSize:11,fontWeight:700,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{o.cust.name}</div>
-              <div style={{fontSize:9,color:"#999",marginTop:1}}>{(o.items||[]).map(it=>it.variantBn).join(", ")}</div>
+              <div style={{fontSize:9,color:"#999",marginTop:1,display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",overflow:"hidden",lineHeight:1.3,maxHeight:"2.6em"}}>{(o.items||[]).map(it=>it.variantBn).join(", ")}</div>
               {o.readyNotifiedAt&&<div style={{fontSize:8,color:"#1d4ed8",marginTop:1}}>জানানো হয়েছে: {fmtDate(o.readyNotifiedAt)}</div>}
             </div>
             <div style={{textAlign:"right",flexShrink:0,marginLeft:8}}>
@@ -2435,7 +2466,11 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
           </div>
           <div style={{display:"flex",gap:6,marginTop:5}} onClick={e=>e.stopPropagation()}>
             <a href={`tel:${o.cust.phone}`} style={{background:"#eff6ff",color:"#1d4ed8",borderRadius:6,padding:"8px 10px",minHeight:38,fontSize:9,fontWeight:700,textDecoration:"none"}}>📱 কল</a>
-            <a href={`https://wa.me/${toIntlPhone(o.cust.phone)}`} target="_blank" rel="noopener noreferrer" style={{background:"#f0fdf4",color:"#166534",borderRadius:6,padding:"8px 10px",minHeight:38,fontSize:9,fontWeight:700,textDecoration:"none"}}>💬 WhatsApp</a>
+            <button onClick={()=>{
+              const msg=encodeURIComponent("সম্মানিত গ্রাহক, আপনার অর্ডারটি ডেলিভারির জন্য প্রস্তুত হয়েছে।");
+              window.open(`https://wa.me/${toIntlPhone(o.cust.phone)}?text=${msg}`,"_blank");
+              onUpdateOrder({...o,readyNotifiedAt:todayStr()});
+            }} style={{background:"#f0fdf4",color:"#166534",border:"none",borderRadius:6,padding:"8px 10px",minHeight:38,fontSize:9,fontWeight:700}}>💬 WhatsApp</button>
           </div>
         </div>)}
         {stats.readyNotCollected.length>6&&<div style={{fontSize:9,color:"#3b5a9a",textAlign:"center"}}>...ও আরও {stats.readyNotCollected.length-6}টি</div>}
@@ -2530,7 +2565,7 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
             {stats.yearly.map(y=><div key={y.label} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"flex-end",height:"100%"}}>
               <div style={{fontSize:8,color:"#166534",fontWeight:700,marginBottom:2}}>{money(y.revenue)}</div>
               <div style={{fontSize:9,color:"#666",marginBottom:2}}>{y.count}টি</div>
-              <div style={{width:"100%",height:`${(y.count/maxC)*100}%`,background:"#1d4ed8",borderRadius:"3px 3px 0 0",minHeight:4}}></div>
+              <div style={{width:"100%",height:`${(y.count/maxC)*100}%`,background:CHART_SOFT_BLUE,borderRadius:"3px 3px 0 0",minHeight:4}}></div>
               <div style={{fontSize:9,color:"#999",marginTop:3}}>{y.label}</div>
             </div>)}
           </div>})()}
@@ -2558,6 +2593,78 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
           </div>
           <DualBarChart data={[{label:stats.bestMonthCompare.monthLabel,a:stats.bestMonthCompare.bestCount,b:stats.bestMonthCompare.thisCount}]} labelA={`${stats.bestMonthCompare.bestYear} (সর্বোচ্চ)`} labelB={`${stats.bestMonthCompare.thisYear}`}/>
         </div>
+      </div>}
+
+      <div id="z-health" style={{scrollMarginTop:56,fontSize:11,fontWeight:800,color:"#1d4ed8",letterSpacing:"0.3px",margin:"18px 0 8px",paddingBottom:4,borderBottom:"2px solid #1d4ed822"}}>📊 ব্যবসার স্বাস্থ্য</div>
+      {/* Revenue vs Expense */}
+      <div style={{marginBottom:18}}>
+        <div style={{fontWeight:700,fontSize:13,color:"#222",marginBottom:8}}>💰 আয় বনাম খরচ (৬ মাস)</div>
+        <div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 8px"}}>
+          <DualBarChart data={stats.monthlyOrders.map((m,i)=>({label:m.label,a:stats.monthlyExpense[i]?.value||0,b:m.revenue}))}/>
+          <div style={{display:"flex",gap:14,justifyContent:"center",marginTop:2,fontSize:9,color:"#888"}}>
+            <span>ধূসর = খরচ</span><span>লাল = আয়</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Pie chart - expense by category */}
+      {stats.expensePie&&stats.expensePie.length>0&&<div style={{marginBottom:18}}>
+        <div style={{fontWeight:700,fontSize:13,color:"#222",marginBottom:8}}>💸 খরচ — ক্যাটাগরি অনুযায়ী (গত ১ বছর)</div>
+        <div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"14px"}}>
+          <PieChart3D data={stats.expensePie}/>
+        </div>
+      </div>}
+
+      {stats.catProfitRanked&&stats.catProfitRanked.length>0&&<div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 14px",marginBottom:14}}>
+        <div style={{fontSize:12,fontWeight:700,color:"#166534",marginBottom:3}}>💰 কোন ফার্নিচারে লাভ বেশি</div>
+        <div style={{fontSize:9,color:"#999",marginBottom:8}}>শুধু ডেলিভারি হওয়া অর্ডার থেকে — বেশি বিক্রি মানেই বেশি লাভ নয়।</div>
+        {stats.catProfitRanked.slice(0,6).map(c=><div key={c.label} style={{marginBottom:7}}>
+          <div style={{display:"flex",justifyContent:"space-between",fontSize:11,marginBottom:2}}>
+            <span style={{fontWeight:600}}>{c.label} <span style={{color:"#aaa",fontSize:9}}>({c.count}টি)</span></span>
+            <span style={{fontWeight:700,color:c.margin>=0?"#166534":RED}}>{c.margin.toFixed(0)}% লাভ</span>
+          </div>
+          <div style={{background:"#f0f0f0",borderRadius:4,height:6,overflow:"hidden"}}><div style={{width:`${Math.max(0,Math.min(100,c.margin))}%`,height:"100%",background:c.margin>=30?"#16a34a":c.margin>=15?"#f59e0b":RED}}></div></div>
+        </div>)}
+      </div>}
+
+      {stats.throughputRanked&&stats.throughputRanked.length>0&&stats.bottleneckDeptBn&&<div style={{background:"#fffbeb",border:"1.5px solid #fcd34d",borderRadius:10,padding:"12px 14px",marginBottom:14}}>
+        <div style={{fontSize:12,fontWeight:700,color:"#92400e",marginBottom:3}}>🎯 বাধার প্রতিদিনে কোনটা বেশি টাকা আনে</div>
+        <div style={{fontSize:9,color:"#a16207",marginBottom:8,lineHeight:1.5}}>আপনার সবচেয়ে ধীর বিভাগ <strong>{stats.bottleneckDeptBn}</strong> — এটাই আপনার উৎপাদনের আসল সীমা। তাই শতাংশ লাভ নয়, <strong>এই বিভাগের প্রতিদিনে কত টাকা লাভ আসে</strong> সেটাই অগ্রাধিকারের সঠিক মাপ (Goldratt-এর থ্রুপুট নীতি)।</div>
+        {stats.throughputRanked.slice(0,6).map((c,i)=>{
+          const maxV=stats.throughputRanked[0].profitPerBnDay||1;
+          return<div key={c.label} style={{marginBottom:8}}>
+            <div style={{display:"flex",justifyContent:"space-between",fontSize:11,marginBottom:2}}>
+              <span style={{fontWeight:600}}>{i===0?"🥇 ":""}{c.label} <span style={{color:"#aaa",fontSize:9}}>({c.bnSamples}টি)</span></span>
+              <span style={{fontWeight:700,color:"#92400e"}}>{money(Math.round(c.profitPerBnDay))}/দিন</span>
+            </div>
+            <div style={{background:"#f0f0f0",borderRadius:4,height:6,overflow:"hidden"}}><div style={{width:`${Math.max(0,Math.min(100,(c.profitPerBnDay/maxV)*100))}%`,height:"100%",background:i===0?"#b45309":"#fcd34d"}}></div></div>
+            <div style={{fontSize:8,color:"#999",marginTop:1}}>শতাংশ লাভ {c.margin.toFixed(0)}% · {stats.bottleneckDeptBn}-এ গড়ে {(c.bottleneckDays/c.bnSamples).toFixed(1)} দিন</div>
+          </div>
+        })}
+        <div style={{fontSize:9,color:"#a16207",marginTop:6,paddingTop:6,borderTop:"1px dashed #fcd34d",lineHeight:1.5}}>💡 কাজের চাপ বেশি থাকলে উপরের দিকের ফার্নিচারগুলো আগে নিন — শতাংশ লাভ কম হলেও মোট আয় বেশি হবে।</div>
+      </div>}
+
+      {stats.totalCustCount>0&&<div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 14px",marginBottom:14}}>
+        <div style={{fontSize:12,fontWeight:700,color:"#1d4ed8",marginBottom:3}}>🔁 পুনরাবৃত্ত গ্রাহক</div>
+        <div style={{fontSize:9,color:"#999",marginBottom:8}}>যেসব গ্রাহক একবারের বেশি অর্ডার করেছেন — সন্তুষ্ট গ্রাহকের সবচেয়ে সরাসরি প্রমাণ।</div>
+        <div style={{display:"flex",alignItems:"baseline",gap:8,marginBottom:6}}>
+          <span style={{fontSize:26,fontWeight:800,color:"#1d4ed8"}}>{stats.repeatRate.toFixed(0)}%</span>
+          <span style={{fontSize:11,color:"#666"}}>{stats.totalCustCount} জনের মধ্যে {stats.repeatCount} জন</span>
+        </div>
+        <div style={{background:"#f0f0f0",borderRadius:4,height:7,overflow:"hidden",marginBottom:6}}><div style={{width:`${Math.min(100,stats.repeatRate)}%`,height:"100%",background:"#1d4ed8"}}></div></div>
+        {stats.repeatCount>0&&<div style={{fontSize:10,color:"#166534",fontWeight:600}}>মোট আয়ের {stats.repeatRevenueShare.toFixed(0)}% এসেছে এই পুনরাবৃত্ত গ্রাহকদের থেকে</div>}
+      </div>}
+
+      {stats.avgProdDays!==null&&<div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 14px",marginBottom:14}}>
+        <div style={{fontSize:12,fontWeight:700,color:"#0f766e",marginBottom:3}}>⚙️ উৎপাদনের গতি</div>
+        <div style={{fontSize:9,color:"#999",marginBottom:8}}>অর্ডার নেওয়া থেকে কাজ ১০০% শেষ হতে গড়ে কত দিন — গ্রাহকের দেরি এতে ধরা হয় না।</div>
+        <div style={{display:"flex",alignItems:"baseline",gap:8}}>
+          <span style={{fontSize:26,fontWeight:800,color:"#0f766e"}}>{stats.avgProdDays}</span>
+          <span style={{fontSize:11,color:"#666"}}>দিন গড়ে ({stats.prodCount}টি সম্পন্ন কাজ থেকে)</span>
+        </div>
+        {stats.recentAvgProd!==null&&stats.olderAvgProd!==null&&<div style={{fontSize:10,marginTop:6,color:stats.recentAvgProd<stats.olderAvgProd?"#166534":stats.recentAvgProd>stats.olderAvgProd?RED:"#666",fontWeight:600}}>
+          {stats.recentAvgProd<stats.olderAvgProd?`✅ গতি বেড়েছে — আগে ${stats.olderAvgProd} দিন, এখন ${stats.recentAvgProd} দিন`:stats.recentAvgProd>stats.olderAvgProd?`⚠️ গতি কমেছে — আগে ${stats.olderAvgProd} দিন, এখন ${stats.recentAvgProd} দিন`:"গতি একই আছে"}
+        </div>}
       </div>}
 
       <div id="z-wood" style={{scrollMarginTop:56,fontSize:11,fontWeight:800,color:"#065f46",letterSpacing:"0.3px",margin:"18px 0 8px",paddingBottom:4,borderBottom:"2px solid #065f4622"}}>🪵 কাঠ ও মজুদ</div>
@@ -2604,78 +2711,6 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
         <div style={{fontSize:9,color:"#a35",marginBottom:6}}>এই মডেলে অর্ডার এলে খরচ ও র‍্যাক-হিসাব ভুল হবে। ট্যাপ করে ডেটাবেসে গিয়ে ঠিক করুন:</div>
         <div style={{fontSize:10,color:"#991b1b"}}>{stats.emptyWoodModels.slice(0,5).map(m=>`${m.catBn} · ${m.varBn}`).join(" · ")}{stats.emptyWoodModels.length>5?` ...ও আরও ${stats.emptyWoodModels.length-5}টা`:""}</div>
       </div>}
-
-      <div id="z-health" style={{scrollMarginTop:56,fontSize:11,fontWeight:800,color:"#1d4ed8",letterSpacing:"0.3px",margin:"18px 0 8px",paddingBottom:4,borderBottom:"2px solid #1d4ed822"}}>📊 ব্যবসার স্বাস্থ্য</div>
-      {stats.avgProdDays!==null&&<div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 14px",marginBottom:14}}>
-        <div style={{fontSize:12,fontWeight:700,color:"#0f766e",marginBottom:3}}>⚙️ উৎপাদনের গতি</div>
-        <div style={{fontSize:9,color:"#999",marginBottom:8}}>অর্ডার নেওয়া থেকে কাজ ১০০% শেষ হতে গড়ে কত দিন — গ্রাহকের দেরি এতে ধরা হয় না।</div>
-        <div style={{display:"flex",alignItems:"baseline",gap:8}}>
-          <span style={{fontSize:26,fontWeight:800,color:"#0f766e"}}>{stats.avgProdDays}</span>
-          <span style={{fontSize:11,color:"#666"}}>দিন গড়ে ({stats.prodCount}টি সম্পন্ন কাজ থেকে)</span>
-        </div>
-        {stats.recentAvgProd!==null&&stats.olderAvgProd!==null&&<div style={{fontSize:10,marginTop:6,color:stats.recentAvgProd<stats.olderAvgProd?"#166534":stats.recentAvgProd>stats.olderAvgProd?RED:"#666",fontWeight:600}}>
-          {stats.recentAvgProd<stats.olderAvgProd?`✅ গতি বেড়েছে — আগে ${stats.olderAvgProd} দিন, এখন ${stats.recentAvgProd} দিন`:stats.recentAvgProd>stats.olderAvgProd?`⚠️ গতি কমেছে — আগে ${stats.olderAvgProd} দিন, এখন ${stats.recentAvgProd} দিন`:"গতি একই আছে"}
-        </div>}
-      </div>}
-
-      {stats.totalCustCount>0&&<div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 14px",marginBottom:14}}>
-        <div style={{fontSize:12,fontWeight:700,color:"#1d4ed8",marginBottom:3}}>🔁 পুনরাবৃত্ত গ্রাহক</div>
-        <div style={{fontSize:9,color:"#999",marginBottom:8}}>যেসব গ্রাহক একবারের বেশি অর্ডার করেছেন — সন্তুষ্ট গ্রাহকের সবচেয়ে সরাসরি প্রমাণ।</div>
-        <div style={{display:"flex",alignItems:"baseline",gap:8,marginBottom:6}}>
-          <span style={{fontSize:26,fontWeight:800,color:"#1d4ed8"}}>{stats.repeatRate.toFixed(0)}%</span>
-          <span style={{fontSize:11,color:"#666"}}>{stats.totalCustCount} জনের মধ্যে {stats.repeatCount} জন</span>
-        </div>
-        <div style={{background:"#f0f0f0",borderRadius:4,height:7,overflow:"hidden",marginBottom:6}}><div style={{width:`${Math.min(100,stats.repeatRate)}%`,height:"100%",background:"#1d4ed8"}}></div></div>
-        {stats.repeatCount>0&&<div style={{fontSize:10,color:"#166534",fontWeight:600}}>মোট আয়ের {stats.repeatRevenueShare.toFixed(0)}% এসেছে এই পুনরাবৃত্ত গ্রাহকদের থেকে</div>}
-      </div>}
-
-      {stats.catProfitRanked&&stats.catProfitRanked.length>0&&<div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 14px",marginBottom:14}}>
-        <div style={{fontSize:12,fontWeight:700,color:"#166534",marginBottom:3}}>💰 কোন ফার্নিচারে লাভ বেশি</div>
-        <div style={{fontSize:9,color:"#999",marginBottom:8}}>শুধু ডেলিভারি হওয়া অর্ডার থেকে — বেশি বিক্রি মানেই বেশি লাভ নয়।</div>
-        {stats.catProfitRanked.slice(0,6).map(c=><div key={c.label} style={{marginBottom:7}}>
-          <div style={{display:"flex",justifyContent:"space-between",fontSize:11,marginBottom:2}}>
-            <span style={{fontWeight:600}}>{c.label} <span style={{color:"#aaa",fontSize:9}}>({c.count}টি)</span></span>
-            <span style={{fontWeight:700,color:c.margin>=0?"#166534":RED}}>{c.margin.toFixed(0)}% লাভ</span>
-          </div>
-          <div style={{background:"#f0f0f0",borderRadius:4,height:6,overflow:"hidden"}}><div style={{width:`${Math.max(0,Math.min(100,c.margin))}%`,height:"100%",background:c.margin>=30?"#16a34a":c.margin>=15?"#f59e0b":RED}}></div></div>
-        </div>)}
-      </div>}
-
-      {stats.throughputRanked&&stats.throughputRanked.length>0&&stats.bottleneckDeptBn&&<div style={{background:"#fffbeb",border:"1.5px solid #fcd34d",borderRadius:10,padding:"12px 14px",marginBottom:14}}>
-        <div style={{fontSize:12,fontWeight:700,color:"#92400e",marginBottom:3}}>🎯 বাধার প্রতিদিনে কোনটা বেশি টাকা আনে</div>
-        <div style={{fontSize:9,color:"#a16207",marginBottom:8,lineHeight:1.5}}>আপনার সবচেয়ে ধীর বিভাগ <strong>{stats.bottleneckDeptBn}</strong> — এটাই আপনার উৎপাদনের আসল সীমা। তাই শতাংশ লাভ নয়, <strong>এই বিভাগের প্রতিদিনে কত টাকা লাভ আসে</strong> সেটাই অগ্রাধিকারের সঠিক মাপ (Goldratt-এর থ্রুপুট নীতি)।</div>
-        {stats.throughputRanked.slice(0,6).map((c,i)=>{
-          const maxV=stats.throughputRanked[0].profitPerBnDay||1;
-          return<div key={c.label} style={{marginBottom:8}}>
-            <div style={{display:"flex",justifyContent:"space-between",fontSize:11,marginBottom:2}}>
-              <span style={{fontWeight:600}}>{i===0?"🥇 ":""}{c.label} <span style={{color:"#aaa",fontSize:9}}>({c.bnSamples}টি)</span></span>
-              <span style={{fontWeight:700,color:"#92400e"}}>{money(Math.round(c.profitPerBnDay))}/দিন</span>
-            </div>
-            <div style={{background:"#f0f0f0",borderRadius:4,height:6,overflow:"hidden"}}><div style={{width:`${Math.max(0,Math.min(100,(c.profitPerBnDay/maxV)*100))}%`,height:"100%",background:i===0?"#b45309":"#fcd34d"}}></div></div>
-            <div style={{fontSize:8,color:"#999",marginTop:1}}>শতাংশ লাভ {c.margin.toFixed(0)}% · {stats.bottleneckDeptBn}-এ গড়ে {(c.bottleneckDays/c.bnSamples).toFixed(1)} দিন</div>
-          </div>
-        })}
-        <div style={{fontSize:9,color:"#a16207",marginTop:6,paddingTop:6,borderTop:"1px dashed #fcd34d",lineHeight:1.5}}>💡 কাজের চাপ বেশি থাকলে উপরের দিকের ফার্নিচারগুলো আগে নিন — শতাংশ লাভ কম হলেও মোট আয় বেশি হবে।</div>
-      </div>}
-
-      {/* Pie chart - expense by category */}
-      {stats.expensePie&&stats.expensePie.length>0&&<div style={{marginBottom:18}}>
-        <div style={{fontWeight:700,fontSize:13,color:"#222",marginBottom:8}}>💸 খরচ — ক্যাটাগরি অনুযায়ী (গত ১ বছর)</div>
-        <div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"14px"}}>
-          <PieChart3D data={stats.expensePie}/>
-        </div>
-      </div>}
-
-      {/* Revenue vs Expense */}
-      <div style={{marginBottom:18}}>
-        <div style={{fontWeight:700,fontSize:13,color:"#222",marginBottom:8}}>💰 আয় বনাম খরচ (৬ মাস)</div>
-        <div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 8px"}}>
-          <DualBarChart data={stats.monthlyOrders.map((m,i)=>({label:m.label,a:stats.monthlyExpense[i]?.value||0,b:m.revenue}))}/>
-          <div style={{display:"flex",gap:14,justifyContent:"center",marginTop:2,fontSize:9,color:"#888"}}>
-            <span>ধূসর = খরচ</span><span>লাল = আয়</span>
-          </div>
-        </div>
-      </div>
 
       <div id="z-perf" style={{scrollMarginTop:56,fontSize:11,fontWeight:800,color:"#7c2d12",letterSpacing:"0.3px",margin:"18px 0 8px",paddingBottom:4,borderBottom:"2px solid #7c2d1222"}}>🚧 কর্মক্ষমতা ও খরচ বিশ্লেষণ</div>
       {stats.deptAvg&&stats.deptAvg.some(d=>d.avg!==null)&&<div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 14px",marginBottom:14}}>
@@ -4409,7 +4444,7 @@ function Form({onSave,onBack,db,saveDb,galleries,woodSettings,laborSettings,orde
   const[payments,setPayments]=useState([{date:today,amount:"",note:"অগ্রিম"}]);
   const[items,setItems]=useState([]);
   const[adding,setAdding]=useState(false);
-  const[ni,setNi]=useState({catKey:"",varKey:"",wood:"S",qty:1,price:"",notes:""});
+  const[ni,setNi]=useState({catKey:"",varKey:"",wood:"S",qty:"",price:"",notes:""});
   const[refImgs,setRefImgs]=useState([]);
   const refInput=useRef();
   const[newCatMode,setNewCatMode]=useState(false);
@@ -4462,14 +4497,14 @@ function Form({onSave,onBack,db,saveDb,galleries,woodSettings,laborSettings,orde
   const pricingHint=useMemo(()=>{
     if(!fVar||isEmptyWood(fVar))return null;
     const cftVal=totalCft(fVar.sections)*(ni.qty||1);
-    const draftItem={wood:ni.wood,qty:ni.qty,sections:fVar.sections};
+    const draftItem={wood:ni.wood,qty:parseFloat(ni.qty)||1,sections:fVar.sections};
     const woodCost=itemWoodCost(draftItem,{cust:{date:todayStr()}},woodSettings);
     const lRate=parseFloat((laborSettings&&laborSettings.ratePerCft)||0);
     const estCost=woodCost+cftVal*lRate;
     const past=(orders||[]).filter(o=>!o.cancelled).flatMap(o=>(o.items||[]).filter(it=>it.catKey===ni.catKey&&it.varKey===ni.varKey&&it.wood===ni.wood&&parseFloat(it.price)>0).map(it=>({price:parseFloat(it.price),qty:it.qty||1,date:o.cust.date||"",order:o,item:it})))
       .sort((a,b)=>(b.date||"").localeCompare(a.date||"")).slice(0,5);
     if(past.length===0)return{estCost,cftVal,past:[]};
-    const perUnitPrices=past.map(p=>p.price/(p.qty||1));
+    const perUnitPrices=past.map(p=>p.price); // মূল্য ইতিমধ্যেই প্রতি-ইউনিট, আর ভাগ করার দরকার নেই
     const minP=Math.min(...perUnitPrices),maxP=Math.max(...perUnitPrices);
     const margins=past.map(p=>{
       const pWoodCost=itemWoodCost(p.item,p.order,woodSettings);
@@ -4481,7 +4516,7 @@ function Form({onSave,onBack,db,saveDb,galleries,woodSettings,laborSettings,orde
     const avgMargin=margins.length?margins.reduce((s,m)=>s+m,0)/margins.length:null;
     return{estCost,cftVal,past,minP,maxP,avgMargin};
   },[fVar,ni.catKey,ni.varKey,ni.wood,ni.qty,orders,woodSettings,laborSettings]);
-  const itemsTotal=items.reduce((s,it)=>s+(parseFloat(it.price)||0),0);
+  const itemsTotal=items.reduce((s,it)=>s+(parseFloat(it.price)||0)*(parseFloat(it.qty)||1),0);
   const totalPaid=payments.reduce((s,p)=>s+(parseFloat(p.amount)||0),0);
   const rem=itemsTotal-totalPaid;
   const inp={width:"100%",border:"1.5px solid #e0e0e0",borderRadius:9,padding:"10px 11px",fontSize:13,outline:"none"};
@@ -4536,7 +4571,7 @@ function Form({onSave,onBack,db,saveDb,galleries,woodSettings,laborSettings,orde
 
   const addItem=()=>{
     if(!fVar)return;
-    setItems(prev=>[...prev,{catKey:ni.catKey,varKey:ni.varKey,variantBn:fVar.bn,code:fVar.code,tier:fVar.tier||"M",wood:ni.wood,woodBn:WOOD[ni.wood].bn,qty:ni.qty,price:ni.price,notes:ni.notes,sections:JSON.parse(JSON.stringify(fVar.sections)),itemId:"item_"+Date.now()+"_"+Math.random().toString(36).slice(2,7)}]);
+    setItems(prev=>[...prev,{catKey:ni.catKey,varKey:ni.varKey,variantBn:fVar.bn,code:fVar.code,tier:fVar.tier||"M",wood:ni.wood,woodBn:WOOD[ni.wood].bn,qty:parseInt(ni.qty)||1,price:ni.price,notes:ni.notes,sections:JSON.parse(JSON.stringify(fVar.sections)),itemId:"item_"+Date.now()+"_"+Math.random().toString(36).slice(2,7)}]);
     setNi({catKey:"",varKey:"",wood:"S",qty:1,price:"",notes:""});setAdding(false);
   };
 
@@ -4685,7 +4720,7 @@ function Form({onSave,onBack,db,saveDb,galleries,woodSettings,laborSettings,orde
         </div>
         {items.map((it,i)=><div key={i} style={{background:"white",borderRadius:10,padding:"10px 12px",marginBottom:8,borderLeft:`4px solid ${RED}`,boxShadow:"0 1px 4px rgba(0,0,0,.07)"}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"start"}}>
-            <div><div style={{fontWeight:700,fontSize:13}}>[{it.code}] {it.variantBn}</div><div style={{fontSize:11,color:"#666",marginTop:2}}>কাঠ: {it.woodBn} | পরিমাণ: {it.qty} | CFT: {(totalCft(it.sections)*it.qty).toFixed(2)}</div>{it.price&&<div style={{fontSize:12,color:"#166534",fontWeight:700,marginTop:2}}>মূল্য: {money(it.price)}</div>}{it.notes&&<div style={{fontSize:10,color:"#888",marginTop:1}}>⚙ {it.notes}</div>}</div>
+            <div><div style={{fontWeight:700,fontSize:13}}>[{it.code}] {it.variantBn}</div><div style={{fontSize:11,color:"#666",marginTop:2}}>কাঠ: {it.woodBn} | পরিমাণ: {it.qty} | CFT: {(totalCft(it.sections)*it.qty).toFixed(2)}</div>{it.price&&<div style={{fontSize:12,color:"#166534",fontWeight:700,marginTop:2}}>মূল্য: {money((parseFloat(it.price)||0)*(parseFloat(it.qty)||1))} <span style={{fontSize:10,color:"#999",fontWeight:400}}>({money(it.price)}/একক × {it.qty})</span></div>}{it.notes&&<div style={{fontSize:10,color:"#888",marginTop:1}}>⚙ {it.notes}</div>}</div>
             <button onClick={()=>setItems(items.filter((_,j)=>j!==i))} style={{background:"#fee2e2",border:"none",borderRadius:6,padding:"4px 8px",color:RED,fontSize:11}}>বাদ</button>
           </div>
         </div>)}
@@ -4698,8 +4733,8 @@ function Form({onSave,onBack,db,saveDb,galleries,woodSettings,laborSettings,orde
             {Object.entries(WOOD).map(([k,v])=><option key={k} value={k}>{v.bn} ({v.en})</option>)}
           </select>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:10}}>
-            <div>{lbl("পরিমাণ")}<input type="number" min={1} value={ni.qty} onChange={e=>setNi({...ni,qty:parseInt(e.target.value)||1})} style={inp}/></div>
-            <div style={{display:"flex",alignItems:"flex-end"}}>{fVar&&<div style={{background:"#f0fdf4",borderRadius:9,padding:"10px 11px",fontSize:12,fontWeight:700,color:"#166534",width:"100%"}}>CFT: {(totalCft(fVar.sections)*ni.qty).toFixed(2)}</div>}</div>
+            <div>{lbl("পরিমাণ")}<input type="number" min={1} value={ni.qty} placeholder="1" onChange={e=>setNi({...ni,qty:e.target.value})} style={inp}/></div>
+            <div style={{display:"flex",alignItems:"flex-end"}}>{fVar&&<div style={{background:"#f0fdf4",borderRadius:9,padding:"10px 11px",fontSize:12,fontWeight:700,color:"#166534",width:"100%"}}>CFT: {(totalCft(fVar.sections)*(parseFloat(ni.qty)||1)).toFixed(2)}</div>}</div>
           </div>
           {pricingHint&&<div style={{background:"#faf5ff",border:"1px solid #ddd6fe",borderRadius:8,padding:"9px 11px",marginBottom:11,fontSize:11,color:"#4c1d95",lineHeight:1.6}}>
             <div>💡 আনুমানিক খরচ (কাঠ+শ্রম): <strong>~{money(Math.round(pricingHint.estCost))}</strong></div>
@@ -4728,7 +4763,7 @@ function Form({onSave,onBack,db,saveDb,galleries,woodSettings,laborSettings,orde
           <div style={{fontWeight:700,fontSize:13,marginBottom:8}}>🧾 কোন ফার্নিচারের দাম কত</div>
           {items.map((it,i)=><div key={i} style={{display:"flex",justifyContent:"space-between",fontSize:12,padding:"5px 0",borderTop:i>0?"1px dashed #eee":"none"}}>
             <span style={{color:"#333"}}>[{it.code}] {it.variantBn} <span style={{color:"#999",fontSize:10}}>({it.woodBn} × {it.qty})</span></span>
-            <span style={{fontWeight:700,color:"#166534",flexShrink:0,marginLeft:8}}>{money(it.price)}</span>
+            <span style={{fontWeight:700,color:"#166534",flexShrink:0,marginLeft:8}}>{money((parseFloat(it.price)||0)*(parseFloat(it.qty)||1))}</span>
           </div>)}
         </div>
         <div style={{background:"#f0fdf4",borderRadius:11,padding:"14px",marginBottom:16,border:"1.5px solid #bbf7d0",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
@@ -4985,27 +5020,37 @@ function Hist({orders,db,onBack,onView,highlightNo}){
         const borderColor=highlightNo===o.no?"#0ea5e9":o.cancelled?"#999":o.delivered?"#0f766e":full?"#16a34a":RED;
         const rank=customerRank[(o.cust.phone||"").trim()];
         return<div key={i} onClick={()=>onView(o)} style={{background:bg,borderRadius:11,padding:"12px",marginBottom:9,boxShadow:"0 1px 4px rgba(0,0,0,.08)",border:o.delivered?"1px solid #99f6e4":"none",borderLeft:`4px solid ${borderColor}`,cursor:"pointer",opacity:o.cancelled?0.65:1,transition:"background .4s"}}>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"start"}}>
-            <div style={{minWidth:0,flex:1}}>
-              <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
-                <span style={{fontWeight:700,fontSize:14,textDecoration:o.cancelled?"line-through":"none"}}>{o.cust.name}</span>
-                {sortMode==="rank"&&rank&&<span style={{fontSize:9,background:"#fef3c7",color:"#92400e",borderRadius:8,padding:"1px 7px",fontWeight:700}}>#{rank}</span>}
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+            <div style={{display:"flex",gap:9,minWidth:0,flex:1}}>
+              {(o.deliveryImgs&&o.deliveryImgs[0])?
+                <img src={o.deliveryImgs[0].src} onClick={e=>{e.stopPropagation();openLightbox(o.deliveryImgs[0].src)}} style={{width:52,height:52,borderRadius:8,objectFit:"cover",flexShrink:0,cursor:"pointer"}}/>
+                :<div style={{width:52,height:52,borderRadius:8,background:"#f1f5f9",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,color:"#cbd5e1"}}>📦</div>}
+              <div style={{display:"flex",minWidth:0,flex:1,gap:9}}>
+                <div style={{minWidth:0,flexShrink:0}}>
+                  <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+                    <span style={{fontWeight:700,fontSize:13,textDecoration:o.cancelled?"line-through":"none"}}>{o.cust.name}</span>
+                    {sortMode==="rank"&&rank&&<span style={{fontSize:9,background:"#fef3c7",color:"#92400e",borderRadius:8,padding:"1px 7px",fontWeight:700}}>#{rank}</span>}
+                  </div>
+                  <div style={{fontSize:11,color:"#555",marginTop:1}}>{o.cust.phone}</div>
+                  {o.cust.address&&<div style={{fontSize:9,color:"#888",marginTop:2,maxWidth:130}}>📍 {o.cust.address}</div>}
+                  <div style={{fontSize:9,color:"#bbb",marginTop:1}}>{o.no}</div>
+                </div>
+                <div style={{width:1,background:"#e5e5e5",flexShrink:0,alignSelf:"stretch"}}></div>
+                <div style={{minWidth:0,flex:1}}>
+                  <div style={{fontSize:11,color:"#333",fontWeight:700}}>{categoryOf(o).join(", ")}</div>
+                  <div style={{fontSize:9,color:"#999",marginTop:1}}>{o.items.map(it=>it.variantBn).join(", ")}</div>
+                </div>
               </div>
-              <div style={{display:"flex",alignItems:"center",gap:8,marginTop:3,flexWrap:"wrap"}}>
-                <span style={{fontSize:12,color:"#555"}}>📞 {o.cust.phone}</span>
-                <a href={`tel:${o.cust.phone}`} onClick={e=>e.stopPropagation()} style={{background:"#eff6ff",color:"#1d4ed8",border:"none",borderRadius:6,padding:"5px 9px",minHeight:32,fontSize:10,fontWeight:700,textDecoration:"none"}}>📱 কল</a>
-                <a href={`https://wa.me/${toIntlPhone(o.cust.phone)}`} target="_blank" rel="noopener noreferrer" onClick={e=>e.stopPropagation()} style={{background:"#f0fdf4",color:"#166534",border:"none",borderRadius:6,padding:"5px 9px",minHeight:32,fontSize:10,fontWeight:700,textDecoration:"none"}}>💬 WhatsApp</a>
-              </div>
-              {o.cust.address&&<div style={{fontSize:10,color:"#888",marginTop:2}}>📍 {o.cust.address}</div>}
-              <div style={{fontSize:11,color:"#888",marginTop:1}}>{o.no}</div>
-              <div style={{fontSize:11,color:"#333",marginTop:2,fontWeight:700}}>{categoryOf(o).join(", ")}</div>
-              <div style={{fontSize:10,color:"#999",marginTop:1}}>{o.items.map(it=>it.variantBn).join(", ")}</div>
             </div>
             <div style={{textAlign:"right",flexShrink:0,marginLeft:8}}>
               <div style={{fontWeight:700,fontSize:13,color:RED}}>{money(o.cust.total)}</div>
               <div style={{fontSize:10,color:o.cancelled?"#991b1b":o.delivered?"#0f766e":full?"#16a34a":"#f97316",marginTop:2,fontWeight:600}}>{o.cancelled?"❌ বাতিল":o.delivered?"📦 ডেলিভারড":full?"✅ পরিশোধ":"⏳ বাকি আছে"}</div>
               <div style={{fontSize:10,color:"#aaa",marginTop:1}}>{o.delivered?fmtDate(o.deliveredAt):fmtDate(o.cust.date)}</div>
             </div>
+          </div>
+          <div style={{display:"flex",gap:6,marginTop:8}} onClick={e=>e.stopPropagation()}>
+            <a href={`tel:${o.cust.phone}`} style={{flex:1,textAlign:"center",background:"#eff6ff",color:"#1d4ed8",border:"none",borderRadius:6,padding:"8px 9px",minHeight:36,fontSize:10,fontWeight:700,textDecoration:"none"}}>📱 কল</a>
+            <a href={`https://wa.me/${toIntlPhone(o.cust.phone)}`} target="_blank" rel="noopener noreferrer" style={{flex:1,textAlign:"center",background:"#f0fdf4",color:"#166534",border:"none",borderRadius:6,padding:"8px 9px",minHeight:36,fontSize:10,fontWeight:700,textDecoration:"none"}}>💬 WhatsApp</a>
           </div>
         </div>
       })}
