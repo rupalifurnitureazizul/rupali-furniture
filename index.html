@@ -85,7 +85,7 @@ function compressImage(file,maxDim=1200,quality=0.82){
 /* ── FULL-RESOLUTION LOCAL FOLDER STORAGE (desktop Chrome/Edge/Brave only) ──
    Original, uncompressed images are saved as real files in a folder you choose
    on your computer. Only a small compressed thumbnail syncs to the cloud/mobile. */
-const BUILD_TAG="4.20";
+const BUILD_TAG="4.22";
 const FS_SUPPORTED=typeof window!=="undefined"&&"showDirectoryPicker" in window;
 function idbOpen(){
   return new Promise((resolve,reject)=>{
@@ -2202,7 +2202,7 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
     }
 
     // Wood stock pie (uncut/available logs by wood type)
-    const WOOD_COLORS={S:"#92400e",M:"#b45309",A:"#65a30d",K:"#0891b2",E:"#7c3aed"};
+    const WOOD_COLORS={S:CHART_SOFT_ORANGE,M:CHART_SOFT_RED,A:CHART_SOFT_GREEN,K:CHART_SOFT_TEAL,E:CHART_SOFT_PURPLE};
     const stockByType={};
     (woodLots||[]).forEach(lot=>{
       const availCft=(lot.logs||[]).filter(l=>!l.cut).reduce((s,l)=>s+l.cft,0);
@@ -2375,7 +2375,7 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
       const label=cat?cat.bn:e.category;
       expByCat[label]=(expByCat[label]||0)+(parseFloat(e.total)||0);
     });
-    const EXP_PIE_COLORS=["#0f766e","#1d4ed8","#f97316","#6d28d9","#db2777","#64748b","#eab308","#16a34a"];
+    const EXP_PIE_COLORS=[CHART_SOFT_TEAL,CHART_SOFT_BLUE,CHART_SOFT_ORANGE,CHART_SOFT_PURPLE,CHART_SOFT_PINK,CHART_SOFT_GREY,"#d4b26a",CHART_SOFT_GREEN];
     const expensePie=Object.entries(expByCat).sort((a,b)=>b[1]-a[1]).map(([label,value],i)=>({label,value,color:EXP_PIE_COLORS[i%EXP_PIE_COLORS.length]}));
 
     return{running:withDays,monthlyOrders,monthlyExpense,yoy,totalRevenue,totalExpense,catPie,thisMonthCount:thisMonthOrders.length,avgOrderValue,totalOutstanding,topCategoryRanked,yearly,bestMonthCompare,stockPie,expensePie,payables,totalPayable,cfInflow,cfOutflow,cfNet,deptAvg,deptAvgMax,stuckItems,payrollProdByMonth,validPerCft,setLabourRate,emptyWoodModels,repeatRate,repeatCount:repeatCusts.length,totalCustCount:custList.length,repeatRevenueShare,stockAlerts,readyNotCollected,readyValueStuck,avgProdDays,recentAvgProd,olderAvgProd,prodCount:prodTimes.length,seasonal,seasonalMax,seasonalYearSpan,woodPriceAlerts,catProfitRanked,throughputRanked,bottleneckDeptBn,workerRanked};
@@ -2408,9 +2408,9 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
       })()}
 
       {/* স্তরে লাফ দেওয়ার বার — লম্বা স্ক্রলে নিচের অংশ যাতে হারিয়ে না যায় */}
-      <div style={{position:"sticky",top:0,zIndex:20,background:"rgba(255,255,255,0.97)",backdropFilter:"blur(4px)",margin:"0 -16px 12px",padding:"7px 10px",borderBottom:"1px solid #eee",display:"flex",gap:4,overflowX:"auto"}}>
-        {[{e:"⚡",z:"z-urgent",c:"#b91c1c"},{e:"🔥",z:"z-today",c:"#0f766e"},{e:"📅",z:"z-trend",c:"#b45309"},{e:"📊",z:"z-health",c:"#1d4ed8"},{e:"🪵",z:"z-wood",c:"#065f46"},{e:"🚧",z:"z-perf",c:"#7c2d12"},{e:"⚙️",z:"z-sys",c:"#666"}].map(b=>
-          <button key={b.z} onClick={()=>document.getElementById(b.z)?.scrollIntoView({behavior:"smooth",block:"start"})} style={{background:b.c+"14",border:`1.5px solid ${b.c}55`,borderRadius:9,minWidth:44,minHeight:38,fontSize:17,flexShrink:0,cursor:"pointer"}}>{b.e}</button>
+      <div style={{position:"sticky",top:0,zIndex:20,background:"rgba(255,255,255,0.97)",backdropFilter:"blur(4px)",margin:"0 -16px 12px",padding:"7px 10px",borderBottom:"1px solid #eee",display:"flex",justifyContent:"space-between",gap:4,overflowX:"auto"}}>
+        {[{e:"⚡",z:"z-urgent",c:"#b91c1c"},{e:"🔥",z:"z-today",c:"#0f766e"},{e:"📅",z:"z-trend",c:"#b45309"},{e:"📊",z:"z-health",c:"#1d4ed8"},{e:"🪵",z:"z-wood",c:"#065f46"},{e:"🚧",z:"z-perf",c:"#7c2d12"},{e:"⚙️",z:"z-sys",c:"#78716c"}].map(b=>
+          <button key={b.z} onClick={()=>document.getElementById(b.z)?.scrollIntoView({behavior:"smooth",block:"start"})} style={{background:b.c+"14",border:`1.5px solid ${b.c}55`,borderRadius:9,minWidth:44,minHeight:38,fontSize:17,flexShrink:1,flexGrow:1,cursor:"pointer",outline:"none",WebkitTapHighlightColor:"transparent"}}>{b.e}</button>
         )}
       </div>
 
@@ -2449,28 +2449,30 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
           <span style={{fontSize:12,fontWeight:700,color:"#1d4ed8"}}>📦 তৈরি শেষ, গ্রাহক নেননি ({stats.readyNotCollected.length}টি)</span>
         </div>
         <div style={{fontSize:9,color:"#3b5a9a",marginBottom:8}}>দোকানে জায়গা দখল করে আছে · আটকে থাকা টাকা: <strong>{money(stats.readyValueStuck)}</strong></div>
-        {stats.readyNotCollected.slice(0,6).map(o=><div key={o.no} onClick={()=>onViewDelivery(o)} style={{background:"white",borderRadius:8,padding:"8px 10px",marginBottom:6,cursor:"pointer",border:"1px solid #dbeafe",minHeight:92}}>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-            {(o.deliveryImgs&&o.deliveryImgs[0])?
-              <img src={o.deliveryImgs[0].src} onClick={e=>{e.stopPropagation();openLightbox(o.deliveryImgs[0].src)}} style={{width:40,height:40,borderRadius:7,objectFit:"cover",flexShrink:0,marginRight:8,cursor:"pointer"}}/>
-              :<div style={{width:40,height:40,borderRadius:7,background:"#f1f5f9",flexShrink:0,marginRight:8,display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,color:"#cbd5e1"}}>📦</div>}
-            <div style={{flex:1,minWidth:0}}>
-              <div style={{fontSize:11,fontWeight:700,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{o.cust.name}</div>
-              <div style={{fontSize:9,color:"#999",marginTop:1,display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",overflow:"hidden",lineHeight:1.3,maxHeight:"2.6em"}}>{(o.items||[]).map(it=>it.variantBn).join(", ")}</div>
-              {o.readyNotifiedAt&&<div style={{fontSize:8,color:"#1d4ed8",marginTop:1}}>জানানো হয়েছে: {fmtDate(o.readyNotifiedAt)}</div>}
+        {stats.readyNotCollected.slice(0,6).map(o=><div key={o.no} onClick={()=>onViewDelivery(o)} style={{background:"white",borderRadius:8,marginBottom:6,cursor:"pointer",border:"1px solid #dbeafe",display:"flex",overflow:"hidden"}}>
+          {(o.deliveryImgs&&o.deliveryImgs[0])?
+            <img src={o.deliveryImgs[0].src} onClick={e=>{e.stopPropagation();openLightbox(o.deliveryImgs[0].src)}} style={{width:64,alignSelf:"stretch",objectFit:"cover",flexShrink:0,cursor:"pointer"}}/>
+            :<div style={{width:64,alignSelf:"stretch",background:"#f1f5f9",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,color:"#cbd5e1"}}>📦</div>}
+          <div style={{flex:1,minWidth:0,padding:"8px 10px"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:11,fontWeight:700,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{o.cust.name}</div>
+                <div style={{fontSize:9,color:"#999",marginTop:1,display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",overflow:"hidden",lineHeight:1.3,maxHeight:"2.6em"}}>{(o.items||[]).map(it=>it.variantBn).join(", ")}</div>
+                {o.readyNotifiedAt&&<div style={{fontSize:8,color:"#1d4ed8",marginTop:1}}>জানানো হয়েছে: {fmtDate(o.readyNotifiedAt)}</div>}
+              </div>
+              <div style={{textAlign:"right",flexShrink:0,marginLeft:8}}>
+                {o.waitingDays!==null&&<div style={{fontSize:10,fontWeight:700,color:o.waitingDays>30?RED:"#f97316"}}>{o.waitingDays} দিন ধরে</div>}
+                {o.due>0&&<div style={{fontSize:10,color:RED}}>বাকি {money(o.due)}</div>}
+              </div>
             </div>
-            <div style={{textAlign:"right",flexShrink:0,marginLeft:8}}>
-              {o.waitingDays!==null&&<div style={{fontSize:10,fontWeight:700,color:o.waitingDays>30?RED:"#f97316"}}>{o.waitingDays} দিন ধরে</div>}
-              {o.due>0&&<div style={{fontSize:10,color:RED}}>বাকি {money(o.due)}</div>}
+            <div style={{display:"flex",gap:6,marginTop:5}} onClick={e=>e.stopPropagation()}>
+              <a href={`tel:${o.cust.phone}`} style={{background:"#eff6ff",color:"#1d4ed8",borderRadius:6,padding:"8px 10px",minHeight:38,fontSize:9,fontWeight:700,textDecoration:"none",flex:1,textAlign:"center"}}>📱 কল</a>
+              <button onClick={()=>{
+                const msg=encodeURIComponent("সম্মানিত গ্রাহক, আপনার অর্ডারটি ডেলিভারির জন্য প্রস্তুত হয়েছে।");
+                window.open(`https://wa.me/${toIntlPhone(o.cust.phone)}?text=${msg}`,"_blank");
+                onUpdateOrder({...o,readyNotifiedAt:todayStr()});
+              }} style={{background:"#f0fdf4",color:"#166534",border:"none",borderRadius:6,padding:"8px 10px",minHeight:38,fontSize:9,fontWeight:700,flex:1}}>💬 WhatsApp</button>
             </div>
-          </div>
-          <div style={{display:"flex",gap:6,marginTop:5}} onClick={e=>e.stopPropagation()}>
-            <a href={`tel:${o.cust.phone}`} style={{background:"#eff6ff",color:"#1d4ed8",borderRadius:6,padding:"8px 10px",minHeight:38,fontSize:9,fontWeight:700,textDecoration:"none"}}>📱 কল</a>
-            <button onClick={()=>{
-              const msg=encodeURIComponent("সম্মানিত গ্রাহক, আপনার অর্ডারটি ডেলিভারির জন্য প্রস্তুত হয়েছে।");
-              window.open(`https://wa.me/${toIntlPhone(o.cust.phone)}?text=${msg}`,"_blank");
-              onUpdateOrder({...o,readyNotifiedAt:todayStr()});
-            }} style={{background:"#f0fdf4",color:"#166534",border:"none",borderRadius:6,padding:"8px 10px",minHeight:38,fontSize:9,fontWeight:700}}>💬 WhatsApp</button>
           </div>
         </div>)}
         {stats.readyNotCollected.length>6&&<div style={{fontSize:9,color:"#3b5a9a",textAlign:"center"}}>...ও আরও {stats.readyNotCollected.length-6}টি</div>}
@@ -5019,12 +5021,12 @@ function Hist({orders,db,onBack,onView,highlightNo}){
         const bg=highlightNo===o.no?"#e0f2fe":o.cancelled?"#fafafa":o.delivered?"#f0fdf4":"white";
         const borderColor=highlightNo===o.no?"#0ea5e9":o.cancelled?"#999":o.delivered?"#0f766e":full?"#16a34a":RED;
         const rank=customerRank[(o.cust.phone||"").trim()];
-        return<div key={i} onClick={()=>onView(o)} style={{background:bg,borderRadius:11,padding:"12px",marginBottom:9,boxShadow:"0 1px 4px rgba(0,0,0,.08)",border:o.delivered?"1px solid #99f6e4":"none",borderLeft:`4px solid ${borderColor}`,cursor:"pointer",opacity:o.cancelled?0.65:1,transition:"background .4s"}}>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
-            <div style={{display:"flex",gap:9,minWidth:0,flex:1}}>
-              {(o.deliveryImgs&&o.deliveryImgs[0])?
-                <img src={o.deliveryImgs[0].src} onClick={e=>{e.stopPropagation();openLightbox(o.deliveryImgs[0].src)}} style={{width:52,height:52,borderRadius:8,objectFit:"cover",flexShrink:0,cursor:"pointer"}}/>
-                :<div style={{width:52,height:52,borderRadius:8,background:"#f1f5f9",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,color:"#cbd5e1"}}>📦</div>}
+        return<div key={i} onClick={()=>onView(o)} style={{background:bg,borderRadius:11,marginBottom:9,boxShadow:"0 1px 4px rgba(0,0,0,.08)",border:o.delivered?"1px solid #99f6e4":"none",borderLeft:`4px solid ${borderColor}`,cursor:"pointer",opacity:o.cancelled?0.65:1,transition:"background .4s",display:"flex",overflow:"hidden"}}>
+          {(o.deliveryImgs&&o.deliveryImgs[0])?
+            <img src={o.deliveryImgs[0].src} onClick={e=>{e.stopPropagation();openLightbox(o.deliveryImgs[0].src)}} style={{width:64,alignSelf:"stretch",objectFit:"cover",flexShrink:0,cursor:"pointer"}}/>
+            :<div style={{width:64,alignSelf:"stretch",background:"#f1f5f9",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,color:"#cbd5e1"}}>📦</div>}
+          <div style={{flex:1,minWidth:0,padding:"12px"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
               <div style={{display:"flex",minWidth:0,flex:1,gap:9}}>
                 <div style={{minWidth:0,flexShrink:0}}>
                   <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
@@ -5041,16 +5043,16 @@ function Hist({orders,db,onBack,onView,highlightNo}){
                   <div style={{fontSize:9,color:"#999",marginTop:1}}>{o.items.map(it=>it.variantBn).join(", ")}</div>
                 </div>
               </div>
+              <div style={{textAlign:"right",flexShrink:0,marginLeft:8}}>
+                <div style={{fontWeight:700,fontSize:13,color:RED}}>{money(o.cust.total)}</div>
+                <div style={{fontSize:10,color:o.cancelled?"#991b1b":o.delivered?"#0f766e":full?"#16a34a":"#f97316",marginTop:2,fontWeight:600}}>{o.cancelled?"❌ বাতিল":o.delivered?"📦 ডেলিভারড":full?"✅ পরিশোধ":"⏳ বাকি আছে"}</div>
+                <div style={{fontSize:10,color:"#aaa",marginTop:1}}>{o.delivered?fmtDate(o.deliveredAt):fmtDate(o.cust.date)}</div>
+              </div>
             </div>
-            <div style={{textAlign:"right",flexShrink:0,marginLeft:8}}>
-              <div style={{fontWeight:700,fontSize:13,color:RED}}>{money(o.cust.total)}</div>
-              <div style={{fontSize:10,color:o.cancelled?"#991b1b":o.delivered?"#0f766e":full?"#16a34a":"#f97316",marginTop:2,fontWeight:600}}>{o.cancelled?"❌ বাতিল":o.delivered?"📦 ডেলিভারড":full?"✅ পরিশোধ":"⏳ বাকি আছে"}</div>
-              <div style={{fontSize:10,color:"#aaa",marginTop:1}}>{o.delivered?fmtDate(o.deliveredAt):fmtDate(o.cust.date)}</div>
+            <div style={{display:"flex",gap:6,marginTop:8}} onClick={e=>e.stopPropagation()}>
+              <a href={`tel:${o.cust.phone}`} style={{flex:1,textAlign:"center",background:"#eff6ff",color:"#1d4ed8",border:"none",borderRadius:6,padding:"8px 9px",minHeight:36,fontSize:10,fontWeight:700,textDecoration:"none"}}>📱 কল</a>
+              <a href={`https://wa.me/${toIntlPhone(o.cust.phone)}`} target="_blank" rel="noopener noreferrer" style={{flex:1,textAlign:"center",background:"#f0fdf4",color:"#166534",border:"none",borderRadius:6,padding:"8px 9px",minHeight:36,fontSize:10,fontWeight:700,textDecoration:"none"}}>💬 WhatsApp</a>
             </div>
-          </div>
-          <div style={{display:"flex",gap:6,marginTop:8}} onClick={e=>e.stopPropagation()}>
-            <a href={`tel:${o.cust.phone}`} style={{flex:1,textAlign:"center",background:"#eff6ff",color:"#1d4ed8",border:"none",borderRadius:6,padding:"8px 9px",minHeight:36,fontSize:10,fontWeight:700,textDecoration:"none"}}>📱 কল</a>
-            <a href={`https://wa.me/${toIntlPhone(o.cust.phone)}`} target="_blank" rel="noopener noreferrer" style={{flex:1,textAlign:"center",background:"#f0fdf4",color:"#166534",border:"none",borderRadius:6,padding:"8px 9px",minHeight:36,fontSize:10,fontWeight:700,textDecoration:"none"}}>💬 WhatsApp</a>
           </div>
         </div>
       })}
