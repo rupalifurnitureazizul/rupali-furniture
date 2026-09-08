@@ -85,7 +85,7 @@ function compressImage(file,maxDim=1200,quality=0.82){
 /* ── FULL-RESOLUTION LOCAL FOLDER STORAGE (desktop Chrome/Edge/Brave only) ──
    Original, uncompressed images are saved as real files in a folder you choose
    on your computer. Only a small compressed thumbnail syncs to the cloud/mobile. */
-const BUILD_TAG="4.22";
+const BUILD_TAG="4.25";
 const FS_SUPPORTED=typeof window!=="undefined"&&"showDirectoryPicker" in window;
 function idbOpen(){
   return new Promise((resolve,reject)=>{
@@ -1459,6 +1459,9 @@ function App({firebaseConfig,onResetConfig}){
   const[laborSettings,setLaborSettings]=useState({});
   const[alertSettings,setAlertSettings]=useState({});
   const[backupFailed,setBackupFailed]=useState(false);
+  const[lastSyncAt,setLastSyncAt]=useState(null);
+  const refreshFromServerRef=useRef(null);
+  const manualRefresh=()=>refreshFromServerRef.current?refreshFromServerRef.current(true):Promise.resolve();
   const[rackSplits,setRackSplits]=useState([]);
   const[rackBands,setRackBands]=useState([]);
   const fsRef=useRef(null);
@@ -1558,7 +1561,27 @@ function App({firebaseConfig,onResetConfig}){
       const json=JSON.stringify(snapshot,null,2);
       let cloudOk=false;
       if(fsRef.current){
-        try{await fsRef.current.collection("backups").doc(todayD).set(JSON.parse(json));cloudOk=true}catch(e){cloudOk=false}
+        // ── ক্লাউড ব্যাকআপ টুকরো টুকরো করে জমা হয় ──
+        // Firestore-এ একটা ডকুমেন্ট সর্বোচ্চ ১ MB পর্যন্ত হতে পারে। আগে সব অর্ডার (ছবিসহ)
+        // একটাই ডকুমেন্টে জমা হতো, তাই অর্ডার বাড়লে একদিন এই সীমা ছাড়িয়ে ব্যাকআপ ব্যর্থ হতো।
+        // এখন অর্ডারগুলো ~৬০০KB করে টুকরোয় ভাগ হয়ে আলাদা ডকুমেন্টে যায় — যত অর্ডারই হোক,
+        // এই সীমা আর কখনো বাধা হবে না।
+        try{
+          const CHUNK_BYTES=600*1024;
+          const allOrders=snapshot.orders||[];
+          const chunks=[];let cur=[],curSize=0;
+          allOrders.forEach(o=>{
+            const size=JSON.stringify(o).length;
+            if(cur.length>0&&curSize+size>CHUNK_BYTES){chunks.push(cur);cur=[];curSize=0}
+            cur.push(o);curSize+=size;
+          });
+          if(cur.length>0)chunks.push(cur);
+          const{orders,...withoutOrders}=snapshot;
+          const col=fsRef.current.collection("backups");
+          await col.doc(todayD).set({...withoutOrders,orderChunks:chunks.length,orderCount:allOrders.length});
+          for(let i=0;i<chunks.length;i++)await col.doc(`${todayD}__orders_${i}`).set({orders:chunks[i],part:i,of:chunks.length});
+          cloudOk=true;
+        }catch(e){cloudOk=false}
       }
       // ব্যতিক্রম দিয়ে ব্যবস্থাপনা: সফল হলে চুপচাপ, ব্যর্থ হলেই কেবল উপরে সতর্কতা দেখাবে
       setBackupFailed(!cloudOk);
@@ -1590,6 +1613,7 @@ function App({firebaseConfig,onResetConfig}){
         clearTimeout(timer);setTimedOut(false);
         const list=snap.docs.map(d=>d.data()).sort((a,b)=>new Date(b.at||b.cust?.date||0)-new Date(a.at||a.cust?.date||0));
         setOrders(list);
+        setLastSyncAt(new Date());
       },err=>{clearTimeout(timer);setConnError(err.message)});
 
       const unsubExpenses=firestore.collection("expenses").onSnapshot(snap=>{
@@ -1705,29 +1729,47 @@ function App({firebaseConfig,onResetConfig}){
   // সার্ভার থেকে নতুন করে যাচাই — মোবাইল ব্রাউজার দীর্ঘক্ষণ ব্যাকগ্রাউন্ডে থাকলে লাইভ সংযোগ
   // নিজে থেকে দেরিতে সচল হতে পারে, তাই ফিরে আসার সাথে সাথেই জোর করে তাজা তথ্য আনা হয় ──
   useEffect(()=>{
-    const refreshFromServer=()=>{
-      if(document.visibilityState&&document.visibilityState!=="visible")return;
+    // ── সার্ভার থেকে জোর করে তাজা তথ্য আনা ──
+    // আগে এটা শুধু ট্যাব বদলালে (visibilitychange/focus) চলত। কিন্তু কম্পিউটারে ট্যাবটা
+    // যদি সারাক্ষণ খোলা ও সামনেই থাকে, তাহলে এই ইভেন্ট কখনো ঘটেই না — আর ভেতরের
+    // রিয়েল-টাইম সংযোগ চুপচাপ বিচ্ছিন্ন হয়ে গেলে পুরনো তথ্য ঘণ্টার পর ঘণ্টা দেখাতে থাকে।
+    // এই কারণেই মোবাইল ও পিসিতে আলাদা সংখ্যা দেখা যেত। এখন প্রতি ৪৫ সেকেন্ডে নিজে থেকেই
+    // তাজা তথ্য টেনে আনে, আর সব কালেকশনই আনে (আগে কয়েকটা বাদ পড়ত)।
+    const refreshFromServer=(force)=>{
+      if(!force&&document.visibilityState&&document.visibilityState!=="visible")return;
       const fs=fsRef.current;
-      if(!fs)return;
-      fs.collection("orders").get({source:"server"}).then(snap=>{
-        const list=snap.docs.map(d=>d.data()).sort((a,b)=>new Date(b.at||b.cust?.date||0)-new Date(a.at||a.cust?.date||0));
-        setOrders(list);
-      }).catch(()=>{});
-      fs.collection("expenses").get({source:"server"}).then(snap=>{
-        const list=snap.docs.map(d=>d.data()).sort((a,b)=>new Date(b.at||b.date||0)-new Date(a.at||a.date||0));
-        setExpenses(list);
-      }).catch(()=>{});
-      fs.collection("woodlots").get({source:"server"}).then(snap=>{
-        const list=snap.docs.map(d=>d.data()).sort((a,b)=>new Date(b.date||0)-new Date(a.date||0));
-        setWoodLots(list);
-      }).catch(()=>{});
-      fs.collection("payrollWeeks").get({source:"server"}).then(snap=>{
-        const map={};snap.docs.forEach(d=>{map[d.id]=d.data()});setPayrollWeeks(map);
-      }).catch(()=>{});
+      if(!fs)return Promise.resolve();
+      const jobs=[
+        fs.collection("orders").get({source:"server"}).then(snap=>{
+          const list=snap.docs.map(d=>d.data()).sort((a,b)=>new Date(b.at||b.cust?.date||0)-new Date(a.at||a.cust?.date||0));
+          setOrders(list);
+        }),
+        fs.collection("expenses").get({source:"server"}).then(snap=>{
+          const list=snap.docs.map(d=>d.data()).sort((a,b)=>new Date(b.at||b.date||0)-new Date(a.at||a.date||0));
+          setExpenses(list);
+        }),
+        fs.collection("woodlots").get({source:"server"}).then(snap=>{
+          const list=snap.docs.map(d=>d.data()).sort((a,b)=>new Date(b.date||0)-new Date(a.date||0));
+          setWoodLots(list);
+        }),
+        fs.collection("payrollWeeks").get({source:"server"}).then(snap=>{
+          const map={};snap.docs.forEach(d=>{map[d.id]=d.data()});setPayrollWeeks(map);
+        }),
+        fs.collection("workers").get({source:"server"}).then(snap=>{setWorkers(snap.docs.map(d=>d.data()))}),
+        fs.doc("meta/db").get({source:"server"}).then(s=>{if(s.exists)setDb(s.data())}),
+        fs.doc("meta/woodSettings").get({source:"server"}).then(s=>{setWoodSettings(s.exists?s.data():{})}),
+        fs.doc("meta/laborSettings").get({source:"server"}).then(s=>{setLaborSettings(s.exists?s.data():{})}),
+        fs.doc("meta/carpenters").get({source:"server"}).then(s=>{setCarpenters(s.exists?(s.data().list||[]):[])}),
+        fs.doc("meta/rackBands").get({source:"server"}).then(s=>{setRackBands(s.exists?(s.data().list||[]):[])}),
+        fs.doc("meta/rackSplits").get({source:"server"}).then(s=>{setRackSplits(s.exists?(s.data().list||[]):[])}),
+      ];
+      return Promise.allSettled(jobs).then(()=>{setLastSyncAt(new Date());setConnError(null)});
     };
-    document.addEventListener("visibilitychange",refreshFromServer);
-    window.addEventListener("focus",refreshFromServer);
-    return()=>{document.removeEventListener("visibilitychange",refreshFromServer);window.removeEventListener("focus",refreshFromServer)};
+    refreshFromServerRef.current=refreshFromServer;
+    document.addEventListener("visibilitychange",()=>refreshFromServer());
+    window.addEventListener("focus",()=>refreshFromServer());
+    const syncInterval=setInterval(()=>refreshFromServer(),45000);
+    return()=>{clearInterval(syncInterval);document.removeEventListener("visibilitychange",refreshFromServer);window.removeEventListener("focus",refreshFromServer)};
   },[]);
 
   const saveDb=(newDb)=>{
@@ -1897,11 +1939,11 @@ function App({firebaseConfig,onResetConfig}){
   if(page==="expense")return<ExpensePage expenses={expenses} onSave={saveExpense} onBack={goBack}/>;
   if(page==="payroll")return<PayrollPage workers={workers} saveWorker={saveWorker} deleteWorker={deleteWorker} payrollWeeks={payrollWeeks} savePayrollWeek={savePayrollWeek} updateAttendance={updateAttendance} addAdvanceEntry={addAdvanceEntry} removeAdvanceEntry={removeAdvanceEntry} onBack={goBack}/>;
   if(page==="plreport")return<PLReportPage orders={orders} expenses={expenses} workers={workers} payrollWeeks={payrollWeeks} woodLots={woodLots} woodSettings={woodSettings} laborSettings={laborSettings} onBack={goBack}/>;
-  return<Home orders={orders} expenses={expenses} woodLots={woodLots} db={db} woodSettings={woodSettings} laborSettings={laborSettings} workers={workers} payrollWeeks={payrollWeeks} alertSettings={alertSettings} saveAlertSettings={saveAlertSettings} backupFailed={backupFailed} onUpdateOrder={updateOrder} onNew={()=>navigate({page:"form"})} onHist={()=>navigate({page:"history"})} onManage={()=>navigate({page:"manage"})} onExpense={()=>navigate({page:"expense"})} onWoodStock={()=>navigate({page:"woodstock",view:"list"})} onPayroll={()=>navigate({page:"payroll"})} onPLReport={()=>navigate({page:"plreport"})} onView={o=>navigate({page:"preview",orderNo:o.no,slip:0})} onViewDelivery={o=>navigate({page:"preview",orderNo:o.no,slip:5})} online={online} connError={connError} onResetConfig={onResetConfig} folderStatus={folderStatus} connectFolder={connectFolder} highlightNo={highlightNo} onBackupData={backupData}/>;
+  return<Home orders={orders} expenses={expenses} woodLots={woodLots} db={db} woodSettings={woodSettings} laborSettings={laborSettings} workers={workers} payrollWeeks={payrollWeeks} alertSettings={alertSettings} saveAlertSettings={saveAlertSettings} backupFailed={backupFailed} lastSyncAt={lastSyncAt} onManualRefresh={manualRefresh} onUpdateOrder={updateOrder} onNew={()=>navigate({page:"form"})} onHist={()=>navigate({page:"history"})} onManage={()=>navigate({page:"manage"})} onExpense={()=>navigate({page:"expense"})} onWoodStock={()=>navigate({page:"woodstock",view:"list"})} onPayroll={()=>navigate({page:"payroll"})} onPLReport={()=>navigate({page:"plreport"})} onView={o=>navigate({page:"preview",orderNo:o.no,slip:0})} onViewDelivery={o=>navigate({page:"preview",orderNo:o.no,slip:5})} online={online} connError={connError} onResetConfig={onResetConfig} folderStatus={folderStatus} connectFolder={connectFolder} highlightNo={highlightNo} onBackupData={backupData}/>;
 }
 
 /* ── HOME / DASHBOARD ── */
-function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,payrollWeeks,alertSettings,saveAlertSettings,backupFailed,onUpdateOrder,onNew,onHist,onManage,onExpense,onWoodStock,onPayroll,onPLReport,onView,onViewDelivery,online,connError,onResetConfig,folderStatus,connectFolder,highlightNo,onBackupData}){
+function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,payrollWeeks,alertSettings,saveAlertSettings,backupFailed,lastSyncAt,onManualRefresh,onUpdateOrder,onNew,onHist,onManage,onExpense,onWoodStock,onPayroll,onPLReport,onView,onViewDelivery,online,connError,onResetConfig,folderStatus,connectFolder,highlightNo,onBackupData}){
   const now=new Date();
   const[showAllRunning,setShowAllRunning]=useState(false);
   const[showSystemZone,setShowSystemZone]=useState(false);
@@ -2408,6 +2450,19 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
       })()}
 
       {/* স্তরে লাফ দেওয়ার বার — লম্বা স্ক্রলে নিচের অংশ যাতে হারিয়ে না যায় */}
+      {(()=>{
+        // ── তথ্য কতক্ষণ আগে সিঙ্ক হয়েছে — মোবাইল ও পিসিতে ভিন্ন সংখ্যা দেখা গেলে
+        // এখান থেকেই বোঝা যাবে কোন ডিভাইসের তথ্য পুরনো ──
+        const[nowTick,setNowTick]=[Date.now(),null];
+        const secs=lastSyncAt?Math.round((nowTick-new Date(lastSyncAt).getTime())/1000):null;
+        const stale=secs!==null&&secs>150;
+        return<div className="no-print" style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,background:stale?"#fff7ed":"#f8fafc",border:`1px solid ${stale?"#fed7aa":"#eee"}`,borderRadius:9,padding:"7px 10px",marginBottom:10}}>
+          <span style={{fontSize:9,color:stale?"#9a3412":"#888"}}>
+            {secs===null?"এখনো সিঙ্ক হয়নি":stale?`⚠️ তথ্য ${Math.round(secs/60)} মিনিট আগের — নতুন করে আনুন`:`✅ তথ্য তাজা (${secs} সেকেন্ড আগে সিঙ্ক)`}
+          </span>
+          <button onClick={()=>onManualRefresh&&onManualRefresh()} style={{background:"#eff6ff",color:"#1d4ed8",border:"1px solid #bfdbfe",borderRadius:7,padding:"6px 11px",minHeight:34,fontSize:10,fontWeight:700,flexShrink:0}}>🔄 নতুন করে আনুন</button>
+        </div>
+      })()}
       <div style={{position:"sticky",top:0,zIndex:20,background:"rgba(255,255,255,0.97)",backdropFilter:"blur(4px)",margin:"0 -16px 12px",padding:"7px 10px",borderBottom:"1px solid #eee",display:"flex",justifyContent:"space-between",gap:4,overflowX:"auto"}}>
         {[{e:"⚡",z:"z-urgent",c:"#b91c1c"},{e:"🔥",z:"z-today",c:"#0f766e"},{e:"📅",z:"z-trend",c:"#b45309"},{e:"📊",z:"z-health",c:"#1d4ed8"},{e:"🪵",z:"z-wood",c:"#065f46"},{e:"🚧",z:"z-perf",c:"#7c2d12"},{e:"⚙️",z:"z-sys",c:"#78716c"}].map(b=>
           <button key={b.z} onClick={()=>document.getElementById(b.z)?.scrollIntoView({behavior:"smooth",block:"start"})} style={{background:b.c+"14",border:`1.5px solid ${b.c}55`,borderRadius:9,minWidth:44,minHeight:38,fontSize:17,flexShrink:1,flexGrow:1,cursor:"pointer",outline:"none",WebkitTapHighlightColor:"transparent"}}>{b.e}</button>
