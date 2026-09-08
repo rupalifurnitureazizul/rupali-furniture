@@ -85,7 +85,7 @@ function compressImage(file,maxDim=1200,quality=0.82){
 /* ── FULL-RESOLUTION LOCAL FOLDER STORAGE (desktop Chrome/Edge/Brave only) ──
    Original, uncompressed images are saved as real files in a folder you choose
    on your computer. Only a small compressed thumbnail syncs to the cloud/mobile. */
-const BUILD_TAG="4.36";
+const BUILD_TAG="4.38";
 const FS_SUPPORTED=typeof window!=="undefined"&&"showDirectoryPicker" in window;
 function idbOpen(){
   return new Promise((resolve,reject)=>{
@@ -1412,6 +1412,42 @@ function Root(){
 
 /* ── APP (Firestore-backed, syncs automatically across devices) ── */
 function App({firebaseConfig,onResetConfig}){
+  // ── এই ডিভাইসে যে কোডটা এখন চলছে সেটা কি এখনো সর্বশেষ ভার্সন? ব্রাউজারের একটা ট্যাব অনেকক্ষণ
+  // খোলা থাকলে, সার্ভারে নতুন ফাইল আপলোড হয়ে গেলেও ট্যাবটা রিলোড না করা পর্যন্ত পুরনো কোডেই আটকে
+  // থাকে — তখন Firestore সিঙ্ক নিখুঁত থাকলেও পুরনো কোডের ভুল/অসম্পূর্ণ লজিক ভুল তথ্য দেখাতে পারে,
+  // আর সেটা এই মুহূর্তে ডিভাইসের কোনো ইঙ্গিত ছাড়াই ঘটে। প্রতি দেড় মিনিটে (আর ট্যাব ফিরে
+  // এলে/ফোকাস পেলে) সার্ভারে যে ফাইলটা আসলে আছে তার BUILD_TAG চেক করে, এই ট্যাবেরটার সাথে না
+  // মিললে স্ক্রিনের একদম উপরে না-সরানো-যাওয়া লাল ব্যানার দেখায় — Firestore ডেটা নিয়ে কিছু বলে না,
+  // শুধু কোডটাই পুরনো কিনা তা ধরে ──
+  useEffect(()=>{
+    let bannerEl=null;
+    const showBanner=(newVer)=>{
+      if(bannerEl)return;
+      bannerEl=document.createElement("div");
+      bannerEl.textContent="🔄 নতুন ভার্সন (v"+newVer+") পাওয়া গেছে — এই ট্যাবে পুরনো কোড চলছে, এখন যা দেখছেন তা ভুল/পুরনো হতে পারে। রিলোড করতে এখানে চাপুন";
+      bannerEl.style.cssText="position:fixed;top:0;left:0;right:0;z-index:99999;background:#dc2626;color:white;padding:10px 16px;text-align:center;font-size:12px;font-weight:700;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,0.3);";
+      bannerEl.onclick=()=>window.location.reload();
+      document.body.appendChild(bannerEl);
+    };
+    const checkVersion=async()=>{
+      try{
+        const res=await fetch(window.location.pathname+"?_v="+Date.now(),{cache:"no-store"});
+        const html=await res.text();
+        const m=html.match(/const BUILD_TAG="([^"]+)"/);
+        if(m&&m[1]&&m[1]!==BUILD_TAG)showBanner(m[1]);
+      }catch(e){/* নেটওয়ার্ক হেঁচকি — পরের চেষ্টায় দেখা যাবে, নীরবে এড়িয়ে যান */}
+    };
+    checkVersion();
+    const iv=setInterval(checkVersion,90000);
+    document.addEventListener("visibilitychange",checkVersion);
+    window.addEventListener("focus",checkVersion);
+    return()=>{
+      clearInterval(iv);
+      document.removeEventListener("visibilitychange",checkVersion);
+      window.removeEventListener("focus",checkVersion);
+      if(bannerEl)bannerEl.remove();
+    };
+  },[]);
   // ── নেভিগেশন স্ট্যাক: ফোনের ব্যাক বাটন প্রতিবার ঠিক একধাপ পেছাবে, একদম হোমে লাফ দেবে না ──
   const[navStack,setNavStack]=useState([{page:"home"}]);
   const curScreen=navStack[navStack.length-1];
@@ -4574,8 +4610,11 @@ function ManageDB({db,saveDb,galleries,saveGalleryEntry,onBack}){
         <button onClick={addVariant} style={{width:"100%",background:"#6d28d9",color:"white",border:"none",borderRadius:9,padding:"12px",fontSize:13,fontWeight:700}}>ভেরিয়েন্ট যোগ করুন</button>
       </div>}
       {tab==="edit"&&editSections&&<div>
-        <div style={{fontWeight:700,fontSize:14,marginBottom:10}}>{db[selCat]?.variants[selVar]?.bn} — কাঠের তালিকা সম্পাদনা</div>
-        {editSections.map((sec,si)=><div key={si} style={{background:"white",borderRadius:10,marginBottom:10,overflow:"hidden",boxShadow:"0 1px 4px rgba(0,0,0,.07)"}}>
+        <div style={{fontWeight:700,fontSize:14,marginBottom:6}}>{db[selCat]?.variants[selVar]?.bn} — কাঠের তালিকা সম্পাদনা</div>
+        <div style={{fontSize:11,color:"#78350f",fontWeight:700,marginBottom:10,background:"#fef3c7",borderRadius:8,padding:"6px 10px",display:"inline-block"}}>মোট CFT (সবগুলো সেকশন মিলিয়ে): {totalCft(editSections).toFixed(3)}</div>
+        {editSections.map((sec,si)=>{
+          const sectionCft=sec.pieces.reduce((ss,p)=>ss+cft(p.pc,p.h,p.l,p.w),0);
+          return<div key={si} style={{background:"white",borderRadius:10,marginBottom:10,overflow:"hidden",boxShadow:"0 1px 4px rgba(0,0,0,.07)"}}>
           <div style={{background:"#92400e",color:"white",padding:"7px 12px"}}>
             <input value={sec.name} onChange={e=>{const ns=[...editSections];ns[si]={...ns[si],name:e.target.value};setEditSections(ns)}} style={{background:"transparent",border:"none",color:"white",fontWeight:700,fontSize:12,outline:"none",width:"100%",marginBottom:6}}/>
             <div style={{display:"flex",alignItems:"center",gap:6}}>
@@ -4618,13 +4657,14 @@ function ManageDB({db,saveDb,galleries,saveGalleryEntry,onBack}){
                 </div>}
               </div>
             })}
+            <div style={{fontSize:10,color:"#78350f",fontWeight:700,textAlign:"right",padding:"5px 2px",borderTop:"1px dashed #ddd",marginTop:4}}>এই সেকশনের CFT: {sectionCft.toFixed(3)}</div>
             <div style={{display:"grid",gridTemplateColumns:"2fr 1fr 1fr 1fr 1fr auto",gap:4,marginTop:6}}>
               <input placeholder="কাঠের নাম" value={newPiece.sectionIdx===si?newPiece.bn:""} onChange={e=>setNewPiece({...newPiece,sectionIdx:si,bn:e.target.value})} style={{...inp,padding:"5px 7px",fontSize:10}} onFocus={()=>setNewPiece(p=>({...p,sectionIdx:si}))}/>
               {[{k:"w",p:"W\""},{k:"h",p:"H\""},{k:"l",p:"L\""},{k:"pc",p:"পিস"}].map(f=><input key={f.k} type="number" step="0.25" placeholder={f.p} value={newPiece.sectionIdx===si?newPiece[f.k]:""} onChange={e=>setNewPiece({...newPiece,sectionIdx:si,[f.k]:e.target.value})} style={{...inp,padding:"5px 4px",fontSize:10}}/>)}
               <button onClick={addPiece} style={{background:"#6d28d9",color:"white",border:"none",borderRadius:6,padding:"8px 10px",minHeight:36,fontSize:11}}>+</button>
             </div>
           </div>
-        </div>)}
+        </div>})}
         <button onClick={addSection} style={{width:"100%",background:"white",border:"2px dashed #6d28d9",color:"#6d28d9",borderRadius:9,padding:"10px",fontSize:12,fontWeight:600,marginBottom:10}}>+ সেকশন যোগ করুন</button>
         <button onClick={saveEdit} style={{width:"100%",background:"#6d28d9",color:"white",border:"none",borderRadius:9,padding:"13px",fontSize:13,fontWeight:700}}>সংরক্ষণ করুন</button>
       </div>}
