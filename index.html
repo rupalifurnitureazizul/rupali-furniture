@@ -85,7 +85,7 @@ function compressImage(file,maxDim=1200,quality=0.82){
 /* ── FULL-RESOLUTION LOCAL FOLDER STORAGE (desktop Chrome/Edge/Brave only) ──
    Original, uncompressed images are saved as real files in a folder you choose
    on your computer. Only a small compressed thumbnail syncs to the cloud/mobile. */
-const BUILD_TAG="4.25";
+const BUILD_TAG="4.30";
 const FS_SUPPORTED=typeof window!=="undefined"&&"showDirectoryPicker" in window;
 function idbOpen(){
   return new Promise((resolve,reject)=>{
@@ -1461,6 +1461,45 @@ function App({firebaseConfig,onResetConfig}){
   const[backupFailed,setBackupFailed]=useState(false);
   const[lastSyncAt,setLastSyncAt]=useState(null);
   const refreshFromServerRef=useRef(null);
+  // ── লেখা সার্ভারে না পৌঁছালে চুপচাপ হারিয়ে যাওয়া বন্ধ করার জন্য ──
+  // আগে অর্ডার/আপডেট সার্ভারে পাঠাতে ব্যর্থ হলে শুধু একটা অ্যালার্ট দেখাত যা বন্ধ করে
+  // ভুলে যাওয়া সহজ ছিল, আর "নিজে থেকেই সিঙ্ক হবে" কথাটা সত্যি ছিল না — কোনো আসল
+  // পুনঃচেষ্টার ব্যবস্থা ছিল না। এখন failed লেখাগুলো localStorage-এ জমা থাকে, উপরে
+  // স্থায়ী সতর্কতা দেখায় (dismiss করা যায় না, শুধু সফল হলেই সরে), আর প্রতি ২০ সেকেন্ডে
+  // এবং রিকানেক্ট হলে নিজে থেকেই আবার চেষ্টা করে যতক্ষণ না সফল হয় ──
+  const[pendingWrites,setPendingWrites]=useState(()=>{try{return JSON.parse(localStorage.getItem("rf_pending_writes")||"[]")}catch(e){return[]}});
+  const pendingWritesRef=useRef(pendingWrites);
+  pendingWritesRef.current=pendingWrites;
+  const persistPending=(list)=>{localStorage.setItem("rf_pending_writes",JSON.stringify(list));setPendingWrites(list)};
+  const queuePendingWrite=(item)=>{
+    const list=[...pendingWritesRef.current,{...item,id:Date.now()+"_"+Math.random().toString(36).slice(2,7),addedAt:new Date().toISOString()}];
+    persistPending(list);
+  };
+  const retryPendingWrites=async()=>{
+    const fs=fsRef.current;
+    if(!fs||pendingWritesRef.current.length===0)return;
+    const remaining=[];
+    for(const item of pendingWritesRef.current){
+      try{
+        if(item.kind==="order")await fs.collection("orders").doc(item.orderNo).set(item.data,item.merge?{merge:true}:{});
+        else if(item.kind==="doc")await fs.doc(item.path).set(item.data,item.merge?{merge:true}:{});
+        else if(item.kind==="collectionDoc")await fs.collection(item.collection).doc(item.docId).set(item.data,item.merge?{merge:true}:{});
+      }catch(e){remaining.push(item)}
+    }
+    if(remaining.length!==pendingWritesRef.current.length)persistPending(remaining);
+  };
+  // ── সত্যিটা যাচাই: এই ডিভাইসে যা দেখাচ্ছে তার সাথে আসল সার্ভারের তথ্য মিলিয়ে দেখা —
+  // কোনো অর্ডার শুধু এই ডিভাইসেই আটকে আছে কিনা (কখনো সার্ভারে পৌঁছায়নি) সেটা ধরার জন্য ──
+  const checkServerSync=async()=>{
+    const fs=fsRef.current;
+    if(!fs)return{error:"সংযোগ নেই"};
+    try{
+      const snap=await fs.collection("orders").get({source:"server"});
+      const serverNos=new Set(snap.docs.map(d=>d.id));
+      const localOnly=orders.filter(o=>!serverNos.has(o.no));
+      return{localOnly,serverCount:serverNos.size,localCount:orders.length};
+    }catch(e){return{error:e.message}};
+  };
   const manualRefresh=()=>refreshFromServerRef.current?refreshFromServerRef.current(true):Promise.resolve();
   const[rackSplits,setRackSplits]=useState([]);
   const[rackBands,setRackBands]=useState([]);
@@ -1766,10 +1805,12 @@ function App({firebaseConfig,onResetConfig}){
       return Promise.allSettled(jobs).then(()=>{setLastSyncAt(new Date());setConnError(null)});
     };
     refreshFromServerRef.current=refreshFromServer;
-    document.addEventListener("visibilitychange",()=>refreshFromServer());
-    window.addEventListener("focus",()=>refreshFromServer());
-    const syncInterval=setInterval(()=>refreshFromServer(),45000);
-    return()=>{clearInterval(syncInterval);document.removeEventListener("visibilitychange",refreshFromServer);window.removeEventListener("focus",refreshFromServer)};
+    const onWake=()=>{refreshFromServer();retryPendingWrites()};
+    document.addEventListener("visibilitychange",onWake);
+    window.addEventListener("focus",onWake);
+    window.addEventListener("online",onWake);
+    const syncInterval=setInterval(onWake,20000);
+    return()=>{clearInterval(syncInterval);document.removeEventListener("visibilitychange",onWake);window.removeEventListener("focus",onWake);window.removeEventListener("online",onWake)};
   },[]);
 
   const saveDb=(newDb)=>{
@@ -1782,25 +1823,33 @@ function App({firebaseConfig,onResetConfig}){
   // পুরনো (তারিখ+এলোমেলো) পদ্ধতি ফলব্যাক হিসেবে ব্যবহার হয়, যাতে অফলাইনেও অর্ডার নেওয়া আটকে না যায়। ──
   const getNextOrderNumber=async()=>{
     if(!fsRef.current)return genNo();
-    try{
-      const counterRef=fsRef.current.doc("meta/orderCounter");
-      const next=await fsRef.current.runTransaction(async(tx)=>{
-        const doc=await tx.get(counterRef);
-        const current=(doc.exists&&doc.data().lastNumber)||0;
-        const n=current+1;
-        tx.set(counterRef,{lastNumber:n});
-        return n;
-      });
-      const d=new Date().toISOString().slice(0,10).replace(/-/g,"");
-      return`RF-${d}-${String(next).padStart(6,"0")}`;
-    }catch(e){
-      return genNo();
+    // ── একবার ব্যর্থ হলেই সাথে সাথে র‍্যান্ডম ফলব্যাকে না গিয়ে দুইবার আবার চেষ্টা করা হয় —
+    // বেশিরভাগ নেটওয়ার্ক সমস্যা কয়েক মুহূর্তের হয়, সাথে সাথেই হাল ছেড়ে দেওয়ার দরকার নেই ──
+    for(let attempt=0;attempt<3;attempt++){
+      try{
+        const counterRef=fsRef.current.doc("meta/orderCounter");
+        const next=await fsRef.current.runTransaction(async(tx)=>{
+          const doc=await tx.get(counterRef);
+          const current=(doc.exists&&doc.data().lastNumber)||0;
+          const n=current+1;
+          tx.set(counterRef,{lastNumber:n});
+          return n;
+        });
+        const d=new Date().toISOString().slice(0,10).replace(/-/g,"");
+        return`RF-${d}-${String(next).padStart(6,"0")}`;
+      }catch(e){
+        if(attempt<2)await new Promise(r=>setTimeout(r,800));
+      }
     }
+    return genNo();
   };
   const saveOrder=(o)=>{
     setDraft(o);
     navigate({page:"preview",orderNo:o.no,slip:0,from:"home"});
-    if(fsRef.current)fsRef.current.collection("orders").doc(o.no).set(o).catch(err=>alert("⚠️ অর্ডার সিঙ্ক করতে সমস্যা হয়েছে: "+err.message+" — ইন্টারনেট সংযোগ ফিরে আসলে এটি নিজে থেকেই সিঙ্ক হবে।"));
+    if(fsRef.current)fsRef.current.collection("orders").doc(o.no).set(o).catch(err=>{
+      queuePendingWrite({kind:"order",orderNo:o.no,data:o,merge:false});
+      alert("⚠️ অর্ডারটি এই মুহূর্তে সার্ভারে পাঠানো যায়নি (কারণ: "+err.message+")। এটি এই ডিভাইসে সংরক্ষিত থাকবে এবং উপরে একটা সতর্কতা দেখাবে যতক্ষণ না সফলভাবে সার্ভারে পৌঁছায় — ইন্টারনেট থাকা অবস্থায় এই ট্যাব/অ্যাপ খোলা রাখুন।");
+    });
   };
   // ── অর্ডার আপডেট — সুরক্ষিত পদ্ধতি ──
   // আগে পুরো ডকুমেন্ট মুছে নতুন করে লেখা হতো। ফলে কোনো স্ক্রিন যদি অর্ডারের একটু পুরনো কপি
@@ -1822,7 +1871,10 @@ function App({firebaseConfig,onResetConfig}){
     Object.keys(safe).forEach(k=>{if(safe[k]===undefined)delete safe[k]}); // Firestore undefined নেয় না
     setOrders(prev=>prev.map(o=>o.no===safe.no?safe:o));
     if(draft&&draft.no===safe.no)setDraft(safe);
-    if(fsRef.current)fsRef.current.collection("orders").doc(safe.no).set(safe,{merge:true}).catch(err=>alert("⚠️ পরিবর্তন সিঙ্ক করতে সমস্যা হয়েছে: "+err.message));
+    if(fsRef.current)fsRef.current.collection("orders").doc(safe.no).set(safe,{merge:true}).catch(err=>{
+      queuePendingWrite({kind:"order",orderNo:safe.no,data:safe,merge:true});
+      alert("⚠️ পরিবর্তনটি এই মুহূর্তে সার্ভারে পাঠানো যায়নি — উপরে সতর্কতা দেখাবে, ইন্টারনেট ফিরলে ট্যাব খোলা থাকলে নিজে থেকেই আবার চেষ্টা হবে।");
+    });
   };
   // ── এই দুটো atomic — টাকার হিসাব ও ডেলিভারি স্ট্যাটাসের মতো জরুরি তথ্যের জন্য।
   // পুরো অর্ডার নতুন করে না লিখে শুধু নির্দিষ্ট অংশটাই সার্ভারে পাঠানো হয়, তাই অন্য কোনো
@@ -1939,14 +1991,16 @@ function App({firebaseConfig,onResetConfig}){
   if(page==="expense")return<ExpensePage expenses={expenses} onSave={saveExpense} onBack={goBack}/>;
   if(page==="payroll")return<PayrollPage workers={workers} saveWorker={saveWorker} deleteWorker={deleteWorker} payrollWeeks={payrollWeeks} savePayrollWeek={savePayrollWeek} updateAttendance={updateAttendance} addAdvanceEntry={addAdvanceEntry} removeAdvanceEntry={removeAdvanceEntry} onBack={goBack}/>;
   if(page==="plreport")return<PLReportPage orders={orders} expenses={expenses} workers={workers} payrollWeeks={payrollWeeks} woodLots={woodLots} woodSettings={woodSettings} laborSettings={laborSettings} onBack={goBack}/>;
-  return<Home orders={orders} expenses={expenses} woodLots={woodLots} db={db} woodSettings={woodSettings} laborSettings={laborSettings} workers={workers} payrollWeeks={payrollWeeks} alertSettings={alertSettings} saveAlertSettings={saveAlertSettings} backupFailed={backupFailed} lastSyncAt={lastSyncAt} onManualRefresh={manualRefresh} onUpdateOrder={updateOrder} onNew={()=>navigate({page:"form"})} onHist={()=>navigate({page:"history"})} onManage={()=>navigate({page:"manage"})} onExpense={()=>navigate({page:"expense"})} onWoodStock={()=>navigate({page:"woodstock",view:"list"})} onPayroll={()=>navigate({page:"payroll"})} onPLReport={()=>navigate({page:"plreport"})} onView={o=>navigate({page:"preview",orderNo:o.no,slip:0})} onViewDelivery={o=>navigate({page:"preview",orderNo:o.no,slip:5})} online={online} connError={connError} onResetConfig={onResetConfig} folderStatus={folderStatus} connectFolder={connectFolder} highlightNo={highlightNo} onBackupData={backupData}/>;
+  return<Home orders={orders} expenses={expenses} woodLots={woodLots} db={db} woodSettings={woodSettings} laborSettings={laborSettings} workers={workers} payrollWeeks={payrollWeeks} alertSettings={alertSettings} saveAlertSettings={saveAlertSettings} backupFailed={backupFailed} lastSyncAt={lastSyncAt} onManualRefresh={manualRefresh} pendingWrites={pendingWrites} onRetryPending={retryPendingWrites} onCheckServerSync={checkServerSync} onUpdateOrder={updateOrder} onNew={()=>navigate({page:"form"})} onHist={()=>navigate({page:"history"})} onManage={()=>navigate({page:"manage"})} onExpense={()=>navigate({page:"expense"})} onWoodStock={()=>navigate({page:"woodstock",view:"list"})} onPayroll={()=>navigate({page:"payroll"})} onPLReport={()=>navigate({page:"plreport"})} onView={o=>navigate({page:"preview",orderNo:o.no,slip:0})} onViewDelivery={o=>navigate({page:"preview",orderNo:o.no,slip:5})} online={online} connError={connError} onResetConfig={onResetConfig} folderStatus={folderStatus} connectFolder={connectFolder} highlightNo={highlightNo} onBackupData={backupData}/>;
 }
 
 /* ── HOME / DASHBOARD ── */
-function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,payrollWeeks,alertSettings,saveAlertSettings,backupFailed,lastSyncAt,onManualRefresh,onUpdateOrder,onNew,onHist,onManage,onExpense,onWoodStock,onPayroll,onPLReport,onView,onViewDelivery,online,connError,onResetConfig,folderStatus,connectFolder,highlightNo,onBackupData}){
+function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,payrollWeeks,alertSettings,saveAlertSettings,backupFailed,lastSyncAt,onManualRefresh,pendingWrites,onRetryPending,onCheckServerSync,onUpdateOrder,onNew,onHist,onManage,onExpense,onWoodStock,onPayroll,onPLReport,onView,onViewDelivery,online,connError,onResetConfig,folderStatus,connectFolder,highlightNo,onBackupData}){
   const now=new Date();
   const[showAllRunning,setShowAllRunning]=useState(false);
   const[showSystemZone,setShowSystemZone]=useState(false);
+  const[syncCheck,setSyncCheck]=useState(null); // null=না চালানো, "loading", অথবা ফলাফল
+  const[resending,setResending]=useState({});
   const stats=useMemo(()=>{
     // Running orders (not fully paid = not delivered typically, but we track by payment completion as proxy + delivery date)
     // ── একটা অর্ডারের সব পিসের সব বিভাগ ১০০% শেষ কিনা — এটা "চলমান" থেকে বাদ দিতে
@@ -2449,6 +2503,11 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
         </div>
       })()}
 
+      {pendingWrites&&pendingWrites.length>0&&<div className="no-print" style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,background:"#fef2f2",border:"1.5px solid #fca5a5",borderRadius:9,padding:"9px 11px",marginBottom:10}}>
+        <span style={{fontSize:10,color:"#991b1b",fontWeight:600}}>🔴 {pendingWrites.length}টা পরিবর্তন এখনো সার্ভারে পাঠানো যায়নি — এই ডিভাইসেই আটকে আছে। ইন্টারনেট চালু থাকা অবস্থায় এই ট্যাব খোলা রাখুন।</span>
+        <button onClick={()=>onRetryPending&&onRetryPending()} style={{background:"white",color:"#991b1b",border:"1px solid #fca5a5",borderRadius:7,padding:"6px 11px",minHeight:34,fontSize:10,fontWeight:700,flexShrink:0}}>🔄 আবার চেষ্টা করুন</button>
+      </div>}
+
       {/* স্তরে লাফ দেওয়ার বার — লম্বা স্ক্রলে নিচের অংশ যাতে হারিয়ে না যায় */}
       {(()=>{
         // ── তথ্য কতক্ষণ আগে সিঙ্ক হয়েছে — মোবাইল ও পিসিতে ভিন্ন সংখ্যা দেখা গেলে
@@ -2850,6 +2909,34 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
         <div style={{fontSize:12,fontWeight:700,color:backupFailed?"#991b1b":"#1d4ed8",marginBottom:6}}>{backupFailed?"🔴 আজকের স্বয়ংক্রিয় ব্যাকআপ ব্যর্থ হয়েছে":"✅ স্বয়ংক্রিয় দৈনিক ব্যাকআপ চালু আছে"}</div>
         <div style={{fontSize:10,color:"#555",marginBottom:8,lineHeight:1.5}}>প্রতিদিন একবার আপনার সব তথ্যের একটা কপি নিজে থেকেই ক্লাউডে জমা হয়ে যায় — কিছু করার দরকার নেই। কম্পিউটারে ছবির ফোল্ডার সংযুক্ত থাকলে সেখানেও একটা আসল ফাইল সেভ হয়। চাইলে এখনই একটা কপি হাতে রাখতে নিচের বাটনে চাপুন।</div>
         <button onClick={onBackupData} style={{width:"100%",background:"#1d4ed8",color:"white",border:"none",borderRadius:8,padding:"10px",fontSize:12,fontWeight:700}}>💾 এখনই একটা ব্যাকআপ ডাউনলোড করুন</button>
+
+        <div style={{marginTop:12,background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 14px"}}>
+          <div style={{fontSize:12,fontWeight:700,color:"#444",marginBottom:3}}>🔍 সার্ভার-সিঙ্ক পরীক্ষা</div>
+          <div style={{fontSize:9,color:"#999",marginBottom:9,lineHeight:1.5}}>এই ডিভাইসে যা দেখাচ্ছে তার সাথে আসল সার্ভারের তথ্য সরাসরি মিলিয়ে দেখে — কোনো অর্ডার শুধু এই ডিভাইসেই আটকে আছে কিনা (কখনো সার্ভারে না পৌঁছানো) তা ধরার জন্য। দুই ডিভাইসে ভিন্ন সংখ্যা দেখলে এটা চালান।</div>
+          <button onClick={async()=>{
+            setSyncCheck("loading");
+            const r=await onCheckServerSync();
+            setSyncCheck(r);
+          }} disabled={syncCheck==="loading"} style={{width:"100%",background:syncCheck==="loading"?"#ccc":"#7c2d12",color:"white",border:"none",borderRadius:8,padding:"10px",fontSize:12,fontWeight:700}}>{syncCheck==="loading"?"যাচাই করা হচ্ছে...":"যাচাই করুন"}</button>
+          {syncCheck&&syncCheck!=="loading"&&syncCheck.error&&<div style={{marginTop:8,fontSize:10,color:RED}}>⚠️ সার্ভারে পৌঁছানো যায়নি: {syncCheck.error}</div>}
+          {syncCheck&&syncCheck!=="loading"&&!syncCheck.error&&<div style={{marginTop:9}}>
+            <div style={{fontSize:10,color:"#555",marginBottom:6}}>সার্ভারে আছে: <strong>{syncCheck.serverCount}</strong>টি · এই ডিভাইসে দেখাচ্ছে: <strong>{syncCheck.localCount}</strong>টি</div>
+            {syncCheck.localOnly.length===0?
+              <div style={{background:"#f0fdf4",color:"#166534",borderRadius:7,padding:"8px 10px",fontSize:10,fontWeight:600}}>✅ সব ঠিক আছে — এই ডিভাইসের সবকিছুই সার্ভারে পৌঁছেছে</div>
+              :<div>
+                <div style={{background:"#fef2f2",color:"#991b1b",borderRadius:7,padding:"8px 10px",fontSize:10,fontWeight:700,marginBottom:7}}>⚠️ {syncCheck.localOnly.length}টা অর্ডার শুধু এই ডিভাইসেই আছে, সার্ভারে নেই:</div>
+                {syncCheck.localOnly.map(o=><div key={o.no} style={{background:"#fff7ed",borderRadius:7,padding:"7px 9px",marginBottom:5,fontSize:10}}>
+                  <div style={{fontWeight:700}}>{o.cust.name} — {o.no}</div>
+                  <div style={{color:"#888",fontSize:9,marginTop:1}}>{money(o.cust.total)} · {o.cust.date}</div>
+                  <button onClick={async()=>{
+                    setResending(prev=>({...prev,[o.no]:true}));
+                    onUpdateOrder(o);
+                    setTimeout(async()=>{const r=await onCheckServerSync();setSyncCheck(r);setResending(prev=>({...prev,[o.no]:false}))},1500);
+                  }} disabled={resending[o.no]} style={{marginTop:5,background:"#7c2d12",color:"white",border:"none",borderRadius:6,padding:"6px 10px",fontSize:9,fontWeight:700}}>{resending[o.no]?"পাঠানো হচ্ছে...":"📤 আবার সার্ভারে পাঠান"}</button>
+                </div>)}
+              </div>}
+          </div>}
+        </div>
       </div></>}
     </div>
   </div>
