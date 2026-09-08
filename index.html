@@ -85,7 +85,7 @@ function compressImage(file,maxDim=1200,quality=0.82){
 /* ── FULL-RESOLUTION LOCAL FOLDER STORAGE (desktop Chrome/Edge/Brave only) ──
    Original, uncompressed images are saved as real files in a folder you choose
    on your computer. Only a small compressed thumbnail syncs to the cloud/mobile. */
-const BUILD_TAG="4.38";
+const BUILD_TAG="4.39";
 const FS_SUPPORTED=typeof window!=="undefined"&&"showDirectoryPicker" in window;
 function idbOpen(){
   return new Promise((resolve,reject)=>{
@@ -2073,11 +2073,11 @@ function App({firebaseConfig,onResetConfig}){
   if(page==="expense")return<ExpensePage expenses={expenses} onSave={saveExpense} onBack={goBack}/>;
   if(page==="payroll")return<PayrollPage workers={workers} saveWorker={saveWorker} deleteWorker={deleteWorker} payrollWeeks={payrollWeeks} savePayrollWeek={savePayrollWeek} updateAttendance={updateAttendance} addAdvanceEntry={addAdvanceEntry} removeAdvanceEntry={removeAdvanceEntry} onBack={goBack}/>;
   if(page==="plreport")return<PLReportPage orders={orders} expenses={expenses} workers={workers} payrollWeeks={payrollWeeks} woodLots={woodLots} woodSettings={woodSettings} laborSettings={laborSettings} onBack={goBack}/>;
-  return<Home orders={orders} expenses={expenses} woodLots={woodLots} db={db} woodSettings={woodSettings} laborSettings={laborSettings} workers={workers} payrollWeeks={payrollWeeks} alertSettings={alertSettings} saveAlertSettings={saveAlertSettings} backupFailed={backupFailed} lastSyncAt={lastSyncAt} onManualRefresh={manualRefresh} pendingWrites={pendingWrites} onRetryPending={retryPendingWrites} onCheckServerSync={checkServerSync} onAcceptServerVersion={acceptServerVersion} onUpdateOrder={updateOrder} onNew={()=>navigate({page:"form"})} onHist={()=>navigate({page:"history"})} onManage={()=>navigate({page:"manage"})} onExpense={()=>navigate({page:"expense"})} onWoodStock={()=>navigate({page:"woodstock",view:"list"})} onPayroll={()=>navigate({page:"payroll"})} onPLReport={()=>navigate({page:"plreport"})} onView={o=>navigate({page:"preview",orderNo:o.no,slip:0})} onViewDelivery={o=>navigate({page:"preview",orderNo:o.no,slip:5})} online={online} connError={connError} onResetConfig={onResetConfig} folderStatus={folderStatus} connectFolder={connectFolder} highlightNo={highlightNo} onBackupData={backupData}/>;
+  return<Home orders={orders} expenses={expenses} woodLots={woodLots} db={db} woodSettings={woodSettings} laborSettings={laborSettings} workers={workers} payrollWeeks={payrollWeeks} alertSettings={alertSettings} saveAlertSettings={saveAlertSettings} backupFailed={backupFailed} lastSyncAt={lastSyncAt} onManualRefresh={manualRefresh} pendingWrites={pendingWrites} onRetryPending={retryPendingWrites} onCheckServerSync={checkServerSync} onAcceptServerVersion={acceptServerVersion} onUpdateOrder={updateOrder} onNew={()=>navigate({page:"form"})} onHist={()=>navigate({page:"history"})} onManage={()=>navigate({page:"manage"})} onExpense={()=>navigate({page:"expense"})} onWoodStock={()=>navigate({page:"woodstock",view:"list"})} onPayroll={()=>navigate({page:"payroll"})} onPLReport={()=>navigate({page:"plreport"})} onView={o=>navigate({page:"preview",orderNo:o.no,slip:0})} onViewDelivery={o=>navigate({page:"preview",orderNo:o.no,slip:5})} online={online} connError={connError} onResetConfig={onResetConfig} folderStatus={folderStatus} connectFolder={connectFolder} highlightNo={highlightNo} onBackupData={backupData} projectId={firebaseConfig?.projectId||""}/>;
 }
 
 /* ── HOME / DASHBOARD ── */
-function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,payrollWeeks,alertSettings,saveAlertSettings,backupFailed,lastSyncAt,onManualRefresh,pendingWrites,onRetryPending,onCheckServerSync,onAcceptServerVersion,onUpdateOrder,onNew,onHist,onManage,onExpense,onWoodStock,onPayroll,onPLReport,onView,onViewDelivery,online,connError,onResetConfig,folderStatus,connectFolder,highlightNo,onBackupData}){
+function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,payrollWeeks,alertSettings,saveAlertSettings,backupFailed,lastSyncAt,onManualRefresh,pendingWrites,onRetryPending,onCheckServerSync,onAcceptServerVersion,onUpdateOrder,onNew,onHist,onManage,onExpense,onWoodStock,onPayroll,onPLReport,onView,onViewDelivery,online,connError,onResetConfig,folderStatus,connectFolder,highlightNo,onBackupData,projectId}){
   const now=new Date();
   const[showAllRunning,setShowAllRunning]=useState(false);
   const[showSystemZone,setShowSystemZone]=useState(false);
@@ -2585,7 +2585,7 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
   },[orders,expenses,db,woodLots,woodSettings,laborSettings,workers,payrollWeeks,alertSettings]);
 
   return<div style={{minHeight:"100vh",background:`linear-gradient(150deg,${RED} 0%,#8B0020 100%)`,position:"relative"}}>
-    <div style={{position:"absolute",top:8,right:10,fontSize:9,color:"rgba(255,255,255,0.55)",fontWeight:600,letterSpacing:0.3,zIndex:5}}>v{BUILD_TAG}</div>
+    <div style={{position:"absolute",top:8,right:10,fontSize:9,color:"rgba(255,255,255,0.55)",fontWeight:600,letterSpacing:0.3,zIndex:5,textAlign:"right"}}>v{BUILD_TAG}<br/>{projectId}</div>
     <div style={{padding:"24px 18px 18px",textAlign:"center",color:"white"}}>
       <div style={{width:52,height:52,background:"white",borderRadius:13,display:"inline-flex",alignItems:"center",justifyContent:"center",marginBottom:8,boxShadow:"0 4px 18px rgba(0,0,0,.3)"}}><span style={{color:RED,fontSize:26,fontWeight:800,fontFamily:"Georgia,serif"}}>R</span></div>
       <div style={{fontSize:20,fontWeight:800}}>রূপালী ফার্নিচার</div>
@@ -3018,9 +3018,15 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
         <div style={{fontSize:10,color:"#555",marginBottom:8,lineHeight:1.5}}>প্রতিদিন একবার আপনার সব তথ্যের একটা কপি নিজে থেকেই ক্লাউডে জমা হয়ে যায় — কিছু করার দরকার নেই। কম্পিউটারে ছবির ফোল্ডার সংযুক্ত থাকলে সেখানেও একটা আসল ফাইল সেভ হয়। চাইলে এখনই একটা কপি হাতে রাখতে নিচের বাটনে চাপুন।</div>
         <button onClick={onBackupData} style={{width:"100%",background:"#1d4ed8",color:"white",border:"none",borderRadius:8,padding:"10px",fontSize:12,fontWeight:700}}>💾 এখনই একটা ব্যাকআপ ডাউনলোড করুন</button>
 
+        <div style={{marginTop:12,background:"#fffbeb",border:"1px solid #fde68a",borderRadius:10,padding:"12px 14px"}}>
+          <div style={{fontSize:12,fontWeight:700,color:"#92400e",marginBottom:3}}>🔑 এই ডিভাইসের Firebase প্রজেক্ট</div>
+          <div style={{fontSize:9,color:"#78350f",marginBottom:7,lineHeight:1.5}}>প্রতিটা ডিভাইসে (ফোন/কম্পিউটার) এই কোড আলাদাভাবে একবার বসাতে হয়েছিল। দুই ডিভাইসে এই লেখাটা ভিন্ন হলে তারা আসলে দুইটা ভিন্ন ডেটাবেসে কথা বলছে — তখন নিচের "সার্ভার-সিঙ্ক পরীক্ষা"ও প্রতিটা ডিভাইসে আলাদাভাবে "✅ ঠিক আছে" দেখাবে, কারণ প্রতিটা নিজের ডেটাবেসের সাথে ঠিকই মিলছে, শুধু দুটো ডিভাইস একে অপরের সাথে মিলছে না। দুই ডিভাইসে পাশাপাশি রেখে এই লেখাটা মিলিয়ে দেখুন।</div>
+          <div style={{fontFamily:"monospace",fontSize:12,fontWeight:700,color:"#92400e",background:"white",borderRadius:7,padding:"7px 10px",wordBreak:"break-all"}}>{projectId||"(পাওয়া যায়নি)"}</div>
+        </div>
+
         <div style={{marginTop:12,background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 14px"}}>
           <div style={{fontSize:12,fontWeight:700,color:"#444",marginBottom:3}}>🔍 সার্ভার-সিঙ্ক পরীক্ষা</div>
-          <div style={{fontSize:9,color:"#999",marginBottom:9,lineHeight:1.5}}>এই ডিভাইসে যা দেখাচ্ছে তার সাথে আসল সার্ভারের তথ্য সরাসরি মিলিয়ে দেখে — কোনো অর্ডার শুধু এই ডিভাইসেই আটকে আছে (সার্ভারে পৌঁছায়নি), বা কোনো অর্ডারের তথ্য এই ডিভাইসে পুরনো/ভিন্ন (অন্য ডিভাইসে পরিবর্তন হয়েছে কিন্তু এখানে এখনো আসেনি) কিনা তা ধরার জন্য। দুই ডিভাইসে ভিন্ন সংখ্যা দেখলে এটা চালান।</div>
+          <div style={{fontSize:9,color:"#999",marginBottom:9,lineHeight:1.5}}>এই ডিভাইসে যা দেখাচ্ছে তার সাথে আসল সার্ভারের তথ্য সরাসরি মিলিয়ে দেখে — কোনো অর্ডার শুধু এই ডিভাইসেই আটকে আছে (সার্ভারে পৌঁছায়নি), বা কোনো অর্ডারের তথ্য এই ডিভাইসে পুরনো/ভিন্ন (অন্য ডিভাইসে পরিবর্তন হয়েছে কিন্তু এখানে এখনো আসেনি) কিনা তা ধরার জন্য। দুই ডিভাইসে ভিন্ন সংখ্যা দেখলে এটা চালান। (উপরের প্রজেক্ট আইডি দুই ডিভাইসে না মিললে এই টুল সাহায্য করবে না — সেক্ষেত্রে আগে প্রজেক্ট আইডি মেলাতে হবে)</div>
           <button onClick={async()=>{
             setSyncCheck("loading");
             const r=await onCheckServerSync();
