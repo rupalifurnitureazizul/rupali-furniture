@@ -85,7 +85,7 @@ function compressImage(file,maxDim=1200,quality=0.82){
 /* ── FULL-RESOLUTION LOCAL FOLDER STORAGE (desktop Chrome/Edge/Brave only) ──
    Original, uncompressed images are saved as real files in a folder you choose
    on your computer. Only a small compressed thumbnail syncs to the cloud/mobile. */
-const BUILD_TAG="4.30";
+const BUILD_TAG="4.36";
 const FS_SUPPORTED=typeof window!=="undefined"&&"showDirectoryPicker" in window;
 function idbOpen(){
   return new Promise((resolve,reject)=>{
@@ -1102,9 +1102,13 @@ function S6({order,onPrint,onUpdateOrder,onSetDelivered,onPhotoChange,onRemovePh
   const due=Math.max(0,(parseFloat(cust.total)||0)-totalPaid);
   const captureRef=useRef();
   const photoInput=useRef();
+  // ── ডেলিভারি সম্পন্নর তারিখ — ডিফল্টে আজকের তারিখ (আগের মতোই), চাইলে টিক দিয়ে অতীতের
+  // কোনো তারিখও বসানো যায় (যেমন মাল কয়েকদিন আগে পৌঁছেছে, সিস্টেমে এন্ট্রি এখন দেওয়া হচ্ছে) ──
+  const[customDeliveredDate,setCustomDeliveredDate]=useState(false);
+  const[deliveredDateVal,setDeliveredDateVal]=useState(todayStr());
   const markDelivered=()=>{
     if(window.confirm("এই অর্ডারটি ডেলিভারি সম্পন্ন হয়েছে বলে চিহ্নিত করতে চান? এটি 'চলমান অর্ডার' লিস্ট থেকে সরে 'ডেলিভারড' তালিকায় যাবে।")){
-      onSetDelivered(order.no,true,todayStr());
+      onSetDelivered(order.no,true,customDeliveredDate?(deliveredDateVal||todayStr()):todayStr());
     }
   };
   const grid=computePhotoGrid(images.length);
@@ -1114,7 +1118,13 @@ function S6({order,onPrint,onUpdateOrder,onSetDelivered,onPhotoChange,onRemovePh
       {printLocked?<span title={`ফুল পেমেন্ট ছাড়া প্রিন্ট করা যাবে না — বাকি ${money(due)}`} style={{display:"flex",alignItems:"center",gap:4,fontSize:11,color:"#aaa",fontWeight:600,cursor:"not-allowed"}}>🔒 প্রিন্ট (বাকি {money(due)})</span>:<PrintBtn onPrint={()=>onPrint("s6")}/>}
     </div>
     {printLocked&&<div className="no-print" style={{padding:"7px 14px",background:"#fff7ed",borderBottom:"1px solid #fed7aa",fontSize:10,color:"#9a3412"}}>⚠️ ফুল পেমেন্ট হওয়ার আগে ডেলিভারি রিসিপ্ট প্রিন্ট করা যাবে না — বাকি আছে {money(due)}। ছবি যোগ করা ও দেখা এখনই করতে পারবেন।</div>}
-    {!order.delivered&&<div className="no-print" style={{padding:"8px 14px",background:"#f0fdfa",borderBottom:"1px solid #eee"}}><button onClick={markDelivered} style={{width:"100%",background:"#0f766e",color:"white",border:"none",borderRadius:8,padding:"9px",fontSize:12,fontWeight:700}}>✅ ডেলিভারি সম্পন্ন হয়েছে — চিহ্নিত করুন</button></div>}
+    {!order.delivered&&<div className="no-print" style={{padding:"8px 14px",background:"#f0fdfa",borderBottom:"1px solid #eee"}}>
+      <label style={{display:"flex",alignItems:"center",gap:8,fontSize:11,fontWeight:600,color:"#0f766e",marginBottom:8,cursor:"pointer"}}>
+        <input type="checkbox" checked={customDeliveredDate} onChange={e=>setCustomDeliveredDate(e.target.checked)}/>📅 তারিখ পরিবর্তন করুন
+      </label>
+      {customDeliveredDate&&<div style={{marginBottom:8}}><DateInput value={deliveredDateVal} onChange={setDeliveredDateVal} accent="#0f766e"/></div>}
+      <button onClick={markDelivered} style={{width:"100%",background:"#0f766e",color:"white",border:"none",borderRadius:8,padding:"9px",fontSize:12,fontWeight:700}}>✅ ডেলিভারি সম্পন্ন হয়েছে — চিহ্নিত করুন</button>
+    </div>}
     {order.delivered&&<div className="no-print" style={{padding:"8px 14px",background:"#dcfce7",textAlign:"center",fontSize:11,fontWeight:700,color:"#166534"}}>✅ ডেলিভারি সম্পন্ন হয়েছে ({fmtDate(order.deliveredAt)})</div>}
     <div ref={captureRef}>
     <Hdr title="ডেলিভারি রশিদ" sub="Delivery Receipt" no={no} bg="#0f766e"/>
@@ -1461,6 +1471,9 @@ function App({firebaseConfig,onResetConfig}){
   const[backupFailed,setBackupFailed]=useState(false);
   const[lastSyncAt,setLastSyncAt]=useState(null);
   const refreshFromServerRef=useRef(null);
+  // ── প্রতি ২০ সেকেন্ডের অটো-রিফ্রেশ পরপর কয়েকবার ব্যর্থ হলে গুনে রাখার জন্য —
+  // নিচে refreshFromServer-এ ব্যবহার হয় ──
+  const syncFailCountRef=useRef(0);
   // ── লেখা সার্ভারে না পৌঁছালে চুপচাপ হারিয়ে যাওয়া বন্ধ করার জন্য ──
   // আগে অর্ডার/আপডেট সার্ভারে পাঠাতে ব্যর্থ হলে শুধু একটা অ্যালার্ট দেখাত যা বন্ধ করে
   // ভুলে যাওয়া সহজ ছিল, আর "নিজে থেকেই সিঙ্ক হবে" কথাটা সত্যি ছিল না — কোনো আসল
@@ -1495,10 +1508,26 @@ function App({firebaseConfig,onResetConfig}){
     if(!fs)return{error:"সংযোগ নেই"};
     try{
       const snap=await fs.collection("orders").get({source:"server"});
-      const serverNos=new Set(snap.docs.map(d=>d.id));
+      const serverDocs={};
+      snap.docs.forEach(d=>{serverDocs[d.id]=d.data()});
+      const serverNos=new Set(Object.keys(serverDocs));
       const localOnly=orders.filter(o=>!serverNos.has(o.no));
-      return{localOnly,serverCount:serverNos.size,localCount:orders.length};
+      // ── শুধু "সার্ভারে নেই" তা না, "সার্ভারে আছে কিন্তু এই ডিভাইসের কপির সাথে মিলছে না"
+      // (অন্য ডিভাইসে পরিবর্তন হয়েছে কিন্তু এখানে এখনো পৌঁছায়নি) — এটাও ধরার জন্য ──
+      const mismatched=orders.filter(o=>{
+        const sv=serverDocs[o.no];
+        if(!sv)return false;
+        return JSON.stringify(sv)!==JSON.stringify(o);
+      });
+      return{localOnly,mismatched,serverDocs,serverCount:serverNos.size,localCount:orders.length};
     }catch(e){return{error:e.message}};
+  };
+  // ── সিঙ্ক-পরীক্ষায় "মিলছে না" চিহ্নিত কোনো অর্ডারে সার্ভারের কপিটাই সঠিক ধরে নিয়ে
+  // এই ডিভাইসে সরাসরি বসিয়ে দেওয়ার জন্য ──
+  const acceptServerVersion=(orderNo,serverData)=>{
+    if(!serverData)return;
+    setOrders(prev=>prev.map(o=>o.no===orderNo?serverData:o));
+    if(draft&&draft.no===orderNo)setDraft(serverData);
   };
   const manualRefresh=()=>refreshFromServerRef.current?refreshFromServerRef.current(true):Promise.resolve();
   const[rackSplits,setRackSplits]=useState([]);
@@ -1653,6 +1682,7 @@ function App({firebaseConfig,onResetConfig}){
         const list=snap.docs.map(d=>d.data()).sort((a,b)=>new Date(b.at||b.cust?.date||0)-new Date(a.at||a.cust?.date||0));
         setOrders(list);
         setLastSyncAt(new Date());
+        syncFailCountRef.current=0; // লাইভ সংযোগ থেকে ডেটা আসছে মানে সিঙ্ক ঠিক আছে — পুরনো ব্যর্থতার গণনা মুছে দিন
       },err=>{clearTimeout(timer);setConnError(err.message)});
 
       const unsubExpenses=firestore.collection("expenses").onSnapshot(snap=>{
@@ -1802,7 +1832,23 @@ function App({firebaseConfig,onResetConfig}){
         fs.doc("meta/rackBands").get({source:"server"}).then(s=>{setRackBands(s.exists?(s.data().list||[]):[])}),
         fs.doc("meta/rackSplits").get({source:"server"}).then(s=>{setRackSplits(s.exists?(s.data().list||[]):[])}),
       ];
-      return Promise.allSettled(jobs).then(()=>{setLastSyncAt(new Date());setConnError(null)});
+      // ── আগে সবসময় "সিঙ্ক সফল" ধরে নেওয়া হতো, orders আনতে ব্যর্থ হলেও — Promise.allSettled
+      // কখনো reject করে না, তাই নিচের .then() ব্যর্থতা সত্ত্বেও চলত এবং "✅ তথ্য তাজা" দেখাত,
+      // কোনো সতর্কতা ছাড়াই। এটাই দুই ডিভাইসে ভিন্ন সংখ্যা দেখানোর মূল কারণ ছিল — একটা ডিভাইস
+      // চুপচাপ পুরনো তথ্য নিয়ে "তাজা" দাবি করে যাচ্ছিল। এখন সবচেয়ে জরুরি orders কলটা আলাদাভাবে
+      // পরীক্ষা করা হয়: ব্যর্থ হলে lastSyncAt আপডেট হয় না (তাই বিদ্যমান "তথ্য পুরনো" সতর্কতা ঠিক
+      // সময়ে দেখাবে), আর পরপর ৩ বার (~১ মিনিট) ব্যর্থ হলে স্পষ্ট সংযোগ-সতর্কতা দেখানো হয় ──
+      return Promise.allSettled(jobs).then((results)=>{
+        const ordersOk=results[0]&&results[0].status==="fulfilled";
+        if(ordersOk){
+          syncFailCountRef.current=0;
+          setLastSyncAt(new Date());
+          setConnError(null);
+        }else{
+          syncFailCountRef.current+=1;
+          if(syncFailCountRef.current>=3)setConnError("বারবার সার্ভারের সাথে সিঙ্ক করা যাচ্ছে না — ইন্টারনেট সংযোগ পরীক্ষা করুন বা পেজ রিলোড করুন");
+        }
+      });
     };
     refreshFromServerRef.current=refreshFromServer;
     const onWake=()=>{refreshFromServer();retryPendingWrites()};
@@ -1985,20 +2031,40 @@ function App({firebaseConfig,onResetConfig}){
   }
   if(page==="preview")return<Preview order={viewed||draft} onBack={goBack} slip={slip} setSlip={setSlip} onUpdate={updateOrder} onAddPayment={addOrderPayment} onSetDelivered={setOrderDelivered} onDelete={deleteOrderPermanently} db={db} saveDb={saveDb} carpenters={carpenters} saveCarpenters={saveCarpenters} galleries={galleries} saveGalleryEntry={saveGalleryEntry} woodSettings={woodSettingsWithBands} laborSettings={laborSettings} workers={workers} allOrders={orders} rackSplits={rackSplits}/>;
   if(page==="form")return<Form onSave={saveOrder} onBack={goBack} db={db} saveDb={saveDb} galleries={galleries} woodSettings={woodSettings} laborSettings={laborSettings} orders={orders} getNextOrderNumber={getNextOrderNumber}/>;
-  if(page==="history")return<Hist orders={orders} db={db} onBack={goBack} onView={o=>navigate({page:"preview",orderNo:o.no,slip:0})} highlightNo={highlightNo}/>;
+  if(page==="history")return<Hist orders={orders} db={db} onBack={goBack} onView={o=>navigate({page:"preview",orderNo:o.no,slip:0})} highlightNo={highlightNo} q={curScreen.q||""} setQ={q=>replaceTop({...curScreen,q})} statusFilter={curScreen.statusFilter||"all"} setStatusFilter={statusFilter=>replaceTop({...curScreen,statusFilter})} catFilter={curScreen.catFilter||"all"} setCatFilter={catFilter=>replaceTop({...curScreen,catFilter})} sortMode={curScreen.sortMode||"recent"} setSortMode={sortMode=>replaceTop({...curScreen,sortMode})}/>;
   if(page==="manage")return<ManageDB db={db} saveDb={saveDb} galleries={galleries} saveGalleryEntry={saveGalleryEntry} onBack={goBack}/>;
   if(page==="woodstock")return<WoodStockPage woodLots={woodLots} saveWoodLots={saveWoodLots} addLotPayment={addLotPayment} woodSettings={woodSettingsWithBands} saveWoodSettings={saveWoodSettings} laborSettings={laborSettings} saveLaborSettings={saveLaborSettings} rackSplits={rackSplits} addRackSplit={addRackSplit} rackBands={rackBands} addRackBand={addRackBand} removeRackBand={removeRackBand} payrollWeeks={payrollWeeks} workers={workers} orders={orders} expenses={expenses} onBack={goBack} view={curScreen.view||"list"} lotId={curScreen.lotId||null} onOpenList={()=>navigate({page:"woodstock",view:"list"})} onOpenDetail={lotId=>navigate({page:"woodstock",view:"detail",lotId})} onOpenNew={()=>navigate({page:"woodstock",view:"new"})} onOpenRates={()=>navigate({page:"woodstock",view:"rates"})} onOpenUsage={()=>navigate({page:"woodstock",view:"usage"})} highlightNo={highlightNo}/>;
   if(page==="expense")return<ExpensePage expenses={expenses} onSave={saveExpense} onBack={goBack}/>;
   if(page==="payroll")return<PayrollPage workers={workers} saveWorker={saveWorker} deleteWorker={deleteWorker} payrollWeeks={payrollWeeks} savePayrollWeek={savePayrollWeek} updateAttendance={updateAttendance} addAdvanceEntry={addAdvanceEntry} removeAdvanceEntry={removeAdvanceEntry} onBack={goBack}/>;
   if(page==="plreport")return<PLReportPage orders={orders} expenses={expenses} workers={workers} payrollWeeks={payrollWeeks} woodLots={woodLots} woodSettings={woodSettings} laborSettings={laborSettings} onBack={goBack}/>;
-  return<Home orders={orders} expenses={expenses} woodLots={woodLots} db={db} woodSettings={woodSettings} laborSettings={laborSettings} workers={workers} payrollWeeks={payrollWeeks} alertSettings={alertSettings} saveAlertSettings={saveAlertSettings} backupFailed={backupFailed} lastSyncAt={lastSyncAt} onManualRefresh={manualRefresh} pendingWrites={pendingWrites} onRetryPending={retryPendingWrites} onCheckServerSync={checkServerSync} onUpdateOrder={updateOrder} onNew={()=>navigate({page:"form"})} onHist={()=>navigate({page:"history"})} onManage={()=>navigate({page:"manage"})} onExpense={()=>navigate({page:"expense"})} onWoodStock={()=>navigate({page:"woodstock",view:"list"})} onPayroll={()=>navigate({page:"payroll"})} onPLReport={()=>navigate({page:"plreport"})} onView={o=>navigate({page:"preview",orderNo:o.no,slip:0})} onViewDelivery={o=>navigate({page:"preview",orderNo:o.no,slip:5})} online={online} connError={connError} onResetConfig={onResetConfig} folderStatus={folderStatus} connectFolder={connectFolder} highlightNo={highlightNo} onBackupData={backupData}/>;
+  return<Home orders={orders} expenses={expenses} woodLots={woodLots} db={db} woodSettings={woodSettings} laborSettings={laborSettings} workers={workers} payrollWeeks={payrollWeeks} alertSettings={alertSettings} saveAlertSettings={saveAlertSettings} backupFailed={backupFailed} lastSyncAt={lastSyncAt} onManualRefresh={manualRefresh} pendingWrites={pendingWrites} onRetryPending={retryPendingWrites} onCheckServerSync={checkServerSync} onAcceptServerVersion={acceptServerVersion} onUpdateOrder={updateOrder} onNew={()=>navigate({page:"form"})} onHist={()=>navigate({page:"history"})} onManage={()=>navigate({page:"manage"})} onExpense={()=>navigate({page:"expense"})} onWoodStock={()=>navigate({page:"woodstock",view:"list"})} onPayroll={()=>navigate({page:"payroll"})} onPLReport={()=>navigate({page:"plreport"})} onView={o=>navigate({page:"preview",orderNo:o.no,slip:0})} onViewDelivery={o=>navigate({page:"preview",orderNo:o.no,slip:5})} online={online} connError={connError} onResetConfig={onResetConfig} folderStatus={folderStatus} connectFolder={connectFolder} highlightNo={highlightNo} onBackupData={backupData}/>;
 }
 
 /* ── HOME / DASHBOARD ── */
-function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,payrollWeeks,alertSettings,saveAlertSettings,backupFailed,lastSyncAt,onManualRefresh,pendingWrites,onRetryPending,onCheckServerSync,onUpdateOrder,onNew,onHist,onManage,onExpense,onWoodStock,onPayroll,onPLReport,onView,onViewDelivery,online,connError,onResetConfig,folderStatus,connectFolder,highlightNo,onBackupData}){
+function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,payrollWeeks,alertSettings,saveAlertSettings,backupFailed,lastSyncAt,onManualRefresh,pendingWrites,onRetryPending,onCheckServerSync,onAcceptServerVersion,onUpdateOrder,onNew,onHist,onManage,onExpense,onWoodStock,onPayroll,onPLReport,onView,onViewDelivery,online,connError,onResetConfig,folderStatus,connectFolder,highlightNo,onBackupData}){
   const now=new Date();
   const[showAllRunning,setShowAllRunning]=useState(false);
   const[showSystemZone,setShowSystemZone]=useState(false);
+  // ── উপরের নেভিগেশন বারে ঠিক এই মুহূর্তে কোন বিভাগে আছেন তা ট্র্যাক করার জন্য — স্ক্রল করলে
+  // যে বিভাগের হেডার স্টিকি বারের রেখা পার হয়ে গেছে তার মধ্যে সবচেয়ে নিচেরটাই "বর্তমান" ধরা হয়,
+  // সেই আইকনটাই বড়+প্রেসড দেখানো হবে (নিচে zoneNavBar-এ) — স্ক্রল বন্ধ হলেও এই অবস্থাতেই থাকবে,
+  // পরের বার অন্য বিভাগে স্ক্রল হলে তবেই বদলাবে ──
+  const zoneIds=["z-urgent","z-today","z-trend","z-health","z-wood","z-perf","z-sys"];
+  const[activeZone,setActiveZone]=useState(zoneIds[0]);
+  useEffect(()=>{
+    const onScroll=()=>{
+      const threshold=64; // স্টিকি বারের উচ্চতার কাছাকাছি
+      let current=zoneIds[0];
+      for(const id of zoneIds){
+        const el=document.getElementById(id);
+        if(el&&el.getBoundingClientRect().top<=threshold)current=id;
+      }
+      setActiveZone(current);
+    };
+    onScroll();
+    window.addEventListener("scroll",onScroll,{passive:true});
+    return()=>window.removeEventListener("scroll",onScroll);
+  },[]);
   const[syncCheck,setSyncCheck]=useState(null); // null=না চালানো, "loading", অথবা ফলাফল
   const[resending,setResending]=useState({});
   const stats=useMemo(()=>{
@@ -2262,13 +2328,18 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
     }));
     const topCategoryRanked=Object.entries(catAllCount).sort((a,b)=>b[1]-a[1]).map(([label,count])=>({label,count}));
 
-    // Yearly order count & revenue (all years present in data)
-    const yearsSet=new Set(activeOrders.map(o=>new Date(o.cust.date).getFullYear()));
-    yearsSet.add(now.getFullYear());
-    const years=[...yearsSet].sort();
+    // ── বাৎসরিক অর্ডার ও মূল্য: ডেটা যে বছরগুলোতে আছে তার বদলে সবসময় শেষ ৬ বছর (তথ্য না থাকা
+    // বছরও ০ দেখাবে), আর প্রতিটার সাথে আগের বছরের তুলনায় প্রবৃদ্ধি % ──
+    const revenueInYear=(y)=>activeOrders.filter(o=>new Date(o.cust.date).getFullYear()===y).reduce((s,o)=>s+(parseFloat(o.cust.total)||0),0);
+    const curYearForYearly=now.getFullYear();
+    const years=[];
+    for(let y=curYearForYearly-5;y<=curYearForYearly;y++)years.push(y);
     const yearly=years.map(y=>{
       const yOrders=activeOrders.filter(o=>new Date(o.cust.date).getFullYear()===y);
-      return{label:String(y),count:yOrders.length,revenue:yOrders.reduce((s,o)=>s+(parseFloat(o.cust.total)||0),0)};
+      const revenue=yOrders.reduce((s,o)=>s+(parseFloat(o.cust.total)||0),0);
+      const prevRevenue=revenueInYear(y-1);
+      const growthPct=prevRevenue>0?((revenue-prevRevenue)/prevRevenue)*100:null;
+      return{label:String(y),count:yOrders.length,revenue,growthPct};
     });
 
     // Best month ever (by order count) vs same month this year
@@ -2489,6 +2560,7 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
         // ── ৫-সেকেন্ডের নিয়ম: এক নজরে "সব ঠিক আছে কি না" — ট্যাপ করলে সংশ্লিষ্ট অংশে চলে যাবে ──
         const issues=[];
         if(backupFailed)issues.push({t:"ব্যাকআপ ব্যর্থ হয়েছে",z:"z-sys"});
+        if(connError)issues.push({t:"সিঙ্ক সমস্যা হচ্ছে",z:"z-sys"});
         if(stats.stuckItems&&stats.stuckItems.length)issues.push({t:`${stats.stuckItems.length}টা কাজ আটকে আছে`,z:"z-today"});
         const lowStock=(stats.stockAlerts||[]).filter(a=>a.monthsLeft<AL(alertSettings,"stockMonths"));
         if(lowStock.length)issues.push({t:`${lowStock.map(a=>a.wood).join(", ")} কাঠ কম`,z:"z-wood"});
@@ -2523,10 +2595,12 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
         </div>
       })()}
       <div style={{position:"sticky",top:0,zIndex:20,background:"rgba(255,255,255,0.97)",backdropFilter:"blur(4px)",margin:"0 -16px 12px",padding:"7px 10px",borderBottom:"1px solid #eee",display:"flex",justifyContent:"space-between",gap:4,overflowX:"auto"}}>
-        {[{e:"⚡",z:"z-urgent",c:"#b91c1c"},{e:"🔥",z:"z-today",c:"#0f766e"},{e:"📅",z:"z-trend",c:"#b45309"},{e:"📊",z:"z-health",c:"#1d4ed8"},{e:"🪵",z:"z-wood",c:"#065f46"},{e:"🚧",z:"z-perf",c:"#7c2d12"},{e:"⚙️",z:"z-sys",c:"#78716c"}].map(b=>
-          <button key={b.z} onClick={()=>document.getElementById(b.z)?.scrollIntoView({behavior:"smooth",block:"start"})} style={{background:b.c+"14",border:`1.5px solid ${b.c}55`,borderRadius:9,minWidth:44,minHeight:38,fontSize:17,flexShrink:1,flexGrow:1,cursor:"pointer",outline:"none",WebkitTapHighlightColor:"transparent"}}>{b.e}</button>
-        )}
+        {[{e:"⚡",z:"z-urgent",c:"#b91c1c"},{e:"🔥",z:"z-today",c:"#0f766e"},{e:"📅",z:"z-trend",c:"#b45309"},{e:"📊",z:"z-health",c:"#1d4ed8"},{e:"🪵",z:"z-wood",c:"#065f46"},{e:"🚧",z:"z-perf",c:"#7c2d12"},{e:"⚙️",z:"z-sys",c:"#78716c"}].map(b=>{
+          const isActive=activeZone===b.z;
+          return<button key={b.z} onClick={()=>document.getElementById(b.z)?.scrollIntoView({behavior:"smooth",block:"start"})} style={{background:isActive?b.c+"30":b.c+"14",border:`1.5px solid ${isActive?b.c:b.c+"55"}`,borderRadius:9,minWidth:isActive?54:44,minHeight:isActive?44:38,fontSize:isActive?21:17,flexShrink:1,flexGrow:1,cursor:"pointer",outline:"none",WebkitTapHighlightColor:"transparent",transform:isActive?"scale(1.08)":"scale(1)",boxShadow:isActive?`inset 0 2px 5px ${b.c}66`:"none",transition:"all .15s"}}>{b.e}</button>
+        })}
       </div>
+
 
       {/* Action buttons */}
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:14}}>
@@ -2675,14 +2749,15 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
 
       {/* Yearly totals - অর্ডার সংখ্যা ও মূল্য এখন একই চার্টে, বার + উপরে মূল্যের লেবেল */}
       {stats.yearly&&stats.yearly.length>1&&<div style={{marginBottom:16}}>
-        <div style={{fontWeight:700,fontSize:13,color:"#222",marginBottom:8}}>📅 বাৎসরিক অর্ডার ও মূল্য</div>
+        <div style={{fontWeight:700,fontSize:13,color:"#222",marginBottom:8}}>📅 বাৎসরিক অর্ডার ও মূল্য (গত ৬ বছর)</div>
         <div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 8px"}}>
-          {(()=>{const maxC=Math.max(...stats.yearly.map(y=>y.count),1);return<div style={{display:"flex",alignItems:"flex-end",gap:6,height:110}}>
+          {(()=>{const maxR=Math.max(...stats.yearly.map(y=>y.revenue),1);return<div style={{display:"flex",alignItems:"flex-end",gap:6,height:110}}>
             {stats.yearly.map(y=><div key={y.label} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"flex-end",height:"100%"}}>
               <div style={{fontSize:8,color:"#166534",fontWeight:700,marginBottom:2}}>{money(y.revenue)}</div>
               <div style={{fontSize:9,color:"#666",marginBottom:2}}>{y.count}টি</div>
-              <div style={{width:"100%",height:`${(y.count/maxC)*100}%`,background:CHART_SOFT_BLUE,borderRadius:"3px 3px 0 0",minHeight:4}}></div>
+              <div style={{width:"100%",height:`${(y.revenue/maxR)*100}%`,background:CHART_SOFT_BLUE,borderRadius:"3px 3px 0 0",minHeight:4}}></div>
               <div style={{fontSize:9,color:"#999",marginTop:3}}>{y.label}</div>
+              {y.growthPct!==null&&<div style={{fontSize:8,marginTop:2,fontWeight:600,color:y.growthPct>=0?CHART_SOFT_GREEN:CHART_SOFT_RED}}>{y.growthPct>=0?"↑":"↓"} {Math.abs(y.growthPct).toFixed(0)}%</div>}
             </div>)}
           </div>})()}
         </div>
@@ -2716,10 +2791,7 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
       <div style={{marginBottom:18}}>
         <div style={{fontWeight:700,fontSize:13,color:"#222",marginBottom:8}}>💰 আয় বনাম খরচ (৬ মাস)</div>
         <div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 8px"}}>
-          <DualBarChart data={stats.monthlyOrders.map((m,i)=>({label:m.label,a:stats.monthlyExpense[i]?.value||0,b:m.revenue}))}/>
-          <div style={{display:"flex",gap:14,justifyContent:"center",marginTop:2,fontSize:9,color:"#888"}}>
-            <span>ধূসর = খরচ</span><span>লাল = আয়</span>
-          </div>
+          <DualBarChart data={stats.monthlyOrders.map((m,i)=>({label:m.label,a:stats.monthlyExpense[i]?.value||0,b:m.revenue}))} labelA="খরচ" labelB="আয়"/>
         </div>
       </div>
 
@@ -2866,7 +2938,7 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
       </div>}
 
       <div id="z-sys" onClick={()=>setShowSystemZone(!showSystemZone)} style={{scrollMarginTop:56,fontSize:11,fontWeight:800,color:"#666",letterSpacing:"0.3px",margin:"18px 0 8px",paddingBottom:4,borderBottom:"2px solid #dddddd",cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-        <span>⚙️ সিস্টেম ও ব্যাকআপ{backupFailed&&<span style={{marginLeft:6,color:"#991b1b"}}>🔴</span>}</span>
+        <span>⚙️ সিস্টেম ও ব্যাকআপ{(backupFailed||connError)&&<span style={{marginLeft:6,color:"#991b1b"}}>🔴</span>}</span>
         <span style={{fontSize:14}}>{showSystemZone?"▲":"▼"}</span>
       </div>
       {showSystemZone&&<>
@@ -2912,7 +2984,7 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
 
         <div style={{marginTop:12,background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 14px"}}>
           <div style={{fontSize:12,fontWeight:700,color:"#444",marginBottom:3}}>🔍 সার্ভার-সিঙ্ক পরীক্ষা</div>
-          <div style={{fontSize:9,color:"#999",marginBottom:9,lineHeight:1.5}}>এই ডিভাইসে যা দেখাচ্ছে তার সাথে আসল সার্ভারের তথ্য সরাসরি মিলিয়ে দেখে — কোনো অর্ডার শুধু এই ডিভাইসেই আটকে আছে কিনা (কখনো সার্ভারে না পৌঁছানো) তা ধরার জন্য। দুই ডিভাইসে ভিন্ন সংখ্যা দেখলে এটা চালান।</div>
+          <div style={{fontSize:9,color:"#999",marginBottom:9,lineHeight:1.5}}>এই ডিভাইসে যা দেখাচ্ছে তার সাথে আসল সার্ভারের তথ্য সরাসরি মিলিয়ে দেখে — কোনো অর্ডার শুধু এই ডিভাইসেই আটকে আছে (সার্ভারে পৌঁছায়নি), বা কোনো অর্ডারের তথ্য এই ডিভাইসে পুরনো/ভিন্ন (অন্য ডিভাইসে পরিবর্তন হয়েছে কিন্তু এখানে এখনো আসেনি) কিনা তা ধরার জন্য। দুই ডিভাইসে ভিন্ন সংখ্যা দেখলে এটা চালান।</div>
           <button onClick={async()=>{
             setSyncCheck("loading");
             const r=await onCheckServerSync();
@@ -2921,9 +2993,10 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
           {syncCheck&&syncCheck!=="loading"&&syncCheck.error&&<div style={{marginTop:8,fontSize:10,color:RED}}>⚠️ সার্ভারে পৌঁছানো যায়নি: {syncCheck.error}</div>}
           {syncCheck&&syncCheck!=="loading"&&!syncCheck.error&&<div style={{marginTop:9}}>
             <div style={{fontSize:10,color:"#555",marginBottom:6}}>সার্ভারে আছে: <strong>{syncCheck.serverCount}</strong>টি · এই ডিভাইসে দেখাচ্ছে: <strong>{syncCheck.localCount}</strong>টি</div>
-            {syncCheck.localOnly.length===0?
-              <div style={{background:"#f0fdf4",color:"#166534",borderRadius:7,padding:"8px 10px",fontSize:10,fontWeight:600}}>✅ সব ঠিক আছে — এই ডিভাইসের সবকিছুই সার্ভারে পৌঁছেছে</div>
+            {syncCheck.localOnly.length===0&&(!syncCheck.mismatched||syncCheck.mismatched.length===0)?
+              <div style={{background:"#f0fdf4",color:"#166534",borderRadius:7,padding:"8px 10px",fontSize:10,fontWeight:600}}>✅ সব ঠিক আছে — এই ডিভাইসের সবকিছুই সার্ভারের সাথে মিলছে</div>
               :<div>
+                {syncCheck.localOnly.length>0&&<>
                 <div style={{background:"#fef2f2",color:"#991b1b",borderRadius:7,padding:"8px 10px",fontSize:10,fontWeight:700,marginBottom:7}}>⚠️ {syncCheck.localOnly.length}টা অর্ডার শুধু এই ডিভাইসেই আছে, সার্ভারে নেই:</div>
                 {syncCheck.localOnly.map(o=><div key={o.no} style={{background:"#fff7ed",borderRadius:7,padding:"7px 9px",marginBottom:5,fontSize:10}}>
                   <div style={{fontWeight:700}}>{o.cust.name} — {o.no}</div>
@@ -2934,6 +3007,17 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
                     setTimeout(async()=>{const r=await onCheckServerSync();setSyncCheck(r);setResending(prev=>({...prev,[o.no]:false}))},1500);
                   }} disabled={resending[o.no]} style={{marginTop:5,background:"#7c2d12",color:"white",border:"none",borderRadius:6,padding:"6px 10px",fontSize:9,fontWeight:700}}>{resending[o.no]?"পাঠানো হচ্ছে...":"📤 আবার সার্ভারে পাঠান"}</button>
                 </div>)}
+                </>}
+                {syncCheck.mismatched&&syncCheck.mismatched.length>0&&<>
+                <div style={{background:"#fffbeb",color:"#92400e",borderRadius:7,padding:"8px 10px",fontSize:10,fontWeight:700,marginBottom:7,marginTop:syncCheck.localOnly.length>0?10:0}}>⚠️ {syncCheck.mismatched.length}টা অর্ডারের তথ্য এই ডিভাইসে পুরনো/ভিন্ন — অন্য ডিভাইসে পরিবর্তন হয়েছে কিন্তু এখানে এখনো আসেনি:</div>
+                {syncCheck.mismatched.map(o=><div key={o.no} style={{background:"#fffdf5",borderRadius:7,padding:"7px 9px",marginBottom:5,fontSize:10,border:"1px solid #fde68a"}}>
+                  <div style={{fontWeight:700}}>{o.cust.name} — {o.no}</div>
+                  <button onClick={()=>{
+                    onAcceptServerVersion(o.no,syncCheck.serverDocs&&syncCheck.serverDocs[o.no]);
+                    setSyncCheck(prev=>prev&&prev.mismatched?{...prev,mismatched:prev.mismatched.filter(m=>m.no!==o.no)}:prev);
+                  }} style={{marginTop:5,background:"#92400e",color:"white",border:"none",borderRadius:6,padding:"6px 10px",fontSize:9,fontWeight:700}}>🔄 সার্ভারের সঠিক তথ্য নিন</button>
+                </div>)}
+                </>}
               </div>}
           </div>}
         </div>
@@ -5088,11 +5172,11 @@ function Preview({order,onBack,slip,setSlip,onUpdate,onAddPayment,onSetDelivered
 }
 
 /* ── HISTORY (with search) ── */
-function Hist({orders,db,onBack,onView,highlightNo}){
-  const[q,setQ]=useState("");
-  const[statusFilter,setStatusFilter]=useState("all");
-  const[catFilter,setCatFilter]=useState("all");
-  const[sortMode,setSortMode]=useState("recent"); // recent | rank
+function Hist({orders,db,onBack,onView,highlightNo,q,setQ,statusFilter,setStatusFilter,catFilter,setCatFilter,sortMode,setSortMode}){
+  // ── সার্চ/ফিল্টার/সর্ট এখন এই পেজের নিজের সাময়িক মেমোরিতে না — parent থেকে prop হিসেবে আসে
+  // (নেভিগেশন স্ট্যাকে সংরক্ষিত), যাতে কোনো অর্ডারে ঢুকে ব্যাক করে ফিরলে যা বেছে নিয়েছিলেন
+  // (সার্চ লেখা, স্ট্যাটাস ট্যাব, ক্যাটাগরি, সর্ট) তাই থেকে যায় ──
+  // recent | rank
   // ── কাস্টমার র‍্যাংকিং — নতুন অর্ডার ফর্মে যেভাবে হিসাব হয়, এখানেও একই পদ্ধতি ──
   const customerRank=useMemo(()=>{
     const map={};
