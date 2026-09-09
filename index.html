@@ -59,7 +59,7 @@ const S={
   set:(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v));return true}catch(e){return false}}
 };
 // Compress an image file to a small JPEG base64 string before storing, to avoid hitting localStorage quota
-function compressImage(file,maxDim=1200,quality=0.82){
+function compressImage(file,maxDim=1200,quality=0.82,maxBytes=110000){
   return new Promise((resolve)=>{
     const reader=new FileReader();
     reader.onload=(ev)=>{
@@ -72,7 +72,26 @@ function compressImage(file,maxDim=1200,quality=0.82){
         canvas.width=w;canvas.height=h;
         const ctx=canvas.getContext("2d");
         ctx.drawImage(img,0,0,w,h);
-        resolve(canvas.toDataURL("image/jpeg",quality));
+        // ── ছবি যত জটিল/ভারীই হোক, ফলাফল সবসময় একটা নির্দিষ্ট সর্বোচ্চ সাইজের মধ্যে রাখা হয় —
+        // একটা অর্ডারে একাধিক ছবি (রেফারেন্স + ডেলিভারি) জমলেও Firestore-এর প্রতি-ডকুমেন্ট
+        // সাইজ সীমা (~1MB) পার হয়ে যাওয়ার ঝুঁকি অনেক কমে যায়। প্রথমে স্বাভাবিক কোয়ালিটিতে
+        // চেষ্টা, তারপর দরকার হলে ধাপে ধাপে কোয়ালিটি কমিয়ে, তাতেও না হলে মাপ ছোট করে পুনরায়
+        // এনকোড — সীমার মধ্যে না আসা পর্যন্ত (বা যুক্তিসঙ্গত কয়েকবার চেষ্টার পর যা পাওয়া যায় তাই) ──
+        let q=quality;
+        let result=canvas.toDataURL("image/jpeg",q);
+        let attempts=0;
+        while(result.length>maxBytes&&attempts<8){
+          attempts++;
+          if(q>0.35){
+            q=Math.max(0.35,q-0.12);
+          }else{
+            w=Math.round(w*0.85);h=Math.round(h*0.85);
+            canvas.width=w;canvas.height=h;
+            ctx.drawImage(img,0,0,w,h);
+          }
+          result=canvas.toDataURL("image/jpeg",q);
+        }
+        resolve(result);
       };
       img.onerror=()=>resolve(ev.target.result);
       img.src=ev.target.result;
@@ -85,7 +104,7 @@ function compressImage(file,maxDim=1200,quality=0.82){
 /* ── FULL-RESOLUTION LOCAL FOLDER STORAGE (desktop Chrome/Edge/Brave only) ──
    Original, uncompressed images are saved as real files in a folder you choose
    on your computer. Only a small compressed thumbnail syncs to the cloud/mobile. */
-const BUILD_TAG="4.39";
+const BUILD_TAG="4.42";
 const FS_SUPPORTED=typeof window!=="undefined"&&"showDirectoryPicker" in window;
 function idbOpen(){
   return new Promise((resolve,reject)=>{
@@ -1414,27 +1433,17 @@ function Root(){
 function App({firebaseConfig,onResetConfig}){
   // ── এই ডিভাইসে যে কোডটা এখন চলছে সেটা কি এখনো সর্বশেষ ভার্সন? ব্রাউজারের একটা ট্যাব অনেকক্ষণ
   // খোলা থাকলে, সার্ভারে নতুন ফাইল আপলোড হয়ে গেলেও ট্যাবটা রিলোড না করা পর্যন্ত পুরনো কোডেই আটকে
-  // থাকে — তখন Firestore সিঙ্ক নিখুঁত থাকলেও পুরনো কোডের ভুল/অসম্পূর্ণ লজিক ভুল তথ্য দেখাতে পারে,
-  // আর সেটা এই মুহূর্তে ডিভাইসের কোনো ইঙ্গিত ছাড়াই ঘটে। প্রতি দেড় মিনিটে (আর ট্যাব ফিরে
-  // এলে/ফোকাস পেলে) সার্ভারে যে ফাইলটা আসলে আছে তার BUILD_TAG চেক করে, এই ট্যাবেরটার সাথে না
-  // মিললে স্ক্রিনের একদম উপরে না-সরানো-যাওয়া লাল ব্যানার দেখায় — Firestore ডেটা নিয়ে কিছু বলে না,
-  // শুধু কোডটাই পুরনো কিনা তা ধরে ──
+  // থাকে। এখন এটা কাউকে জানাতে/করতে হয় না — নিজে থেকেই সনাক্ত করে চুপচাপ রিলোড করে নেয়, শুধু
+  // হোম পেজে থাকা অবস্থায় (যাতে কোনো ফর্ম/এডিট স্ক্রিনে থাকা অবস্থায় কিছু হারিয়ে না যায়) — নাহলে
+  // পরের চেক পর্যন্ত অপেক্ষা করে, ফর্মে কিছু লিখতে থাকা অবস্থায় হঠাৎ পাতা পাল্টে যাবে না ──
+  const pageRef=useRef("home");
   useEffect(()=>{
-    let bannerEl=null;
-    const showBanner=(newVer)=>{
-      if(bannerEl)return;
-      bannerEl=document.createElement("div");
-      bannerEl.textContent="🔄 নতুন ভার্সন (v"+newVer+") পাওয়া গেছে — এই ট্যাবে পুরনো কোড চলছে, এখন যা দেখছেন তা ভুল/পুরনো হতে পারে। রিলোড করতে এখানে চাপুন";
-      bannerEl.style.cssText="position:fixed;top:0;left:0;right:0;z-index:99999;background:#dc2626;color:white;padding:10px 16px;text-align:center;font-size:12px;font-weight:700;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,0.3);";
-      bannerEl.onclick=()=>window.location.reload();
-      document.body.appendChild(bannerEl);
-    };
     const checkVersion=async()=>{
       try{
         const res=await fetch(window.location.pathname+"?_v="+Date.now(),{cache:"no-store"});
         const html=await res.text();
         const m=html.match(/const BUILD_TAG="([^"]+)"/);
-        if(m&&m[1]&&m[1]!==BUILD_TAG)showBanner(m[1]);
+        if(m&&m[1]&&m[1]!==BUILD_TAG&&pageRef.current==="home")window.location.reload();
       }catch(e){/* নেটওয়ার্ক হেঁচকি — পরের চেষ্টায় দেখা যাবে, নীরবে এড়িয়ে যান */}
     };
     checkVersion();
@@ -1445,13 +1454,13 @@ function App({firebaseConfig,onResetConfig}){
       clearInterval(iv);
       document.removeEventListener("visibilitychange",checkVersion);
       window.removeEventListener("focus",checkVersion);
-      if(bannerEl)bannerEl.remove();
     };
   },[]);
   // ── নেভিগেশন স্ট্যাক: ফোনের ব্যাক বাটন প্রতিবার ঠিক একধাপ পেছাবে, একদম হোমে লাফ দেবে না ──
   const[navStack,setNavStack]=useState([{page:"home"}]);
   const curScreen=navStack[navStack.length-1];
   const page=curScreen.page;
+  pageRef.current=page;
   const[highlightNo,setHighlightNo]=useState(null); // ব্যাক করে ফিরলে যে অর্ডার/লট থেকে বের হলাম সেটা হালকা আকাশী রঙে হাইলাইট
   const navigate=(screen)=>{
     setNavStack(prev=>[...prev,screen]);
@@ -1524,6 +1533,68 @@ function App({firebaseConfig,onResetConfig}){
     const list=[...pendingWritesRef.current,{...item,id:Date.now()+"_"+Math.random().toString(36).slice(2,7),addedAt:new Date().toISOString()}];
     persistPending(list);
   };
+  // ── ডকুমেন্ট সাইজ সীমা (Firestore-এ প্রতি অর্ডারের সর্বোচ্চ ~1MB) পার হয়ে যাওয়া লেখা চেনার জন্য —
+  // সাধারণত একটা অর্ডারে অনেকগুলো/বড় ছবি (রেফারেন্স বা ডেলিভারির) যোগ হলে এটা ঘটে। ধরা পড়লে
+  // এখন কাউকে কিছু জানতে/করতে হয় না — এখানেই স্বয়ংক্রিয়ভাবে সেই অর্ডারের ছবিগুলো ধাপে ধাপে আরও
+  // জোরে কমপ্রেস করে আবার পাঠানোর চেষ্টা হয়, সফল না হওয়া পর্যন্ত — "শেষ যা ইনপুট হয়েছে তাই সব
+  // ডিভাইসে দেখা যাবে" এই নিয়ম মেনে চলার জন্য কোনো ম্যানুয়াল পদক্ষেপ ছাড়াই ──
+  const isLikelyTooLargeError=(err)=>{
+    const msg=((err&&err.message)||"").toLowerCase();
+    return!!(err&&err.code==="invalid-argument"&&(msg.includes("large")||msg.includes("byte")||msg.includes("1048487")||msg.includes("1048576")||msg.includes("maximum")||msg.includes("size")));
+  };
+  // ইতিমধ্যে সংরক্ষিত (base64) কোনো ছবিকে আরও ছোট আকারে পুনরায় এনকোড করার জন্য — নতুন
+  // আপলোডের compressImage()-এর মতোই কাজ করে, শুধু ফাইলের বদলে সরাসরি সংরক্ষিত ছবির ডেটা নিয়ে
+  const reCompressBase64=(src,maxBytes)=>new Promise((resolve)=>{
+    if(!src||typeof src!=="string"||src.indexOf("data:image")!==0){resolve(src);return}
+    const img=new Image();
+    img.onload=()=>{
+      let w=img.width,h=img.height;
+      const canvas=document.createElement("canvas");
+      canvas.width=w;canvas.height=h;
+      const ctx=canvas.getContext("2d");
+      ctx.drawImage(img,0,0,w,h);
+      let q=0.6,result=canvas.toDataURL("image/jpeg",q),attempts=0;
+      while(result.length>maxBytes&&attempts<10){
+        attempts++;
+        if(q>0.28)q=Math.max(0.28,q-0.08);
+        else{w=Math.round(w*0.82);h=Math.round(h*0.82);canvas.width=w;canvas.height=h;ctx.drawImage(img,0,0,w,h)}
+        result=canvas.toDataURL("image/jpeg",q);
+      }
+      resolve(result);
+    };
+    img.onerror=()=>resolve(src);
+    img.src=src;
+  });
+  const shrinkOrderImages=async(order,perImageMaxBytes)=>{
+    const next={...order};
+    for(const key of["refImgs","deliveryImgs"]){
+      if(Array.isArray(next[key])){
+        const arr=[];
+        for(const im of next[key])arr.push(im&&im.src&&im.src.length>perImageMaxBytes?{...im,src:await reCompressBase64(im.src,perImageMaxBytes)}:im);
+        next[key]=arr;
+      }
+    }
+    return next;
+  };
+  // সাইজ সীমা পার হওয়া কোনো অর্ডার সম্পূর্ণ স্বয়ংক্রিয়ভাবে সমাধানের চেষ্টা — ক্রমান্বয়ে আরও কড়া
+  // কমপ্রেশনে, সফল হওয়া পর্যন্ত (বা যুক্তিসঙ্গত কয়েকবার চেষ্টার পর)
+  const autoResolveTooLarge=async(orderNo,merge,data)=>{
+    const fs=fsRef.current;
+    if(!fs)return false;
+    let current=data;
+    for(const target of[70000,45000,26000]){
+      current=await shrinkOrderImages(current,target);
+      try{
+        await fs.collection("orders").doc(orderNo).set(current,merge?{merge:true}:{});
+        setOrders(prev=>prev.map(o=>o.no===orderNo?current:o));
+        setDraft(d=>d&&d.no===orderNo?current:d);
+        return true;
+      }catch(e){
+        if(!isLikelyTooLargeError(e))return false;
+      }
+    }
+    return false;
+  };
   const retryPendingWrites=async()=>{
     const fs=fsRef.current;
     if(!fs||pendingWritesRef.current.length===0)return;
@@ -1533,9 +1604,29 @@ function App({firebaseConfig,onResetConfig}){
         if(item.kind==="order")await fs.collection("orders").doc(item.orderNo).set(item.data,item.merge?{merge:true}:{});
         else if(item.kind==="doc")await fs.doc(item.path).set(item.data,item.merge?{merge:true}:{});
         else if(item.kind==="collectionDoc")await fs.collection(item.collection).doc(item.docId).set(item.data,item.merge?{merge:true}:{});
-      }catch(e){remaining.push(item)}
+      }catch(e){
+        if(item.kind==="order"&&isLikelyTooLargeError(e)){
+          const ok=await autoResolveTooLarge(item.orderNo,item.merge,item.data);
+          if(!ok)remaining.push(item); // অত্যন্ত বিরল — সর্বোচ্চ কমপ্রেশনেও ফিট হয়নি, পরের চক্রে নিরবে আবার চেষ্টা হবে
+        }else remaining.push(item);
+      }
     }
     if(remaining.length!==pendingWritesRef.current.length)persistPending(remaining);
+  };
+  // ── v4.40-এ যেসব অর্ডার "স্থায়ীভাবে ব্যর্থ" হিসেবে আলাদা তালিকায় জমা হয়েছিল (এবং ম্যানুয়াল
+  // পদক্ষেপ চাইত), সেগুলো এখন একবারই স্বয়ংক্রিয়ভাবে সমাধানের চেষ্টা হয় — নতুন কোড চালু হওয়ার
+  // সাথে সাথেই, কিছু করতে হয় না। সমাধান না হলেও নিরবে সাধারণ রিট্রাই-সারিতে যোগ হয়ে যায় ──
+  const migrateLegacyPermanentFailures=async()=>{
+    let legacy=[];
+    try{legacy=JSON.parse(localStorage.getItem("rf_permanent_failed_writes")||"[]")}catch(e){}
+    if(!legacy.length){localStorage.removeItem("rf_permanent_failed_writes");return}
+    const stillStuck=[];
+    for(const item of legacy){
+      const ok=item.kind==="order"?await autoResolveTooLarge(item.orderNo,item.merge,item.data):false;
+      if(!ok)stillStuck.push(item);
+    }
+    localStorage.removeItem("rf_permanent_failed_writes");
+    if(stillStuck.length)persistPending([...pendingWritesRef.current,...stillStuck]);
   };
   // ── সত্যিটা যাচাই: এই ডিভাইসে যা দেখাচ্ছে তার সাথে আসল সার্ভারের তথ্য মিলিয়ে দেখা —
   // কোনো অর্ডার শুধু এই ডিভাইসেই আটকে আছে কিনা (কখনো সার্ভারে পৌঁছায়নি) সেটা ধরার জন্য ──
@@ -1712,6 +1803,7 @@ function App({firebaseConfig,onResetConfig}){
       const firestore=firebase.firestore();
       try{firestore.enablePersistence({synchronizeTabs:true}).catch(()=>{})}catch(e){}
       fsRef.current=firestore;
+      migrateLegacyPermanentFailures();
 
       const unsubOrders=firestore.collection("orders").onSnapshot(snap=>{
         clearTimeout(timer);setTimedOut(false);
@@ -1925,13 +2017,24 @@ function App({firebaseConfig,onResetConfig}){
     }
     return genNo();
   };
+  const estimateOrderBytes=(o)=>{try{return JSON.stringify(o).length}catch(e){return 0}};
   const saveOrder=(o)=>{
     setDraft(o);
     navigate({page:"preview",orderNo:o.no,slip:0,from:"home"});
-    if(fsRef.current)fsRef.current.collection("orders").doc(o.no).set(o).catch(err=>{
-      queuePendingWrite({kind:"order",orderNo:o.no,data:o,merge:false});
-      alert("⚠️ অর্ডারটি এই মুহূর্তে সার্ভারে পাঠানো যায়নি (কারণ: "+err.message+")। এটি এই ডিভাইসে সংরক্ষিত থাকবে এবং উপরে একটা সতর্কতা দেখাবে যতক্ষণ না সফলভাবে সার্ভারে পৌঁছায় — ইন্টারনেট থাকা অবস্থায় এই ট্যাব/অ্যাপ খোলা রাখুন।");
-    });
+    const save=async()=>{
+      if(estimateOrderBytes(o)>950000){
+        await autoResolveTooLarge(o.no,false,o);
+        return;
+      }
+      if(!fsRef.current)return;
+      try{
+        await fsRef.current.collection("orders").doc(o.no).set(o);
+      }catch(err){
+        if(isLikelyTooLargeError(err))await autoResolveTooLarge(o.no,false,o);
+        else queuePendingWrite({kind:"order",orderNo:o.no,data:o,merge:false});
+      }
+    };
+    save();
   };
   // ── অর্ডার আপডেট — সুরক্ষিত পদ্ধতি ──
   // আগে পুরো ডকুমেন্ট মুছে নতুন করে লেখা হতো। ফলে কোনো স্ক্রিন যদি অর্ডারের একটু পুরনো কপি
@@ -1953,10 +2056,20 @@ function App({firebaseConfig,onResetConfig}){
     Object.keys(safe).forEach(k=>{if(safe[k]===undefined)delete safe[k]}); // Firestore undefined নেয় না
     setOrders(prev=>prev.map(o=>o.no===safe.no?safe:o));
     if(draft&&draft.no===safe.no)setDraft(safe);
-    if(fsRef.current)fsRef.current.collection("orders").doc(safe.no).set(safe,{merge:true}).catch(err=>{
-      queuePendingWrite({kind:"order",orderNo:safe.no,data:safe,merge:true});
-      alert("⚠️ পরিবর্তনটি এই মুহূর্তে সার্ভারে পাঠানো যায়নি — উপরে সতর্কতা দেখাবে, ইন্টারনেট ফিরলে ট্যাব খোলা থাকলে নিজে থেকেই আবার চেষ্টা হবে।");
-    });
+    const push=async()=>{
+      if(estimateOrderBytes(safe)>950000){
+        await autoResolveTooLarge(safe.no,true,safe);
+        return;
+      }
+      if(!fsRef.current)return;
+      try{
+        await fsRef.current.collection("orders").doc(safe.no).set(safe,{merge:true});
+      }catch(err){
+        if(isLikelyTooLargeError(err))await autoResolveTooLarge(safe.no,true,safe);
+        else queuePendingWrite({kind:"order",orderNo:safe.no,data:safe,merge:true});
+      }
+    };
+    push();
   };
   // ── এই দুটো atomic — টাকার হিসাব ও ডেলিভারি স্ট্যাটাসের মতো জরুরি তথ্যের জন্য।
   // পুরো অর্ডার নতুন করে না লিখে শুধু নির্দিষ্ট অংশটাই সার্ভারে পাঠানো হয়, তাই অন্য কোনো
@@ -2073,11 +2186,11 @@ function App({firebaseConfig,onResetConfig}){
   if(page==="expense")return<ExpensePage expenses={expenses} onSave={saveExpense} onBack={goBack}/>;
   if(page==="payroll")return<PayrollPage workers={workers} saveWorker={saveWorker} deleteWorker={deleteWorker} payrollWeeks={payrollWeeks} savePayrollWeek={savePayrollWeek} updateAttendance={updateAttendance} addAdvanceEntry={addAdvanceEntry} removeAdvanceEntry={removeAdvanceEntry} onBack={goBack}/>;
   if(page==="plreport")return<PLReportPage orders={orders} expenses={expenses} workers={workers} payrollWeeks={payrollWeeks} woodLots={woodLots} woodSettings={woodSettings} laborSettings={laborSettings} onBack={goBack}/>;
-  return<Home orders={orders} expenses={expenses} woodLots={woodLots} db={db} woodSettings={woodSettings} laborSettings={laborSettings} workers={workers} payrollWeeks={payrollWeeks} alertSettings={alertSettings} saveAlertSettings={saveAlertSettings} backupFailed={backupFailed} lastSyncAt={lastSyncAt} onManualRefresh={manualRefresh} pendingWrites={pendingWrites} onRetryPending={retryPendingWrites} onCheckServerSync={checkServerSync} onAcceptServerVersion={acceptServerVersion} onUpdateOrder={updateOrder} onNew={()=>navigate({page:"form"})} onHist={()=>navigate({page:"history"})} onManage={()=>navigate({page:"manage"})} onExpense={()=>navigate({page:"expense"})} onWoodStock={()=>navigate({page:"woodstock",view:"list"})} onPayroll={()=>navigate({page:"payroll"})} onPLReport={()=>navigate({page:"plreport"})} onView={o=>navigate({page:"preview",orderNo:o.no,slip:0})} onViewDelivery={o=>navigate({page:"preview",orderNo:o.no,slip:5})} online={online} connError={connError} onResetConfig={onResetConfig} folderStatus={folderStatus} connectFolder={connectFolder} highlightNo={highlightNo} onBackupData={backupData} projectId={firebaseConfig?.projectId||""}/>;
+  return<Home orders={orders} expenses={expenses} woodLots={woodLots} db={db} woodSettings={woodSettings} laborSettings={laborSettings} workers={workers} payrollWeeks={payrollWeeks} alertSettings={alertSettings} saveAlertSettings={saveAlertSettings} backupFailed={backupFailed} lastSyncAt={lastSyncAt} onManualRefresh={manualRefresh} pendingWrites={pendingWrites} onCheckServerSync={checkServerSync} onAcceptServerVersion={acceptServerVersion} onUpdateOrder={updateOrder} onNew={()=>navigate({page:"form"})} onHist={()=>navigate({page:"history"})} onManage={()=>navigate({page:"manage"})} onExpense={()=>navigate({page:"expense"})} onWoodStock={()=>navigate({page:"woodstock",view:"list"})} onPayroll={()=>navigate({page:"payroll"})} onPLReport={()=>navigate({page:"plreport"})} onView={o=>navigate({page:"preview",orderNo:o.no,slip:0})} onViewDelivery={o=>navigate({page:"preview",orderNo:o.no,slip:5})} online={online} connError={connError} onResetConfig={onResetConfig} folderStatus={folderStatus} connectFolder={connectFolder} highlightNo={highlightNo} onBackupData={backupData} projectId={firebaseConfig?.projectId||""}/>;
 }
 
 /* ── HOME / DASHBOARD ── */
-function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,payrollWeeks,alertSettings,saveAlertSettings,backupFailed,lastSyncAt,onManualRefresh,pendingWrites,onRetryPending,onCheckServerSync,onAcceptServerVersion,onUpdateOrder,onNew,onHist,onManage,onExpense,onWoodStock,onPayroll,onPLReport,onView,onViewDelivery,online,connError,onResetConfig,folderStatus,connectFolder,highlightNo,onBackupData,projectId}){
+function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,payrollWeeks,alertSettings,saveAlertSettings,backupFailed,lastSyncAt,onManualRefresh,pendingWrites,onCheckServerSync,onAcceptServerVersion,onUpdateOrder,onNew,onHist,onManage,onExpense,onWoodStock,onPayroll,onPLReport,onView,onViewDelivery,online,connError,onResetConfig,folderStatus,connectFolder,highlightNo,onBackupData,projectId}){
   const now=new Date();
   const[showAllRunning,setShowAllRunning]=useState(false);
   const[showSystemZone,setShowSystemZone]=useState(false);
@@ -2596,7 +2709,6 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
         // ── ৫-সেকেন্ডের নিয়ম: এক নজরে "সব ঠিক আছে কি না" — ট্যাপ করলে সংশ্লিষ্ট অংশে চলে যাবে ──
         const issues=[];
         if(backupFailed)issues.push({t:"ব্যাকআপ ব্যর্থ হয়েছে",z:"z-sys"});
-        if(connError)issues.push({t:"সিঙ্ক সমস্যা হচ্ছে",z:"z-sys"});
         if(stats.stuckItems&&stats.stuckItems.length)issues.push({t:`${stats.stuckItems.length}টা কাজ আটকে আছে`,z:"z-today"});
         const lowStock=(stats.stockAlerts||[]).filter(a=>a.monthsLeft<AL(alertSettings,"stockMonths"));
         if(lowStock.length)issues.push({t:`${lowStock.map(a=>a.wood).join(", ")} কাঠ কম`,z:"z-wood"});
@@ -2611,9 +2723,8 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
         </div>
       })()}
 
-      {pendingWrites&&pendingWrites.length>0&&<div className="no-print" style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,background:"#fef2f2",border:"1.5px solid #fca5a5",borderRadius:9,padding:"9px 11px",marginBottom:10}}>
-        <span style={{fontSize:10,color:"#991b1b",fontWeight:600}}>🔴 {pendingWrites.length}টা পরিবর্তন এখনো সার্ভারে পাঠানো যায়নি — এই ডিভাইসেই আটকে আছে। ইন্টারনেট চালু থাকা অবস্থায় এই ট্যাব খোলা রাখুন।</span>
-        <button onClick={()=>onRetryPending&&onRetryPending()} style={{background:"white",color:"#991b1b",border:"1px solid #fca5a5",borderRadius:7,padding:"6px 11px",minHeight:34,fontSize:10,fontWeight:700,flexShrink:0}}>🔄 আবার চেষ্টা করুন</button>
+      {pendingWrites&&pendingWrites.some(w=>Date.now()-new Date(w.addedAt).getTime()>120000)&&<div className="no-print" style={{background:"#fef2f2",border:"1px solid #fca5a5",borderRadius:9,padding:"8px 11px",marginBottom:10,fontSize:10,color:"#991b1b",fontWeight:600}}>
+        🔴 কিছু পরিবর্তন এখনো সার্ভারে পাঠানো যায়নি — ইন্টারনেট সংযোগ থাকলে এমনিতেই কিছুক্ষণের মধ্যে নিজে থেকে পাঠিয়ে দেবে।
       </div>}
 
       {/* স্তরে লাফ দেওয়ার বার — লম্বা স্ক্রলে নিচের অংশ যাতে হারিয়ে না যায় */}
