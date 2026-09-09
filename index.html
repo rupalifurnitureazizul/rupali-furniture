@@ -104,7 +104,7 @@ function compressImage(file,maxDim=1200,quality=0.82,maxBytes=110000){
 /* ── FULL-RESOLUTION LOCAL FOLDER STORAGE (desktop Chrome/Edge/Brave only) ──
    Original, uncompressed images are saved as real files in a folder you choose
    on your computer. Only a small compressed thumbnail syncs to the cloud/mobile. */
-const BUILD_TAG="4.42";
+const BUILD_TAG="4.45";
 const FS_SUPPORTED=typeof window!=="undefined"&&"showDirectoryPicker" in window;
 function idbOpen(){
   return new Promise((resolve,reject)=>{
@@ -1437,13 +1437,39 @@ function App({firebaseConfig,onResetConfig}){
   // হোম পেজে থাকা অবস্থায় (যাতে কোনো ফর্ম/এডিট স্ক্রিনে থাকা অবস্থায় কিছু হারিয়ে না যায়) — নাহলে
   // পরের চেক পর্যন্ত অপেক্ষা করে, ফর্মে কিছু লিখতে থাকা অবস্থায় হঠাৎ পাতা পাল্টে যাবে না ──
   const pageRef=useRef("home");
+  // ── প্রতি ডিভাইসে একটাই ট্যাব সক্রিয় থাকবে — সবচেয়ে শেষে যেটা খোলা হয়েছে সেটাই। একই ডিভাইসে
+  // অনেকগুলো ট্যাব খোলা থাকলে প্রতিটা আলাদাভাবে সার্ভারের সাথে সংযোগ রাখে ও আলাদা হিসাব খায়,
+  // ফলে Firebase-এর দিনের সীমা দ্রুত শেষ হয় এবং ট্যাবে ট্যাবে আলাদা তথ্য দেখা দিতে পারে। নতুন
+  // ট্যাব খুললে পুরনোগুলো নিজে থেকেই সংযোগ ছেড়ে দেয় (তখন তারা আর কোনো হিসাব খায় না), আর সেখানে
+  // একটা পর্দা দেখায় — চাইলে ওই ট্যাবেই আবার চালু করে নেওয়া যায় ──
+  const[tabActive,setTabActive]=useState(true);
+  const tabActiveRef=useRef(true);
+  tabActiveRef.current=tabActive;
+  const tabIdRef=useRef(Math.random().toString(36).slice(2)+"_"+Date.now());
+  useEffect(()=>{
+    const claim=()=>{try{localStorage.setItem("rf_active_tab",JSON.stringify({id:tabIdRef.current,ts:Date.now()}))}catch(e){}};
+    claim();
+    const onStorage=(e)=>{
+      if(e.key!=="rf_active_tab"||!e.newValue)return;
+      try{
+        const v=JSON.parse(e.newValue);
+        if(v&&v.id&&v.id!==tabIdRef.current)setTabActive(false);
+      }catch(err){}
+    };
+    window.addEventListener("storage",onStorage);
+    return()=>window.removeEventListener("storage",onStorage);
+  },[]);
+  // নিষ্ক্রিয় হয়ে গেলে সার্ভার-সংযোগ ছেড়ে দেওয়া হয়, যাতে এই ট্যাব আর কোনো পড়ার হিসাব না খায়
+  useEffect(()=>{
+    if(!tabActive&&fsRef.current){try{fsRef.current.disableNetwork()}catch(e){}}
+  },[tabActive]);
   useEffect(()=>{
     const checkVersion=async()=>{
       try{
         const res=await fetch(window.location.pathname+"?_v="+Date.now(),{cache:"no-store"});
         const html=await res.text();
         const m=html.match(/const BUILD_TAG="([^"]+)"/);
-        if(m&&m[1]&&m[1]!==BUILD_TAG&&pageRef.current==="home")window.location.reload();
+        if(m&&m[1]&&m[1]!==BUILD_TAG&&pageRef.current==="home"&&tabActiveRef.current)window.location.reload();
       }catch(e){/* নেটওয়ার্ক হেঁচকি — পরের চেষ্টায় দেখা যাবে, নীরবে এড়িয়ে যান */}
     };
     checkVersion();
@@ -1494,6 +1520,8 @@ function App({firebaseConfig,onResetConfig}){
     return()=>window.removeEventListener("popstate",onPop);
   },[]);
   const[orders,setOrders]=useState([]);
+  const ordersRef=useRef(orders);
+  ordersRef.current=orders;
   const[expenses,setExpenses]=useState([]);
   const[woodLots,setWoodLots]=useState([]);
   const[workers,setWorkers]=useState([]);
@@ -1932,15 +1960,33 @@ function App({firebaseConfig,onResetConfig}){
     // রিয়েল-টাইম সংযোগ চুপচাপ বিচ্ছিন্ন হয়ে গেলে পুরনো তথ্য ঘণ্টার পর ঘণ্টা দেখাতে থাকে।
     // এই কারণেই মোবাইল ও পিসিতে আলাদা সংখ্যা দেখা যেত। এখন প্রতি ৪৫ সেকেন্ডে নিজে থেকেই
     // তাজা তথ্য টেনে আনে, আর সব কালেকশনই আনে (আগে কয়েকটা বাদ পড়ত)।
-    const refreshFromServer=(force)=>{
-      if(!force&&document.visibilityState&&document.visibilityState!=="visible")return;
+    const quotaBackoffUntilRef={current:0};
+    const refreshFromServer=(force,ordersOnly)=>{
+      if(!force&&document.visibilityState&&document.visibilityState!=="visible")return Promise.resolve();
+      // কোটা শেষ হয়ে গেলে আরও পড়ার চেষ্টা করলে অবস্থা আরও খারাপ হয় — কিছুক্ষণ থেমে থাকা হয়
+      if(Date.now()<quotaBackoffUntilRef.current)return Promise.resolve();
       const fs=fsRef.current;
       if(!fs)return Promise.resolve();
       const jobs=[
         fs.collection("orders").get({source:"server"}).then(snap=>{
           const list=snap.docs.map(d=>d.data()).sort((a,b)=>new Date(b.at||b.cust?.date||0)-new Date(a.at||a.cust?.date||0));
-          setOrders(list);
+          // ── "যেই ডিভাইসে শেষ যা ইনপুট হবে তাই সব ডিভাইসে দেখা যাবে" — এই নিয়ম নিজে থেকে
+          // বলবৎ করার জন্য। এই ডিভাইসে আছে কিন্তু সার্ভারে নেই এমন অর্ডার পেলে চুপচাপ সার্ভারে
+          // পাঠিয়ে দেয় (আগে এটা ⚙️ সেকশনে হাতে করতে হতো), আর সেগুলো তালিকা থেকেও হারিয়ে যায় না।
+          // এই একই স্ন্যাপশটই ব্যবহার হয়, তাই বাড়তি কোনো পড়ার খরচ নেই ──
+          const serverNos=new Set(snap.docs.map(d=>d.id));
+          const localOnly=(ordersRef.current||[]).filter(o=>o&&o.no&&!serverNos.has(o.no));
+          setOrders(localOnly.length?[...localOnly,...list]:list);
+          localOnly.forEach(o=>{
+            fs.collection("orders").doc(o.no).set(o).catch(e=>{
+              if(isLikelyTooLargeError(e))autoResolveTooLarge(o.no,false,o);
+            });
+          });
         }),
+      ];
+      // ধীরে বদলায় এমন কালেকশনগুলো প্রতিবার নতুন করে পড়ার দরকার নেই — রিয়েল-টাইম লিসেনার
+      // এগুলোর পরিবর্তনও সাথে সাথেই এনে দেয়; এটা শুধু নিরাপত্তা-জাল, তাই আধ ঘণ্টায় একবার
+      if(!ordersOnly)jobs.push(
         fs.collection("expenses").get({source:"server"}).then(snap=>{
           const list=snap.docs.map(d=>d.data()).sort((a,b)=>new Date(b.at||b.date||0)-new Date(a.at||a.date||0));
           setExpenses(list);
@@ -1958,16 +2004,21 @@ function App({firebaseConfig,onResetConfig}){
         fs.doc("meta/laborSettings").get({source:"server"}).then(s=>{setLaborSettings(s.exists?s.data():{})}),
         fs.doc("meta/carpenters").get({source:"server"}).then(s=>{setCarpenters(s.exists?(s.data().list||[]):[])}),
         fs.doc("meta/rackBands").get({source:"server"}).then(s=>{setRackBands(s.exists?(s.data().list||[]):[])}),
-        fs.doc("meta/rackSplits").get({source:"server"}).then(s=>{setRackSplits(s.exists?(s.data().list||[]):[])}),
-      ];
-      // ── আগে সবসময় "সিঙ্ক সফল" ধরে নেওয়া হতো, orders আনতে ব্যর্থ হলেও — Promise.allSettled
-      // কখনো reject করে না, তাই নিচের .then() ব্যর্থতা সত্ত্বেও চলত এবং "✅ তথ্য তাজা" দেখাত,
-      // কোনো সতর্কতা ছাড়াই। এটাই দুই ডিভাইসে ভিন্ন সংখ্যা দেখানোর মূল কারণ ছিল — একটা ডিভাইস
-      // চুপচাপ পুরনো তথ্য নিয়ে "তাজা" দাবি করে যাচ্ছিল। এখন সবচেয়ে জরুরি orders কলটা আলাদাভাবে
-      // পরীক্ষা করা হয়: ব্যর্থ হলে lastSyncAt আপডেট হয় না (তাই বিদ্যমান "তথ্য পুরনো" সতর্কতা ঠিক
-      // সময়ে দেখাবে), আর পরপর ৩ বার (~১ মিনিট) ব্যর্থ হলে স্পষ্ট সংযোগ-সতর্কতা দেখানো হয় ──
+        fs.doc("meta/rackSplits").get({source:"server"}).then(s=>{setRackSplits(s.exists?(s.data().list||[]):[])})
+      );
       return Promise.allSettled(jobs).then((results)=>{
-        const ordersOk=results[0]&&results[0].status==="fulfilled";
+        const ordersRes=results[0];
+        const ordersOk=ordersRes&&ordersRes.status==="fulfilled";
+        // ── কোটা শেষ (resource-exhausted): এটাই একমাত্র অবস্থা যেটা সফটওয়্যার নিজে সারাতে পারে না
+        // — Firebase-এর দিনের সীমা শেষ, তাই পড়াই সম্ভব না, প্রতিটা ডিভাইস তখন নিজের পুরনো ক্যাশ
+        // দেখাতে থাকে (এভাবেই ডিভাইসে ডিভাইসে সংখ্যা আলাদা হয়ে যায়)। ধরা পড়লে ১০ মিনিট থেমে
+        // থাকা হয়, যাতে অবস্থা আরও খারাপ না হয় ──
+        const quotaHit=results.some(r=>r.status==="rejected"&&r.reason&&(r.reason.code==="resource-exhausted"||/quota|resource-exhausted/i.test(r.reason.message||"")));
+        if(quotaHit){
+          quotaBackoffUntilRef.current=Date.now()+600000;
+          setConnError("Firebase-এর দিনের পড়ার সীমা শেষ হয়ে গেছে — এই অবস্থায় ডিভাইসগুলো নিজের পুরনো তথ্য দেখাতে থাকে। সীমা রিসেট হলে (পরদিন) নিজে থেকেই ঠিক হয়ে যাবে।");
+          return;
+        }
         if(ordersOk){
           syncFailCountRef.current=0;
           setLastSyncAt(new Date());
@@ -1979,12 +2030,19 @@ function App({firebaseConfig,onResetConfig}){
       });
     };
     refreshFromServerRef.current=refreshFromServer;
+    // ── কোনো টাইমার নেই। প্রতিটা কালেকশনেই রিয়েল-টাইম লিসেনার (onSnapshot) বসানো আছে — Firebase
+    // সেখানে শুধু যেই ডকুমেন্ট আসলে বদলেছে সেটুকুরই হিসাব নেয়, বাকি সময় বসে থাকলে কোনো খরচ নেই।
+    // অর্থাৎ "শুধু নতুন পরিবর্তনটুকু সব ডিভাইসে পাঠানো" — এটা আগে থেকেই চালু ছিল, আর প্রতি ২০
+    // সেকেন্ডের ওই পুরো-ডেটা পড়াটা তার উপরে সম্পূর্ণ বাড়তি অপচয় ছিল, যা দিনের কোটা শেষ করে
+    // দিচ্ছিল। এখন সার্ভারের সাথে পুরো মিলিয়ে দেখা হয় শুধু তখনই যখন অ্যাপটা খোলা/সামনে আনা হয়
+    // (লিংকে ক্লিক করা, ট্যাবে ফেরা, নেট ফিরে আসা) — তখন একবার, তাতেই সব ডিভাইসে এক তথ্য নিশ্চিত ──
     const onWake=()=>{refreshFromServer();retryPendingWrites()};
     document.addEventListener("visibilitychange",onWake);
     window.addEventListener("focus",onWake);
     window.addEventListener("online",onWake);
-    const syncInterval=setInterval(onWake,20000);
-    return()=>{clearInterval(syncInterval);document.removeEventListener("visibilitychange",onWake);window.removeEventListener("focus",onWake);window.removeEventListener("online",onWake)};
+    // চালু হওয়ার পরপরই একবার — এতে এই ডিভাইসে আটকে থাকা কোনো অর্ডার সাথে সাথেই সার্ভারে চলে যায়
+    const firstReconcile=setTimeout(()=>{refreshFromServer(true,false)},10000);
+    return()=>{clearTimeout(firstReconcile);document.removeEventListener("visibilitychange",onWake);window.removeEventListener("focus",onWake);window.removeEventListener("online",onWake)};
   },[]);
 
   const saveDb=(newDb)=>{
@@ -2155,6 +2213,15 @@ function App({firebaseConfig,onResetConfig}){
   // যাতে সব জায়গায় (Transport Slip, Usage Analysis) একই কোড তৈরি হয়
   const woodSettingsWithBands=useMemo(()=>({...woodSettings,__rackBands:rackBands}),[woodSettings,rackBands]);
 
+  if(!tabActive)return<div style={{padding:"40px 24px",textAlign:"center",maxWidth:420,margin:"60px auto"}}>
+    <div style={{fontSize:9,color:"#ccc",marginBottom:12}}>v{BUILD_TAG}</div>
+    <div style={{fontSize:34,marginBottom:12}}>🔁</div>
+    <div style={{fontSize:16,fontWeight:800,color:"#334155",marginBottom:10}}>এই ট্যাবটি নিষ্ক্রিয়</div>
+    <div style={{fontSize:12.5,color:"#64748b",lineHeight:1.7,marginBottom:20}}>
+      এই ডিভাইসে নতুন একটা ট্যাবে অ্যাপটি খোলা হয়েছে, তাই সেটিই এখন চালু আছে। প্রতি ডিভাইসে একটাই ট্যাব চালু রাখা হয় — এতে সব জায়গায় একই তথ্য থাকে।
+    </div>
+    <button onClick={()=>{try{localStorage.setItem("rf_active_tab",JSON.stringify({id:tabIdRef.current,ts:Date.now()}))}catch(e){}window.location.reload()}} style={{background:RED,color:"white",border:"none",borderRadius:9,padding:"12px 22px",fontSize:13,fontWeight:700}}>এই ট্যাবেই চালু করুন</button>
+  </div>;
   if(!db){
     if(connError)return<div style={{padding:30,textAlign:"center",maxWidth:480,margin:"40px auto"}}>
       <div style={{fontSize:9,color:"#ccc",marginBottom:8}}>{BUILD_TAG}</div>
