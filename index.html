@@ -35,7 +35,7 @@ button{cursor:pointer}
 <body>
 <div id="root"></div>
 <script type="text/babel">
-const {useState,useEffect,useRef,useMemo}=React;
+const {useState,useEffect,useLayoutEffect,useRef,useMemo}=React;
 const RED="#C41E3A";
 // ── চার্টের জন্য নরম/হালকা রঙ — মৌসুমি প্রবণতা চার্টের ধাঁচ অনুসরণ করে। এগুলো শুধু
 // চার্ট/গ্রাফের বার-রঙে ব্যবহার হয়; বাটন-ব্যাজের মতো UI-এর অন্য জায়গায় RED/PAY আগের
@@ -104,7 +104,7 @@ function compressImage(file,maxDim=1200,quality=0.82,maxBytes=110000){
 /* ── FULL-RESOLUTION LOCAL FOLDER STORAGE (desktop Chrome/Edge/Brave only) ──
    Original, uncompressed images are saved as real files in a folder you choose
    on your computer. Only a small compressed thumbnail syncs to the cloud/mobile. */
-const BUILD_TAG="4.45";
+const BUILD_TAG="4.61";
 const FS_SUPPORTED=typeof window!=="undefined"&&"showDirectoryPicker" in window;
 function idbOpen(){
   return new Promise((resolve,reject)=>{
@@ -1126,6 +1126,7 @@ function S6({order,onPrint,onUpdateOrder,onSetDelivered,onPhotoChange,onRemovePh
   const[customDeliveredDate,setCustomDeliveredDate]=useState(false);
   const[deliveredDateVal,setDeliveredDateVal]=useState(todayStr());
   const markDelivered=()=>{
+    if(due>0){alert("ফুল পেমেন্ট ছাড়া ডেলিভারি সম্পন্ন করা যাবে না — বাকি "+money(due));return}
     if(window.confirm("এই অর্ডারটি ডেলিভারি সম্পন্ন হয়েছে বলে চিহ্নিত করতে চান? এটি 'চলমান অর্ডার' লিস্ট থেকে সরে 'ডেলিভারড' তালিকায় যাবে।")){
       onSetDelivered(order.no,true,customDeliveredDate?(deliveredDateVal||todayStr()):todayStr());
     }
@@ -1138,11 +1139,13 @@ function S6({order,onPrint,onUpdateOrder,onSetDelivered,onPhotoChange,onRemovePh
     </div>
     {printLocked&&<div className="no-print" style={{padding:"7px 14px",background:"#fff7ed",borderBottom:"1px solid #fed7aa",fontSize:10,color:"#9a3412"}}>⚠️ ফুল পেমেন্ট হওয়ার আগে ডেলিভারি রিসিপ্ট প্রিন্ট করা যাবে না — বাকি আছে {money(due)}। ছবি যোগ করা ও দেখা এখনই করতে পারবেন।</div>}
     {!order.delivered&&<div className="no-print" style={{padding:"8px 14px",background:"#f0fdfa",borderBottom:"1px solid #eee"}}>
+      {printLocked?<div style={{textAlign:"center",padding:"9px",fontSize:12,color:"#aaa",fontWeight:600}}>🔒 ফুল পেমেন্ট ছাড়া ডেলিভারি সম্পন্ন করা যাবে না — বাকি {money(due)}</div>:<>
       <label style={{display:"flex",alignItems:"center",gap:8,fontSize:11,fontWeight:600,color:"#0f766e",marginBottom:8,cursor:"pointer"}}>
         <input type="checkbox" checked={customDeliveredDate} onChange={e=>setCustomDeliveredDate(e.target.checked)}/>📅 তারিখ পরিবর্তন করুন
       </label>
       {customDeliveredDate&&<div style={{marginBottom:8}}><DateInput value={deliveredDateVal} onChange={setDeliveredDateVal} accent="#0f766e"/></div>}
       <button onClick={markDelivered} style={{width:"100%",background:"#0f766e",color:"white",border:"none",borderRadius:8,padding:"9px",fontSize:12,fontWeight:700}}>✅ ডেলিভারি সম্পন্ন হয়েছে — চিহ্নিত করুন</button>
+      </>}
     </div>}
     {order.delivered&&<div className="no-print" style={{padding:"8px 14px",background:"#dcfce7",textAlign:"center",fontSize:11,fontWeight:700,color:"#166534"}}>✅ ডেলিভারি সম্পন্ন হয়েছে ({fmtDate(order.deliveredAt)})</div>}
     <div ref={captureRef}>
@@ -1400,18 +1403,35 @@ function FirebaseSetup({onSaved}){
 // window ইভেন্টের মাধ্যমে যেকোনো জায়গা থেকে খোলা যায় (প্রতিটা কম্পোনেন্টে আলাদা করে prop
 // পাঠাতে হয় না) ──
 const openLightbox=(src)=>{if(src)window.dispatchEvent(new CustomEvent("open-lightbox",{detail:{src}}))};
+// ── ছবির লাইটবক্স আর App-এর ব্যাক-বাটন হ্যান্ডলার — দুটো জায়গাতেই লাগে, তাই মডিউল-লেভেলে।
+// pending সত্যি থাকা মানে: একটা হিস্ট্রি-ধাপ যোগ করা আছে যেটা এখনো "খরচ" হয়নি — App-এর
+// একমাত্র popstate হ্যান্ডলারই এটা পড়ে/সাফ করে, যাতে দুটো আলাদা popstate-লিসেনার একসাথে
+// রেস করে একই ব্যাক-প্রেসে দুটো ভিন্ন কাজ (ছবি বন্ধ + পেজও পাল্টে যাওয়া) না করে ফেলে ──
+const lightboxState={pending:false,closeFn:null};
 function ImageLightbox(){
   const[src,setSrc]=useState(null);
   const[zoomed,setZoomed]=useState(false);
+  useEffect(()=>{lightboxState.closeFn=()=>setSrc(null)},[]);
   useEffect(()=>{
-    const handler=(e)=>{setSrc(e.detail.src);setZoomed(false)};
+    const handler=(e)=>{
+      setSrc(e.detail.src);setZoomed(false);
+      window.history.pushState({lightbox:true},"");
+      lightboxState.pending=true;
+    };
     window.addEventListener("open-lightbox",handler);
     return()=>window.removeEventListener("open-lightbox",handler);
   },[]);
+  // X বাটনে/বাইরে ট্যাপে বন্ধ করলে history.back() ডেকে সেই একই যোগ-করা ধাপটা "খরচ" করে দেওয়া
+  // হয় — ফলে তৈরি হওয়া popstate-টা App-এর onPop-ই ধরবে (এই কম্পোনেন্ট আলাদাভাবে না), তাই কোনো
+  // রেস কন্ডিশন নেই। পরের বার সত্যিকারের ব্যাক চাপলে তখন যেন বাড়তি একটা ধাপ খরচ না হয়ে যায়।
+  const closeViaButton=()=>{
+    if(lightboxState.pending)window.history.back();
+    else setSrc(null);
+  };
   if(!src)return null;
-  return<div className="no-print" onClick={()=>setSrc(null)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,.92)",zIndex:9999,display:"flex",alignItems:"center",justifyContent:"center",overflow:"auto",WebkitOverflowScrolling:"touch"}}>
+  return<div className="no-print" onClick={closeViaButton} style={{position:"fixed",inset:0,background:"rgba(0,0,0,.92)",zIndex:9999,display:"flex",alignItems:"center",justifyContent:"center",overflow:"auto",WebkitOverflowScrolling:"touch"}}>
     <img src={src} onClick={e=>{e.stopPropagation();setZoomed(z=>!z)}} style={zoomed?{maxWidth:"none",width:"auto",margin:"auto",cursor:"zoom-out"}:{maxWidth:"96%",maxHeight:"92%",objectFit:"contain",cursor:"zoom-in"}}/>
-    <button onClick={()=>setSrc(null)} style={{position:"fixed",top:14,right:14,background:"rgba(255,255,255,.18)",color:"white",border:"none",borderRadius:"50%",width:42,height:42,fontSize:19}}>✕</button>
+    <button onClick={e=>{e.stopPropagation();closeViaButton()}} style={{position:"fixed",top:14,right:14,background:"rgba(255,255,255,.18)",color:"white",border:"none",borderRadius:"50%",width:42,height:42,fontSize:19}}>✕</button>
     <div style={{position:"fixed",bottom:16,left:0,right:0,textAlign:"center",color:"rgba(255,255,255,.6)",fontSize:11}} className="no-print">{zoomed?"আবার ট্যাপ করুন — ছোট করতে":"ট্যাপ করুন — বড় করতে"}</div>
   </div>
 }
@@ -1502,6 +1522,11 @@ function App({firebaseConfig,onResetConfig}){
   useEffect(()=>{
     window.history.replaceState({depth:1},"");
     const onPop=()=>{
+      if(lightboxState.pending){
+        lightboxState.pending=false;
+        if(lightboxState.closeFn)lightboxState.closeFn();
+        return; // এই ব্যাক-প্রেসটা শুধু ছবি বন্ধ করার জন্যই ছিল — নেভিগেশন স্ট্যাক অক্ষত থাকবে
+      }
       setNavStack(prev=>{
         if(prev.length<=1)return prev;
         const popped=prev[prev.length-1];
@@ -1512,6 +1537,11 @@ function App({firebaseConfig,onResetConfig}){
         if(popped.page==="woodstock"&&popped.view==="detail"&&popped.lotId){
           setHighlightNo("lot:"+popped.lotId);
           setTimeout(()=>setHighlightNo(n=>n===("lot:"+popped.lotId)?null:n),3000);
+        }
+        if(popped.page==="manage"&&(popped.tab==="edit"||popped.tab==="gallery")&&popped.selCat&&popped.selVar){
+          const vKey="variant:"+popped.selCat+"__"+popped.selVar;
+          setHighlightNo(vKey);
+          setTimeout(()=>setHighlightNo(n=>n===vKey?null:n),3000);
         }
         return prev.slice(0,-1);
       });
@@ -2138,6 +2168,25 @@ function App({firebaseConfig,onResetConfig}){
     if(draft&&draft.no===orderNo)setDraft(prev=>({...prev,payments:[...(prev.payments||[]),withId]}));
     if(fsRef.current)fsRef.current.collection("orders").doc(orderNo).set({payments:firebase.firestore.FieldValue.arrayUnion(withId)},{merge:true}).catch(err=>alert("⚠️ পেমেন্ট সিঙ্ক করতে সমস্যা হয়েছে — ইন্টারনেট সংযোগ যাচাই করুন: "+err.message));
   };
+  // ── এতদিন কোনো পেমেন্ট এন্ট্রি এডিট বা মোছার উপায়ই ছিল না, শুধু যোগ করা যেত — ভুল টাকা
+  // বসে গেলে (যেমন বাকির চেয়ে বেশি) ঠিক করার কোনো রাস্তা ছিল না। এখন থেকে পুরো payments
+  // অ্যারেটাই নতুন করে সেট করতে হয় (arrayUnion দিয়ে নির্দিষ্ট আইটেম বদলানো/মোছা যায় না) ──
+  const updateOrderPayment=(orderNo,paymentId,updatedFields)=>{
+    const order=orders.find(o=>o.no===orderNo);
+    if(!order)return;
+    const newPayments=(order.payments||[]).map(p=>p.id===paymentId?{...p,...updatedFields}:p);
+    setOrders(prev=>prev.map(o=>o.no===orderNo?{...o,payments:newPayments}:o));
+    if(draft&&draft.no===orderNo)setDraft(prev=>({...prev,payments:newPayments}));
+    if(fsRef.current)fsRef.current.collection("orders").doc(orderNo).set({payments:newPayments},{merge:true}).catch(err=>alert("⚠️ পেমেন্ট আপডেট সিঙ্ক করতে সমস্যা হয়েছে: "+err.message));
+  };
+  const deleteOrderPayment=(orderNo,paymentId)=>{
+    const order=orders.find(o=>o.no===orderNo);
+    if(!order)return;
+    const newPayments=(order.payments||[]).filter(p=>p.id!==paymentId);
+    setOrders(prev=>prev.map(o=>o.no===orderNo?{...o,payments:newPayments}:o));
+    if(draft&&draft.no===orderNo)setDraft(prev=>({...prev,payments:newPayments}));
+    if(fsRef.current)fsRef.current.collection("orders").doc(orderNo).set({payments:newPayments},{merge:true}).catch(err=>alert("⚠️ পেমেন্ট মুছতে সমস্যা হয়েছে: "+err.message));
+  };
   const setOrderDelivered=(orderNo,delivered,deliveredAt)=>{
     setOrders(prev=>prev.map(o=>o.no===orderNo?{...o,delivered,deliveredAt}:o));
     if(draft&&draft.no===orderNo)setDraft(prev=>({...prev,delivered,deliveredAt}));
@@ -2245,10 +2294,10 @@ function App({firebaseConfig,onResetConfig}){
     </div>;
     return<div style={{padding:40,textAlign:"center"}}><div style={{fontSize:9,color:"#ccc",marginBottom:10}}>{BUILD_TAG}</div>সিঙ্ক হচ্ছে...</div>;
   }
-  if(page==="preview")return<Preview order={viewed||draft} onBack={goBack} slip={slip} setSlip={setSlip} onUpdate={updateOrder} onAddPayment={addOrderPayment} onSetDelivered={setOrderDelivered} onDelete={deleteOrderPermanently} db={db} saveDb={saveDb} carpenters={carpenters} saveCarpenters={saveCarpenters} galleries={galleries} saveGalleryEntry={saveGalleryEntry} woodSettings={woodSettingsWithBands} laborSettings={laborSettings} workers={workers} allOrders={orders} rackSplits={rackSplits}/>;
+  if(page==="preview")return<Preview order={viewed||draft} onBack={goBack} slip={slip} setSlip={setSlip} onUpdate={updateOrder} onAddPayment={addOrderPayment} onUpdatePayment={updateOrderPayment} onDeletePayment={deleteOrderPayment} onSetDelivered={setOrderDelivered} onDelete={deleteOrderPermanently} db={db} saveDb={saveDb} carpenters={carpenters} saveCarpenters={saveCarpenters} galleries={galleries} saveGalleryEntry={saveGalleryEntry} woodSettings={woodSettingsWithBands} laborSettings={laborSettings} workers={workers} allOrders={orders} rackSplits={rackSplits}/>;
   if(page==="form")return<Form onSave={saveOrder} onBack={goBack} db={db} saveDb={saveDb} galleries={galleries} woodSettings={woodSettings} laborSettings={laborSettings} orders={orders} getNextOrderNumber={getNextOrderNumber}/>;
   if(page==="history")return<Hist orders={orders} db={db} onBack={goBack} onView={o=>navigate({page:"preview",orderNo:o.no,slip:0})} highlightNo={highlightNo} q={curScreen.q||""} setQ={q=>replaceTop({...curScreen,q})} statusFilter={curScreen.statusFilter||"all"} setStatusFilter={statusFilter=>replaceTop({...curScreen,statusFilter})} catFilter={curScreen.catFilter||"all"} setCatFilter={catFilter=>replaceTop({...curScreen,catFilter})} sortMode={curScreen.sortMode||"recent"} setSortMode={sortMode=>replaceTop({...curScreen,sortMode})}/>;
-  if(page==="manage")return<ManageDB db={db} saveDb={saveDb} galleries={galleries} saveGalleryEntry={saveGalleryEntry} onBack={goBack}/>;
+  if(page==="manage")return<ManageDB db={db} saveDb={saveDb} galleries={galleries} saveGalleryEntry={saveGalleryEntry} onBack={goBack} navigate={navigate} goBack={goBack} replaceTop={replaceTop} curScreen={curScreen} highlightNo={highlightNo}/>;
   if(page==="woodstock")return<WoodStockPage woodLots={woodLots} saveWoodLots={saveWoodLots} addLotPayment={addLotPayment} woodSettings={woodSettingsWithBands} saveWoodSettings={saveWoodSettings} laborSettings={laborSettings} saveLaborSettings={saveLaborSettings} rackSplits={rackSplits} addRackSplit={addRackSplit} rackBands={rackBands} addRackBand={addRackBand} removeRackBand={removeRackBand} payrollWeeks={payrollWeeks} workers={workers} orders={orders} expenses={expenses} onBack={goBack} view={curScreen.view||"list"} lotId={curScreen.lotId||null} onOpenList={()=>navigate({page:"woodstock",view:"list"})} onOpenDetail={lotId=>navigate({page:"woodstock",view:"detail",lotId})} onOpenNew={()=>navigate({page:"woodstock",view:"new"})} onOpenRates={()=>navigate({page:"woodstock",view:"rates"})} onOpenUsage={()=>navigate({page:"woodstock",view:"usage"})} highlightNo={highlightNo}/>;
   if(page==="expense")return<ExpensePage expenses={expenses} onSave={saveExpense} onBack={goBack}/>;
   if(page==="payroll")return<PayrollPage workers={workers} saveWorker={saveWorker} deleteWorker={deleteWorker} payrollWeeks={payrollWeeks} savePayrollWeek={savePayrollWeek} updateAttendance={updateAttendance} addAdvanceEntry={addAdvanceEntry} removeAdvanceEntry={removeAdvanceEntry} onBack={goBack}/>;
@@ -2558,7 +2607,7 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
       return{label:String(y),count:yOrders.length,revenue,growthPct};
     });
 
-    // Best month ever (by order count) vs same month this year
+    // ── বর্তমান মাসটা গত ৬ বছরে (এই বছরসহ) কেমন গেছে — টাকার ভিত্তিতে, প্রতি বছরের প্রবৃদ্ধি%সহ ──
     const monthlyAgg={}; // key "y-m" -> {count, revenue}
     activeOrders.forEach(o=>{
       const od=new Date(o.cust.date);
@@ -2567,22 +2616,16 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
       monthlyAgg[key].count+=1;
       monthlyAgg[key].revenue+=(parseFloat(o.cust.total)||0);
     });
-    const monthlyList=Object.values(monthlyAgg);
-    let bestMonth=null;
-    if(monthlyList.length>0)bestMonth=monthlyList.reduce((a,b)=>b.count>a.count?b:a);
-    let bestMonthCompare=null;
-    if(bestMonth){
-      const thisYearSameMonth=monthlyAgg[`${now.getFullYear()}-${bestMonth.m}`]||{count:0,revenue:0};
-      bestMonthCompare={
-        monthLabel:monthName(bestMonth.m),
-        bestYear:bestMonth.y,
-        bestCount:bestMonth.count,
-        bestRevenue:bestMonth.revenue,
-        thisYear:now.getFullYear(),
-        thisCount:thisYearSameMonth.count,
-        thisRevenue:thisYearSameMonth.revenue
-      };
+    const curMonthIdx=now.getMonth();
+    const revenueInMonthYear=(y)=>(monthlyAgg[`${y}-${curMonthIdx}`]||{revenue:0}).revenue;
+    const sameMonthTrend=[];
+    for(let y=curYearForYearly-5;y<=curYearForYearly;y++){
+      const agg=monthlyAgg[`${y}-${curMonthIdx}`]||{count:0,revenue:0};
+      const prevRevenue=revenueInMonthYear(y-1);
+      const growthPct=prevRevenue>0?((agg.revenue-prevRevenue)/prevRevenue)*100:null;
+      sameMonthTrend.push({label:String(y),count:agg.count,revenue:agg.revenue,growthPct});
     }
+    const sameMonthLabel=monthName(curMonthIdx);
 
     // Wood stock pie (uncut/available logs by wood type)
     const WOOD_COLORS={S:CHART_SOFT_ORANGE,M:CHART_SOFT_RED,A:CHART_SOFT_GREEN,K:CHART_SOFT_TEAL,E:CHART_SOFT_PURPLE};
@@ -2761,7 +2804,46 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
     const EXP_PIE_COLORS=[CHART_SOFT_TEAL,CHART_SOFT_BLUE,CHART_SOFT_ORANGE,CHART_SOFT_PURPLE,CHART_SOFT_PINK,CHART_SOFT_GREY,"#d4b26a",CHART_SOFT_GREEN];
     const expensePie=Object.entries(expByCat).sort((a,b)=>b[1]-a[1]).map(([label,value],i)=>({label,value,color:EXP_PIE_COLORS[i%EXP_PIE_COLORS.length]}));
 
-    return{running:withDays,monthlyOrders,monthlyExpense,yoy,totalRevenue,totalExpense,catPie,thisMonthCount:thisMonthOrders.length,avgOrderValue,totalOutstanding,topCategoryRanked,yearly,bestMonthCompare,stockPie,expensePie,payables,totalPayable,cfInflow,cfOutflow,cfNet,deptAvg,deptAvgMax,stuckItems,payrollProdByMonth,validPerCft,setLabourRate,emptyWoodModels,repeatRate,repeatCount:repeatCusts.length,totalCustCount:custList.length,repeatRevenueShare,stockAlerts,readyNotCollected,readyValueStuck,avgProdDays,recentAvgProd,olderAvgProd,prodCount:prodTimes.length,seasonal,seasonalMax,seasonalYearSpan,woodPriceAlerts,catProfitRanked,throughputRanked,bottleneckDeptBn,workerRanked};
+    // ── প্রতিটা খরচ-ক্যাটাগরির জন্য আরও বিস্তারিত: সর্বোচ্চ খরচের মাস, শীর্ষ সাপ্লায়ার, গড়
+    // মাসিক খরচ (এই ক্যাটাগরির প্রথম এন্ট্রি থেকে এখন পর্যন্ত প্রকৃত সময় ধরে — নতুন শুরু হওয়া
+    // ক্যাটাগরিতে পুরো ১ বছর ধরে ভাগ করলে ভুল কম দেখাত), আর প্রবণতা (শেষ ৩ মাস বনাম আগের ৩ মাস) ──
+    const expCatDetail=Object.keys(expByCat).map(label=>{
+      const catAll=expenses.filter(e=>{
+        const cat=EXP_CATS.find(c=>c.id===e.category);
+        return(cat?cat.bn:e.category)===label;
+      });
+      const catYear=catAll.filter(e=>new Date(e.date)>=oneYearAgo);
+      const byMonth={};
+      catYear.forEach(e=>{
+        const d=new Date(e.date);
+        const key=`${d.getFullYear()}-${d.getMonth()}`;
+        byMonth[key]=(byMonth[key]||0)+(parseFloat(e.total)||0);
+      });
+      let peakMonthLabel=null,peakVal=0;
+      Object.entries(byMonth).forEach(([key,val])=>{
+        if(val>peakVal){peakVal=val;const[y,m]=key.split("-");peakMonthLabel=monthName(parseInt(m))+" "+y}
+      });
+      const bySupplier={};
+      catYear.forEach(e=>{
+        const s=(e.supplier||"").trim();
+        if(!s)return;
+        bySupplier[s]=(bySupplier[s]||0)+(parseFloat(e.total)||0);
+      });
+      const topSupplierEntry=Object.entries(bySupplier).sort((a,b)=>b[1]-a[1])[0];
+      let avgMonthly=0;
+      if(catAll.length>0){
+        const earliest=new Date(Math.min(...catAll.map(e=>new Date(e.date).getTime())));
+        const monthsSpan=Math.max(1,(now.getFullYear()-earliest.getFullYear())*12+(now.getMonth()-earliest.getMonth())+1);
+        avgMonthly=catAll.reduce((s,e)=>s+(parseFloat(e.total)||0),0)/monthsSpan;
+      }
+      const monthsAgo=(n)=>{const d=new Date(now);d.setMonth(d.getMonth()-n);return d};
+      const last3=catAll.filter(e=>{const d=new Date(e.date);return d>=monthsAgo(3)&&d<new Date(now.getTime()+86400000)}).reduce((s,e)=>s+(parseFloat(e.total)||0),0);
+      const prev3=catAll.filter(e=>{const d=new Date(e.date);return d>=monthsAgo(6)&&d<monthsAgo(3)}).reduce((s,e)=>s+(parseFloat(e.total)||0),0);
+      const trendPct=prev3>0?((last3-prev3)/prev3)*100:null;
+      return{label,total:expByCat[label],peakMonthLabel,peakVal,topSupplier:topSupplierEntry?topSupplierEntry[0]:null,topSupplierVal:topSupplierEntry?topSupplierEntry[1]:0,avgMonthly,trendPct};
+    }).sort((a,b)=>b.total-a.total);
+
+    return{running:withDays,monthlyOrders,monthlyExpense,yoy,totalRevenue,totalExpense,catPie,thisMonthCount:thisMonthOrders.length,avgOrderValue,totalOutstanding,topCategoryRanked,yearly,sameMonthTrend,sameMonthLabel,stockPie,expensePie,expCatDetail,payables,totalPayable,cfInflow,cfOutflow,cfNet,deptAvg,deptAvgMax,stuckItems,payrollProdByMonth,validPerCft,setLabourRate,emptyWoodModels,repeatRate,repeatCount:repeatCusts.length,totalCustCount:custList.length,repeatRevenueShare,stockAlerts,readyNotCollected,readyValueStuck,avgProdDays,recentAvgProd,olderAvgProd,prodCount:prodTimes.length,seasonal,seasonalMax,seasonalYearSpan,woodPriceAlerts,catProfitRanked,throughputRanked,bottleneckDeptBn,workerRanked};
   },[orders,expenses,db,woodLots,woodSettings,laborSettings,workers,payrollWeeks,alertSettings]);
 
   return<div style={{minHeight:"100vh",background:`linear-gradient(150deg,${RED} 0%,#8B0020 100%)`,position:"relative"}}>
@@ -2795,19 +2877,6 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
       </div>}
 
       {/* স্তরে লাফ দেওয়ার বার — লম্বা স্ক্রলে নিচের অংশ যাতে হারিয়ে না যায় */}
-      {(()=>{
-        // ── তথ্য কতক্ষণ আগে সিঙ্ক হয়েছে — মোবাইল ও পিসিতে ভিন্ন সংখ্যা দেখা গেলে
-        // এখান থেকেই বোঝা যাবে কোন ডিভাইসের তথ্য পুরনো ──
-        const[nowTick,setNowTick]=[Date.now(),null];
-        const secs=lastSyncAt?Math.round((nowTick-new Date(lastSyncAt).getTime())/1000):null;
-        const stale=secs!==null&&secs>150;
-        return<div className="no-print" style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,background:stale?"#fff7ed":"#f8fafc",border:`1px solid ${stale?"#fed7aa":"#eee"}`,borderRadius:9,padding:"7px 10px",marginBottom:10}}>
-          <span style={{fontSize:9,color:stale?"#9a3412":"#888"}}>
-            {secs===null?"এখনো সিঙ্ক হয়নি":stale?`⚠️ তথ্য ${Math.round(secs/60)} মিনিট আগের — নতুন করে আনুন`:`✅ তথ্য তাজা (${secs} সেকেন্ড আগে সিঙ্ক)`}
-          </span>
-          <button onClick={()=>onManualRefresh&&onManualRefresh()} style={{background:"#eff6ff",color:"#1d4ed8",border:"1px solid #bfdbfe",borderRadius:7,padding:"6px 11px",minHeight:34,fontSize:10,fontWeight:700,flexShrink:0}}>🔄 নতুন করে আনুন</button>
-        </div>
-      })()}
       <div style={{position:"sticky",top:0,zIndex:20,background:"rgba(255,255,255,0.97)",backdropFilter:"blur(4px)",margin:"0 -16px 12px",padding:"7px 10px",borderBottom:"1px solid #eee",display:"flex",justifyContent:"space-between",gap:4,overflowX:"auto"}}>
         {[{e:"⚡",z:"z-urgent",c:"#b91c1c"},{e:"🔥",z:"z-today",c:"#0f766e"},{e:"📅",z:"z-trend",c:"#b45309"},{e:"📊",z:"z-health",c:"#1d4ed8"},{e:"🪵",z:"z-wood",c:"#065f46"},{e:"🚧",z:"z-perf",c:"#7c2d12"},{e:"⚙️",z:"z-sys",c:"#78716c"}].map(b=>{
           const isActive=activeZone===b.z;
@@ -2851,7 +2920,9 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
           <span style={{fontSize:12,fontWeight:700,color:"#1d4ed8"}}>📦 তৈরি শেষ, গ্রাহক নেননি ({stats.readyNotCollected.length}টি)</span>
         </div>
         <div style={{fontSize:9,color:"#3b5a9a",marginBottom:8}}>দোকানে জায়গা দখল করে আছে · আটকে থাকা টাকা: <strong>{money(stats.readyValueStuck)}</strong></div>
-        {stats.readyNotCollected.slice(0,6).map(o=><div key={o.no} onClick={()=>onViewDelivery(o)} style={{background:"white",borderRadius:8,marginBottom:6,cursor:"pointer",border:"1px solid #dbeafe",display:"flex",overflow:"hidden"}}>
+        {stats.readyNotCollected.slice(0,6).map(o=>{
+          const isHighlighted=highlightNo===o.no;
+          return<div key={o.no} onClick={()=>onViewDelivery(o)} style={{background:isHighlighted?"#e0f2fe":"white",borderRadius:8,marginBottom:6,cursor:"pointer",border:isHighlighted?"1px solid #7dd3fc":"1px solid #dbeafe",display:"flex",overflow:"hidden",transition:"background .4s"}}>
           {(o.deliveryImgs&&o.deliveryImgs[0])?
             <img src={o.deliveryImgs[0].src} onClick={e=>{e.stopPropagation();openLightbox(o.deliveryImgs[0].src)}} style={{width:64,alignSelf:"stretch",objectFit:"cover",flexShrink:0,cursor:"pointer"}}/>
             :<div style={{width:64,alignSelf:"stretch",background:"#f1f5f9",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,color:"#cbd5e1"}}>📦</div>}
@@ -2876,7 +2947,7 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
               }} style={{background:"#f0fdf4",color:"#166534",border:"none",borderRadius:6,padding:"8px 10px",minHeight:38,fontSize:9,fontWeight:700,flex:1}}>💬 WhatsApp</button>
             </div>
           </div>
-        </div>)}
+        </div>})}
         {stats.readyNotCollected.length>6&&<div style={{fontSize:9,color:"#3b5a9a",textAlign:"center"}}>...ও আরও {stats.readyNotCollected.length-6}টি</div>}
       </div>}
 
@@ -2941,13 +3012,25 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
         </div>)}
       </div>}
 
-      {/* Year over Year - এখন ৩ বছরের তুলনা */}
-      <div style={{marginBottom:16}}>
-        <div style={{fontWeight:700,fontSize:13,color:"#222",marginBottom:8}}>📈 বছর অনুযায়ী তুলনা (৩ বছর, একই মাস)</div>
+      {/* সর্বোচ্চ অর্ডারের মাস (আগে "সর্বকালের সেরা মাস বনাম এখন" ছিল) — এখন বর্তমান মাসটা গত ৬
+      বছরে কেমন গেছে তার প্রবণতা, বাৎসরিক চার্টের মতোই টাকাভিত্তিক, নিচে ছোট করে সংখ্যা, প্রতি
+      বছরের প্রবৃদ্ধি%সহ */}
+      {stats.sameMonthTrend&&stats.sameMonthTrend.some(m=>m.count>0)&&<div style={{marginBottom:16}}>
+        <div style={{fontWeight:700,fontSize:13,color:"#222",marginBottom:8}}>🏅 {stats.sameMonthLabel}-এর প্রবণতা (গত ৬ বছর)</div>
         <div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 8px"}}>
-          <TripleBarChart data={stats.yoy} labelA={String(now.getFullYear()-2)} labelB={String(now.getFullYear()-1)} labelC={String(now.getFullYear())}/>
+          {(()=>{const maxR=Math.max(...stats.sameMonthTrend.map(y=>y.revenue),1);return<div style={{display:"flex",alignItems:"stretch",gap:6,height:150}}>
+            {stats.sameMonthTrend.map(y=><div key={y.label} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",height:"100%"}}>
+              <div style={{fontSize:8,color:"#166534",fontWeight:700,marginBottom:2}}>{money(y.revenue)}</div>
+              <div style={{fontSize:9,color:"#666",marginBottom:2}}>{y.count}টি</div>
+              <div style={{flex:1,width:"100%",display:"flex",alignItems:"flex-end"}}>
+                <div style={{width:"100%",height:`${(y.revenue/maxR)*100}%`,background:CHART_SOFT_ORANGE,borderRadius:"3px 3px 0 0",minHeight:4}}></div>
+              </div>
+              <div style={{fontSize:9,color:"#999",marginTop:3}}>{y.label}</div>
+              <div style={{fontSize:8,marginTop:2,fontWeight:600,minHeight:11,visibility:y.growthPct===null?"hidden":"visible",color:y.growthPct>=0?CHART_SOFT_GREEN:CHART_SOFT_RED}}>{y.growthPct!==null?`${y.growthPct>=0?"↑":"↓"} ${Math.abs(y.growthPct).toFixed(0)}%`:"—"}</div>
+            </div>)}
+          </div>})()}
         </div>
-      </div>
+      </div>}
 
       {stats.seasonalYearSpan>=1&&stats.seasonalMax>0&&<div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 14px",marginBottom:14}}>
         <div style={{fontSize:12,fontWeight:700,color:"#b45309",marginBottom:3}}>📅 মৌসুমি প্রবণতা — কোন মাসে অর্ডার বেশি</div>
@@ -2961,42 +3044,29 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
         </div>
       </div>}
 
+      {/* Year over Year - এখন ৩ বছরের তুলনা */}
+      <div style={{marginBottom:16}}>
+        <div style={{fontWeight:700,fontSize:13,color:"#222",marginBottom:8}}>📈 বছর অনুযায়ী তুলনা (৩ বছর, একই মাস)</div>
+        <div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 8px"}}>
+          <TripleBarChart data={stats.yoy} labelA={String(now.getFullYear()-2)} labelB={String(now.getFullYear()-1)} labelC={String(now.getFullYear())}/>
+        </div>
+      </div>
+
       {/* Yearly totals - অর্ডার সংখ্যা ও মূল্য এখন একই চার্টে, বার + উপরে মূল্যের লেবেল */}
       {stats.yearly&&stats.yearly.length>1&&<div style={{marginBottom:16}}>
         <div style={{fontWeight:700,fontSize:13,color:"#222",marginBottom:8}}>📅 বাৎসরিক অর্ডার ও মূল্য (গত ৬ বছর)</div>
         <div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 8px"}}>
-          {(()=>{const maxR=Math.max(...stats.yearly.map(y=>y.revenue),1);return<div style={{display:"flex",alignItems:"flex-end",gap:6,height:110}}>
-            {stats.yearly.map(y=><div key={y.label} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"flex-end",height:"100%"}}>
+          {(()=>{const maxR=Math.max(...stats.yearly.map(y=>y.revenue),1);return<div style={{display:"flex",alignItems:"stretch",gap:6,height:150}}>
+            {stats.yearly.map(y=><div key={y.label} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",height:"100%"}}>
               <div style={{fontSize:8,color:"#166534",fontWeight:700,marginBottom:2}}>{money(y.revenue)}</div>
               <div style={{fontSize:9,color:"#666",marginBottom:2}}>{y.count}টি</div>
-              <div style={{width:"100%",height:`${(y.revenue/maxR)*100}%`,background:CHART_SOFT_BLUE,borderRadius:"3px 3px 0 0",minHeight:4}}></div>
+              <div style={{flex:1,width:"100%",display:"flex",alignItems:"flex-end"}}>
+                <div style={{width:"100%",height:`${(y.revenue/maxR)*100}%`,background:CHART_SOFT_BLUE,borderRadius:"3px 3px 0 0",minHeight:4}}></div>
+              </div>
               <div style={{fontSize:9,color:"#999",marginTop:3}}>{y.label}</div>
-              {y.growthPct!==null&&<div style={{fontSize:8,marginTop:2,fontWeight:600,color:y.growthPct>=0?CHART_SOFT_GREEN:CHART_SOFT_RED}}>{y.growthPct>=0?"↑":"↓"} {Math.abs(y.growthPct).toFixed(0)}%</div>}
+              <div style={{fontSize:8,marginTop:2,fontWeight:600,minHeight:11,visibility:y.growthPct===null?"hidden":"visible",color:y.growthPct>=0?CHART_SOFT_GREEN:CHART_SOFT_RED}}>{y.growthPct!==null?`${y.growthPct>=0?"↑":"↓"} ${Math.abs(y.growthPct).toFixed(0)}%`:"—"}</div>
             </div>)}
           </div>})()}
-        </div>
-      </div>}
-
-      {/* Best month comparison - এখন একটাই চার্ট (অর্ডার সংখ্যা), মূল্য উপরের বক্সেই আছে */}
-      {stats.bestMonthCompare&&stats.bestMonthCompare.bestCount>0&&<div style={{marginBottom:18}}>
-        <div style={{fontWeight:700,fontSize:13,color:"#222",marginBottom:8}}>🏅 সর্বোচ্চ অর্ডারের মাস — বনাম এই বছর</div>
-        <div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"14px"}}>
-          <div style={{fontSize:12,color:"#666",marginBottom:10,textAlign:"center"}}>
-            <strong>{stats.bestMonthCompare.monthLabel}</strong> মাসে সর্বোচ্চ অর্ডার হয়েছিল <strong>{stats.bestMonthCompare.bestYear}</strong> সালে
-          </div>
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:12}}>
-            <div style={{background:"#f8fafc",borderRadius:9,padding:"10px",textAlign:"center"}}>
-              <div style={{fontSize:10,color:"#888"}}>{stats.bestMonthCompare.bestYear} ({stats.bestMonthCompare.monthLabel})</div>
-              <div style={{fontSize:20,fontWeight:800,color:"#94a3b8"}}>{stats.bestMonthCompare.bestCount} অর্ডার</div>
-              <div style={{fontSize:11,color:"#64748b",marginTop:2}}>{money(stats.bestMonthCompare.bestRevenue)}</div>
-            </div>
-            <div style={{background:"#fff0f0",borderRadius:9,padding:"10px",textAlign:"center"}}>
-              <div style={{fontSize:10,color:"#888"}}>{stats.bestMonthCompare.thisYear} ({stats.bestMonthCompare.monthLabel})</div>
-              <div style={{fontSize:20,fontWeight:800,color:RED}}>{stats.bestMonthCompare.thisCount} অর্ডার</div>
-              <div style={{fontSize:11,color:RED,marginTop:2}}>{money(stats.bestMonthCompare.thisRevenue)}</div>
-            </div>
-          </div>
-          <DualBarChart data={[{label:stats.bestMonthCompare.monthLabel,a:stats.bestMonthCompare.bestCount,b:stats.bestMonthCompare.thisCount}]} labelA={`${stats.bestMonthCompare.bestYear} (সর্বোচ্চ)`} labelB={`${stats.bestMonthCompare.thisYear}`}/>
         </div>
       </div>}
 
@@ -3015,6 +3085,20 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
         <div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"14px"}}>
           <PieChart3D data={stats.expensePie}/>
         </div>
+        {stats.expCatDetail&&stats.expCatDetail.length>0&&<div style={{marginTop:10}}>
+          {stats.expCatDetail.map(c=><div key={c.label} style={{background:"white",border:"1px solid #eee",borderRadius:9,padding:"10px 12px",marginBottom:8}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+              <span style={{fontSize:12,fontWeight:700,color:"#333"}}>{c.label}</span>
+              <span style={{fontSize:13,fontWeight:800,color:"#166534"}}>{money(c.total)}</span>
+            </div>
+            <div style={{fontSize:9,color:"#666",lineHeight:1.7}}>
+              {c.peakMonthLabel&&<div>📅 সর্বোচ্চ খরচের মাস: <strong>{c.peakMonthLabel}</strong> ({money(c.peakVal)})</div>}
+              {c.topSupplier&&<div>🏪 শীর্ষ সাপ্লায়ার: <strong>{c.topSupplier}</strong> ({money(c.topSupplierVal)})</div>}
+              <div>📊 গড় মাসিক খরচ: <strong>{money(c.avgMonthly)}</strong></div>
+              {c.trendPct!==null&&<div>প্রবণতা (শেষ ৩ মাস বনাম আগের ৩ মাস): <strong style={{color:c.trendPct>0?CHART_SOFT_RED:CHART_SOFT_GREEN}}>{c.trendPct>0?"↑":"↓"} {Math.abs(c.trendPct).toFixed(0)}%</strong></div>}
+            </div>
+          </div>)}
+        </div>}
       </div>}
 
       {stats.catProfitRanked&&stats.catProfitRanked.length>0&&<div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 14px",marginBottom:14}}>
@@ -3187,7 +3271,6 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
           <span style={{width:8,height:8,borderRadius:"50%",background:online?"#16a34a":"#f59e0b",display:"inline-block"}}></span>
           {online?"স্বয়ংক্রিয় সিঙ্ক সক্রিয় — সব ডিভাইসে আপডেট হচ্ছে":"অফলাইন — ইন্টারনেট এলে সিঙ্ক হবে"}
         </div>}
-        <div><button onClick={onResetConfig} style={{background:"none",border:"none",color:"#aaa",fontSize:10,textDecoration:"underline",cursor:"pointer"}}>Firebase সংযোগ পরিবর্তন করুন</button></div>
       </div>
 
       {/* Data backup */}
@@ -3201,6 +3284,25 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
           <div style={{fontSize:9,color:"#78350f",marginBottom:7,lineHeight:1.5}}>প্রতিটা ডিভাইসে (ফোন/কম্পিউটার) এই কোড আলাদাভাবে একবার বসাতে হয়েছিল। দুই ডিভাইসে এই লেখাটা ভিন্ন হলে তারা আসলে দুইটা ভিন্ন ডেটাবেসে কথা বলছে — তখন নিচের "সার্ভার-সিঙ্ক পরীক্ষা"ও প্রতিটা ডিভাইসে আলাদাভাবে "✅ ঠিক আছে" দেখাবে, কারণ প্রতিটা নিজের ডেটাবেসের সাথে ঠিকই মিলছে, শুধু দুটো ডিভাইস একে অপরের সাথে মিলছে না। দুই ডিভাইসে পাশাপাশি রেখে এই লেখাটা মিলিয়ে দেখুন।</div>
           <div style={{fontFamily:"monospace",fontSize:12,fontWeight:700,color:"#92400e",background:"white",borderRadius:7,padding:"7px 10px",wordBreak:"break-all"}}>{projectId||"(পাওয়া যায়নি)"}</div>
         </div>
+
+        {(()=>{
+          const overpaid=(orders||[]).filter(o=>{
+            const paid=(o.payments||[]).reduce((s,p)=>s+(parseFloat(p.amount)||0),0);
+            return paid>(parseFloat(o.cust.total)||0)+1; // পূর্ণসংখ্যা-বৃত্তির সামান্য পার্থক্য উপেক্ষা করার জন্য ১ টাকা মার্জিন
+          });
+          if(!overpaid.length)return null;
+          return<div style={{marginTop:12,background:"#fef2f2",border:"1px solid #fca5a5",borderRadius:10,padding:"12px 14px"}}>
+            <div style={{fontSize:12,fontWeight:700,color:"#991b1b",marginBottom:3}}>⚠️ {overpaid.length}টা অর্ডারে মোট মূল্যের চেয়ে বেশি পেমেন্ট জমা আছে</div>
+            <div style={{fontSize:9,color:"#7f1d1d",marginBottom:8,lineHeight:1.5}}>টাইপো বা ভুল অঙ্কের কারণে হতে পারে — প্রতিটায় ঢুকে "গ্রাহক" ট্যাবে পেমেন্ট এন্ট্রি এডিট/মুছে ঠিক করে নিন।</div>
+            {overpaid.map(o=>{
+              const paid=(o.payments||[]).reduce((s,p)=>s+(parseFloat(p.amount)||0),0);
+              return<div key={o.no} onClick={()=>onView&&onView(o)} style={{background:"white",borderRadius:7,padding:"7px 9px",marginBottom:5,fontSize:10,cursor:"pointer",border:"1px solid #fecaca"}}>
+                <div style={{fontWeight:700}}>{o.cust.name} — {o.no}</div>
+                <div style={{color:"#991b1b",marginTop:1}}>মূল্য {money(o.cust.total)} · পরিশোধ {money(paid)} · বেশি {money(paid-(parseFloat(o.cust.total)||0))}</div>
+              </div>
+            })}
+          </div>
+        })()}
 
         <div style={{marginTop:12,background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 14px"}}>
           <div style={{fontSize:12,fontWeight:700,color:"#444",marginBottom:3}}>🔍 সার্ভার-সিঙ্ক পরীক্ষা</div>
@@ -3240,6 +3342,16 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
                 </>}
               </div>}
           </div>}
+        </div>
+
+        {/* ── ভুলে চাপলে যাতে পুরো অ্যাপ অচল না হয়ে যায় — একদম নিচে, আর সাধারণ ক্লিকের বদলে
+        RESET টাইপ করে নিশ্চিত করা লাগবে (resetDb-এর মতোই কড়া) ── */}
+        <div style={{marginTop:14,paddingTop:14,borderTop:"1px dashed #ddd",textAlign:"center"}}>
+          <button onClick={()=>{
+            const typed=window.prompt("⚠️ এটি করলে এই ডিভাইসের Firebase সংযোগ মুছে যাবে — নতুন করে সঠিক Firebase কোড না বসানো পর্যন্ত অ্যাপটি আর চলবে না। ভুল করে চাপে থাকলে এখনই বাতিল করুন (Cancel)।\n\nনিশ্চিত হলে নিচে ইংরেজিতে RESET লিখুন:");
+            if(!typed||typed.trim().toUpperCase()!=="RESET")return;
+            onResetConfig();
+          }} style={{background:"none",border:"none",color:"#aaa",fontSize:10,textDecoration:"underline",cursor:"pointer"}}>Firebase সংযোগ পরিবর্তন করুন</button>
         </div>
       </div></>}
     </div>
@@ -3339,8 +3451,8 @@ function ExpensePage({expenses,onSave,onBack}){
           <div>{lbl("রেট (৳) *")}<input type="number" value={form.rate} onChange={e=>setForm({...form,rate:e.target.value})} placeholder="0" style={inp}/></div>
         </div>
         {similarPurchases.length>0&&<div style={{background:"#fffbeb",border:"1px solid #fde68a",borderRadius:9,padding:"9px 12px",marginBottom:14}}>
-          <div style={{fontSize:10,fontWeight:700,color:"#92400e",marginBottom:6}}>📌 এই বা কাছাকাছি নামের আগের কেনাকাটা — দাম যাচাই করে নিন</div>
-          {similarPurchases.map((p,i)=><div key={i} style={{display:"flex",justifyContent:"space-between",fontSize:11,color:"#78350f",padding:"3px 0",borderTop:i>0?"1px dashed #fde68a":"none"}}>
+          <div style={{fontSize:10,fontWeight:700,color:"#92400e",marginBottom:6}}>📌 এই বা কাছাকাছি নামের আগের কেনাকাটা — ট্যাপ করে বসিয়ে দিন (পরিমাণ ছাড়া)</div>
+          {similarPurchases.map((p,i)=><div key={i} onClick={()=>setForm(f=>({...f,itemName:p.itemName,category:p.category||f.category,unit:p.unit||f.unit,rate:p.rate,supplier:p.supplier||"",supplierPhone:p.supplierPhone||"",payMethod:p.payMethod||f.payMethod}))} style={{display:"flex",justifyContent:"space-between",fontSize:11,color:"#78350f",padding:"6px 4px",borderTop:i>0?"1px dashed #fde68a":"none",cursor:"pointer",borderRadius:6}}>
             <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:"55%"}}>{p.itemName} · {fmtDate(p.date)}</span>
             <strong>{p.qty} {p.unit} × {money(p.rate)}</strong>
           </div>)}
@@ -4662,20 +4774,33 @@ function PayrollPage({workers,saveWorker,deleteWorker,payrollWeeks,savePayrollWe
 }
 
 /* ── MANAGE DB ── */
-function ManageDB({db,saveDb,galleries,saveGalleryEntry,onBack}){
-  const[tab,setTab]=useState("list");
+function ManageDB({db,saveDb,galleries,saveGalleryEntry,onBack,navigate,goBack,replaceTop,curScreen,highlightNo}){
+  // ── এই পেজের ভেতরের নেভিগেশন (তালিকা ↔ + ক্যাটাগরি ↔ + ভেরিয়েন্ট ↔ কাঠ সম্পাদনা ↔ ছবি) এখন
+  // নিজের সাময়িক মেমোরিতে না — অ্যাপের মূল নেভিগেশন-স্ট্যাকে থাকে (Hist-এর ফিল্টারের মতোই),
+  // যাতে ফোনের ব্যাক বাটন এক ধাপ করেই পেছাতে পারে, সরাসরি ড্যাশবোর্ডে চলে না যায় ──
+  const tab=curScreen.tab||"list";
+  const selCat=curScreen.selCat||"";
+  const selVar=curScreen.selVar||"";
+  const galleryCat=curScreen.selCat||"";
+  const galleryVar=curScreen.selVar||"";
+  const setTab=(t)=>navigate({page:"manage",tab:t});
   const[newCat,setNewCat]=useState({key:"",bn:"",en:""});
   const[newVar,setNewVar]=useState({catKey:"",key:"",bn:"",code:""});
-  const[selCat,setSelCat]=useState("");
-  const[selVar,setSelVar]=useState("");
   const[editSections,setEditSections]=useState(null);
   const[newPiece,setNewPiece]=useState({sectionIdx:0,bn:"",pc:"",h:"",l:"",w:""});
   const[expandedJointFor,setExpandedJointFor]=useState(null);
+  // ── "কাঠ" ট্যাবে ঢোকার সময় (বা ভিন্ন মডেলে গেলে) সম্পাদনার কপিটা তাজা করে নেওয়া — useLayoutEffect
+  // যাতে পুরনো মডেলের ডেটা এক ফ্রেমের জন্যও দেখা না যায় ──
+  useLayoutEffect(()=>{
+    if(tab==="edit"&&selCat&&selVar&&db[selCat]&&db[selCat].variants[selVar]){
+      setEditSections(JSON.parse(JSON.stringify(db[selCat].variants[selVar].sections)));
+    }
+  },[tab,selCat,selVar]);
 
   const addCategory=()=>{
     if(!newCat.key||!newCat.bn)return;
     const nd={...db,[newCat.key]:{bn:newCat.bn,en:newCat.en||newCat.bn,variants:{}}};
-    saveDb(nd);setNewCat({key:"",bn:"",en:""});setTab("list");
+    saveDb(nd);setNewCat({key:"",bn:"",en:""});goBack();
   };
   const addVariant=()=>{
     if(!newVar.catKey||!newVar.bn)return;
@@ -4683,10 +4808,10 @@ function ManageDB({db,saveDb,galleries,saveGalleryEntry,onBack}){
     const code=newVar.code||autoCode(newVar.bn,Object.keys(db[newVar.catKey].variants).length+1);
     const nd=JSON.parse(JSON.stringify(db));
     nd[newVar.catKey].variants[vKey]={bn:newVar.bn,code,sections:[{name:"কাঠের তালিকা",pieces:[]}]};
-    saveDb(nd);setNewVar({catKey:"",key:"",bn:"",code:""});setTab("list");
+    saveDb(nd);setNewVar({catKey:"",key:"",bn:"",code:""});goBack();
   };
-  const openEdit=(catK,varK)=>{setSelCat(catK);setSelVar(varK);setEditSections(JSON.parse(JSON.stringify(db[catK].variants[varK].sections)));setTab("edit")};
-  const saveEdit=()=>{const nd=JSON.parse(JSON.stringify(db));nd[selCat].variants[selVar].sections=editSections;saveDb(nd);setTab("list")};
+  const openEdit=(catK,varK)=>{navigate({page:"manage",tab:"edit",selCat:catK,selVar:varK})};
+  const saveEdit=()=>{const nd=JSON.parse(JSON.stringify(db));nd[selCat].variants[selVar].sections=editSections;saveDb(nd);goBack()};
   const addSection=()=>setEditSections(prev=>[...prev,{name:"নতুন সেকশন",pieces:[]}]);
   const addPiece=()=>{const ns=JSON.parse(JSON.stringify(editSections));ns[newPiece.sectionIdx].pieces.push({bn:newPiece.bn,pc:parseInt(newPiece.pc)||1,h:parseFloat(newPiece.h)||72,l:parseFloat(newPiece.l)||24,w:parseFloat(newPiece.w)||1});setEditSections(ns);setNewPiece({...newPiece,bn:""})};
   const removePiece=(si,pi)=>{const ns=JSON.parse(JSON.stringify(editSections));ns[si].pieces.splice(pi,1);setEditSections(ns)};
@@ -4697,10 +4822,17 @@ function ManageDB({db,saveDb,galleries,saveGalleryEntry,onBack}){
   };
 
   // ── Gallery management ──
-  const[galleryCat,setGalleryCat]=useState("");
-  const[galleryVar,setGalleryVar]=useState("");
   const galleryInput=useRef();
-  const openGallery=(catK,varK)=>{setGalleryCat(catK);setGalleryVar(varK);setTab("gallery")};
+  const openGallery=(catK,varK)=>{navigate({page:"manage",tab:"gallery",selCat:catK,selVar:varK})};
+  // ── উপরের ট্যাব বাটন (তালিকা/+ ক্যাটাগরি/+ ভেরিয়েন্ট) — তালিকা থেকে কোনো একটাতে গেলে এক ধাপ
+  // এগোয় (navigate), দুটো "+ " ট্যাবের মধ্যে সরাসরি বদলালে একই ধাপেই থাকে (replaceTop, স্ট্যাক
+  // না বাড়িয়ে), আর তালিকায় ফিরতে চাইলে শুধু এক ধাপ পেছায় (goBack) — যাতে ব্যাক বাটন সবসময়
+  // ঠিক এক ধাপ করেই সরে ──
+  const openTab=(t)=>{
+    if(t==="list"){if(tab!=="list")goBack();return}
+    if(tab==="list")navigate({page:"manage",tab:t});
+    else replaceTop({page:"manage",tab:t});
+  };
   const galleryKey=(catK,varK)=>`${catK}__${varK}`;
   const currentGallery=()=>galleries&&galleries[galleryKey(galleryCat,galleryVar)]||{gallery:[],coverImage:null};
   const addGalleryImages=async(e)=>{
@@ -4745,7 +4877,7 @@ function ManageDB({db,saveDb,galleries,saveGalleryEntry,onBack}){
       <span style={{fontWeight:700,fontSize:15}}>ফার্নিচার ডেটাবেস</span>
     </div>
     <div style={{background:"white",display:"flex",borderBottom:"1px solid #eee"}}>
-      {[{id:"list",l:"তালিকা"},{id:"addCat",l:"+ ক্যাটাগরি"},{id:"addVar",l:"+ ভেরিয়েন্ট"}].map(t=><button key={t.id} onClick={()=>setTab(t.id)} style={{flex:1,padding:"10px 6px",border:"none",background:"none",fontSize:12,fontWeight:tab===t.id?700:400,color:tab===t.id?"#6d28d9":"#888",borderBottom:tab===t.id?"3px solid #6d28d9":"3px solid transparent"}}>{t.l}</button>)}
+      {[{id:"list",l:"তালিকা"},{id:"addCat",l:"+ ক্যাটাগরি"},{id:"addVar",l:"+ ভেরিয়েন্ট"}].map(t=><button key={t.id} onClick={()=>openTab(t.id)} style={{flex:1,padding:"10px 6px",border:"none",background:"none",fontSize:12,fontWeight:tab===t.id?700:400,color:tab===t.id?"#6d28d9":"#888",borderBottom:tab===t.id?"3px solid #6d28d9":"3px solid transparent"}}>{t.l}</button>)}
     </div>
     <div style={{padding:"14px",maxWidth:540,margin:"0 auto"}}>
       {tab==="list"&&<>
@@ -4760,7 +4892,7 @@ function ManageDB({db,saveDb,galleries,saveGalleryEntry,onBack}){
               <button onClick={()=>startRenameCat(catK)} style={{background:"rgba(255,255,255,.2)",border:"none",color:"white",borderRadius:6,padding:"4px 9px",fontSize:11}}>✏️ নাম বদলান</button>
             </>}
           </div>
-          {Object.entries(cat.variants).sort((a,b)=>(a[1].bn||"").localeCompare(b[1].bn||"","bn")).map(([vK,v])=><div key={vK} style={{padding:"8px 12px",borderBottom:"1px solid #f0f0f0"}}>
+          {Object.entries(cat.variants).sort((a,b)=>(a[1].bn||"").localeCompare(b[1].bn||"","bn")).map(([vK,v])=><div key={vK} style={{padding:"8px 12px",borderBottom:"1px solid #f0f0f0",background:highlightNo===("variant:"+catK+"__"+vK)?"#e0f2fe":"transparent",transition:"background .4s"}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:6}}>
             {renamingVar===catK+"|"+vK?<>
               <input value={renameVarVal} onChange={e=>setRenameVarVal(e.target.value)} style={{flex:1,border:"1px solid #ddd",borderRadius:6,padding:"5px 8px",fontSize:12,outline:"none"}} autoFocus/>
@@ -4872,7 +5004,7 @@ function ManageDB({db,saveDb,galleries,saveGalleryEntry,onBack}){
           })}
         </div>
         {(!currentGallery().gallery||currentGallery().gallery.length===0)&&<div style={{textAlign:"center",color:"#aaa",fontSize:12,padding:20}}>এখনো কোনো ছবি যোগ করা হয়নি</div>}
-        <button onClick={()=>setTab("list")} style={{width:"100%",background:"#f3f4f6",border:"none",borderRadius:9,padding:"12px",fontSize:13,fontWeight:600,marginTop:16}}>← তালিকায় ফিরে যান</button>
+        <button onClick={goBack} style={{width:"100%",background:"#f3f4f6",border:"none",borderRadius:9,padding:"12px",fontSize:13,fontWeight:600,marginTop:16}}>← তালিকায় ফিরে যান</button>
       </div>}
     </div>
   </div>
@@ -5246,10 +5378,14 @@ function Form({onSave,onBack,db,saveDb,galleries,woodSettings,laborSettings,orde
 }
 
 /* ── PREVIEW (each slip prints independently now) ── */
-function Preview({order,onBack,slip,setSlip,onUpdate,onAddPayment,onSetDelivered,onDelete,db,saveDb,carpenters,saveCarpenters,galleries,saveGalleryEntry,woodSettings,laborSettings,workers,allOrders,rackSplits}){
+function Preview({order,onBack,slip,setSlip,onUpdate,onAddPayment,onUpdatePayment,onDeletePayment,onSetDelivered,onDelete,db,saveDb,carpenters,saveCarpenters,galleries,saveGalleryEntry,woodSettings,laborSettings,workers,allOrders,rackSplits}){
   const totalPaid=(order.payments||[]).reduce((s,p)=>s+(parseFloat(p.amount)||0),0);
   const isFullyPaid=parseFloat(order.cust.total)>0&&totalPaid>=(parseFloat(order.cust.total)||0);
   const[addingPay,setAddingPay]=useState(false);
+  const[editingPayId,setEditingPayId]=useState(null);
+  const[editPayDraft,setEditPayDraft]=useState({date:"",amount:"",note:""});
+  const[editingCust,setEditingCust]=useState(false);
+  const[custDraft,setCustDraft]=useState({name:"",phone:"",address:"",date:"",delivery:"",notes:""});
   // ── এক ক্লিকে রেফারেন্স ছবি + কার্পেন্টার কপি + পরিবহন কপি একসাথে প্রিন্ট ──
   const[combinedPrintMode,setCombinedPrintMode]=useState(false);
   useEffect(()=>{
@@ -5305,6 +5441,11 @@ function Preview({order,onBack,slip,setSlip,onUpdate,onAddPayment,onSetDelivered
   };
   const addPayment=()=>{
     if(!newPay.amount)return;
+    const amt=parseFloat(newPay.amount)||0;
+    const remaining=Math.max(0,(parseFloat(order.cust.total)||0)-totalPaid);
+    if(amt>remaining){
+      if(!window.confirm(`⚠️ বাকি আছে মাত্র ${money(remaining)}, আপনি ${money(amt)} দিচ্ছেন — এটা ${money(amt-remaining)} বেশি হয়ে যাবে। টাকার অঙ্কটা কি ঠিক আছে? নিশ্চিত হলে "ঠিক আছে" চাপুন, নাহলে "বাতিল" করে ঠিক করে নিন।`))return;
+    }
     onAddPayment(order.no,newPay);
     setAddingPay(false);setNewPay({date:todayStr(),amount:"",note:"পেমেন্ট"});
   };
@@ -5358,6 +5499,54 @@ function Preview({order,onBack,slip,setSlip,onUpdate,onAddPayment,onSetDelivered
           <button onClick={addPayment} style={{background:"#16a34a",color:"white",border:"none",borderRadius:8,padding:"10px 16px",fontSize:13,fontWeight:700}}>সংরক্ষণ</button>
         </div>
       </div>}
+      {(order.payments||[]).length>0&&<div style={{marginTop:10}}>
+        {order.payments.map(p=>editingPayId===p.id?
+          <div key={p.id} style={{background:"#fafafa",borderRadius:9,padding:10,border:"1px solid #ddd",marginBottom:6}}>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
+              <div><div style={{fontSize:10,marginBottom:3,fontWeight:600,color:"#555"}}>তারিখ</div><DateInput value={editPayDraft.date} onChange={v=>setEditPayDraft({...editPayDraft,date:v})} accent="#1d4ed8"/></div>
+              <div><div style={{fontSize:10,marginBottom:3,fontWeight:600,color:"#555"}}>পরিমাণ (৳)</div><input type="number" value={editPayDraft.amount} onChange={e=>setEditPayDraft({...editPayDraft,amount:e.target.value})} style={{width:"100%",border:"1.5px solid #ddd",borderRadius:7,padding:"8px",fontSize:14,fontWeight:700,outline:"none"}}/></div>
+            </div>
+            <input value={editPayDraft.note} onChange={e=>setEditPayDraft({...editPayDraft,note:e.target.value})} placeholder="নোট" style={{width:"100%",border:"1.5px solid #ddd",borderRadius:7,padding:"8px",fontSize:12,outline:"none",marginBottom:8}}/>
+            <div style={{display:"flex",gap:6}}>
+              <button onClick={()=>{
+                if(!editPayDraft.amount)return;
+                onUpdatePayment(order.no,p.id,{date:editPayDraft.date,amount:editPayDraft.amount,note:editPayDraft.note});
+                setEditingPayId(null);
+              }} style={{flex:1,background:"#1d4ed8",color:"white",border:"none",borderRadius:7,padding:"8px",fontSize:12,fontWeight:700}}>সংরক্ষণ</button>
+              <button onClick={()=>setEditingPayId(null)} style={{flex:1,background:"white",color:"#666",border:"1px solid #ddd",borderRadius:7,padding:"8px",fontSize:12,fontWeight:700}}>বাতিল</button>
+            </div>
+          </div>
+          :<div key={p.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",fontSize:11,color:"#444",padding:"6px 2px",borderBottom:"1px dashed #eee"}}>
+            <span>{fmtDate(p.date)} — {p.note||"পেমেন্ট"}</span>
+            <div style={{display:"flex",alignItems:"center",gap:8}}>
+              <strong style={{color:"#166534"}}>{money(p.amount)}</strong>
+              <button onClick={()=>{setEditingPayId(p.id);setEditPayDraft({date:p.date,amount:p.amount,note:p.note||""})}} style={{background:"none",border:"none",color:"#1d4ed8",fontSize:13,cursor:"pointer",padding:2}}>✏️</button>
+              <button onClick={()=>{if(window.confirm("এই পেমেন্ট এন্ট্রিটা মুছে ফেলতে চান?"))onDeletePayment(order.no,p.id)}} style={{background:"none",border:"none",color:"#991b1b",fontSize:13,cursor:"pointer",padding:2}}>🗑</button>
+            </div>
+          </div>
+        )}
+      </div>}
+      {editingCust?<div style={{background:"#fafafa",borderRadius:9,padding:12,border:"1px solid #ddd",marginTop:10}}>
+        <div style={{fontSize:11,fontWeight:700,color:"#444",marginBottom:8}}>✏️ অর্ডারের তথ্য সম্পাদনা</div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
+          <div><div style={{fontSize:10,marginBottom:3,fontWeight:600,color:"#555"}}>নাম</div><input value={custDraft.name} onChange={e=>setCustDraft({...custDraft,name:e.target.value})} style={{width:"100%",border:"1.5px solid #ddd",borderRadius:7,padding:"8px",fontSize:13,outline:"none"}}/></div>
+          <div><div style={{fontSize:10,marginBottom:3,fontWeight:600,color:"#555"}}>মোবাইল</div><input value={custDraft.phone} onChange={e=>setCustDraft({...custDraft,phone:e.target.value})} style={{width:"100%",border:"1.5px solid #ddd",borderRadius:7,padding:"8px",fontSize:13,outline:"none"}}/></div>
+        </div>
+        <div style={{marginBottom:8}}><div style={{fontSize:10,marginBottom:3,fontWeight:600,color:"#555"}}>ঠিকানা</div><input value={custDraft.address} onChange={e=>setCustDraft({...custDraft,address:e.target.value})} style={{width:"100%",border:"1.5px solid #ddd",borderRadius:7,padding:"8px",fontSize:13,outline:"none"}}/></div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
+          <div><div style={{fontSize:10,marginBottom:3,fontWeight:600,color:"#555"}}>অর্ডারের তারিখ</div><DateInput value={custDraft.date} onChange={v=>setCustDraft({...custDraft,date:v})} accent="#1d4ed8"/></div>
+          <div><div style={{fontSize:10,marginBottom:3,fontWeight:600,color:"#555"}}>ডেলিভারির তারিখ</div><DateInput value={custDraft.delivery} onChange={v=>setCustDraft({...custDraft,delivery:v})} accent="#1d4ed8"/></div>
+        </div>
+        <div style={{marginBottom:10}}><div style={{fontSize:10,marginBottom:3,fontWeight:600,color:"#555"}}>মন্তব্য</div><input value={custDraft.notes} onChange={e=>setCustDraft({...custDraft,notes:e.target.value})} style={{width:"100%",border:"1.5px solid #ddd",borderRadius:7,padding:"8px",fontSize:13,outline:"none"}}/></div>
+        <div style={{display:"flex",gap:6}}>
+          <button onClick={()=>{
+            if(!custDraft.name||!custDraft.phone)return;
+            onUpdate({...order,cust:{...order.cust,...custDraft}});
+            setEditingCust(false);
+          }} style={{flex:1,background:"#1d4ed8",color:"white",border:"none",borderRadius:7,padding:"9px",fontSize:12,fontWeight:700}}>সংরক্ষণ</button>
+          <button onClick={()=>setEditingCust(false)} style={{flex:1,background:"white",color:"#666",border:"1px solid #ddd",borderRadius:7,padding:"9px",fontSize:12,fontWeight:700}}>বাতিল</button>
+        </div>
+      </div>:<button onClick={()=>{setCustDraft({name:order.cust.name||"",phone:order.cust.phone||"",address:order.cust.address||"",date:order.cust.date||"",delivery:order.cust.delivery||"",notes:order.cust.notes||""});setEditingCust(true)}} style={{marginTop:10,background:"none",border:"none",color:"#1d4ed8",fontSize:11,fontWeight:700,textDecoration:"underline",cursor:"pointer"}}>✏️ তথ্য সম্পাদনা</button>}
     </div>
     <div className="no-print" style={{background:"white",display:"flex",overflowX:"auto",borderBottom:"1px solid #eee"}}>
       {tabs.map(t=><button key={t.id} onClick={()=>!t.locked&&setSlip(t.id)} style={{flexShrink:0,padding:"10px 11px",border:"none",background:"none",fontSize:11,fontWeight:slip===t.id?700:400,color:t.locked?"#ccc":slip===t.id?t.c:"#888",borderBottom:slip===t.id?`3px solid ${t.c}`:"3px solid transparent",cursor:t.locked?"not-allowed":"pointer"}}>{t.l}</button>)}
@@ -5421,6 +5610,16 @@ function Hist({orders,db,onBack,onView,highlightNo,q,setQ,statusFilter,setStatus
     (orders||[]).forEach(o=>categoryOf(o).forEach(c=>set.add(c)));
     return[...set].sort();
   },[orders,db]);
+  // ── ড্যাশবোর্ডের "জনপ্রিয় ফার্নিচার" তালিকার সাথে মিলিয়ে — কোন ক্যাটাগরি কত নম্বর জনপ্রিয়
+  // (অর্ডার সংখ্যা অনুযায়ী, বাতিল বাদে) তা ফিল্টার-তথ্য বক্সে দেখানোর জন্য ──
+  const categoryPopularityRank=useMemo(()=>{
+    const counts={};
+    (orders||[]).filter(o=>!o.cancelled).forEach(o=>categoryOf(o).forEach(c=>{counts[c]=(counts[c]||0)+1}));
+    const ranked=Object.entries(counts).sort((a,b)=>b[1]-a[1]).map(([label])=>label);
+    const rankMap={};
+    ranked.forEach((label,i)=>{rankMap[label]=i+1});
+    return rankMap;
+  },[orders]);
   const filtered=useMemo(()=>{
     let list=orders;
     if(q.trim()){
@@ -5453,17 +5652,26 @@ function Hist({orders,db,onBack,onView,highlightNo,q,setQ,statusFilter,setStatus
         {[{v:"all",l:"সব"},{v:"running",l:"চলমান"},{v:"delivered",l:"ডেলিভারড"},{v:"cancelled",l:"বাতিল"}].map(f=>
           <button key={f.v} onClick={()=>setStatusFilter(f.v)} style={{flexShrink:0,minHeight:36,padding:"7px 13px",borderRadius:20,border:statusFilter===f.v?"none":"1px solid #ddd",background:statusFilter===f.v?RED:"white",color:statusFilter===f.v?"white":"#666",fontSize:11,fontWeight:600}}>{f.l}</button>
         )}
+        <button onClick={()=>setSortMode(sortMode==="rank"?"recent":"rank")} style={{flexShrink:0,minHeight:36,padding:"7px 13px",borderRadius:20,border:sortMode==="rank"?"none":"1.5px solid #fbbf24",background:sortMode==="rank"?"#92400e":"#fffbeb",color:sortMode==="rank"?"white":"#92400e",fontSize:11,fontWeight:700}}>👑 কাস্টমার র‍্যাংক</button>
       </div>
-      <div style={{display:"flex",gap:6,marginBottom:14}}>
+      <div style={{display:"flex",gap:6,marginBottom:10}}>
         <select value={catFilter} onChange={e=>setCatFilter(e.target.value)} style={{flex:1,border:"1.5px solid #ddd",borderRadius:9,padding:"9px 8px",fontSize:11,background:"white"}}>
           <option value="all">সব ক্যাটাগরি</option>
           {allCategories.map(c=><option key={c} value={c}>{c}</option>)}
         </select>
-        <select value={sortMode} onChange={e=>setSortMode(e.target.value)} style={{flex:1,border:"1.5px solid #ddd",borderRadius:9,padding:"9px 8px",fontSize:11,background:"white"}}>
-          <option value="recent">সাম্প্রতিক অনুযায়ী</option>
-          <option value="rank">গ্রাহকের র‍্যাংকিং অনুযায়ী</option>
-        </select>
       </div>
+      {(()=>{
+        const fCount=filtered.length;
+        const fTotal=filtered.reduce((s,o)=>s+(parseFloat(o.cust.total)||0),0);
+        const fAvg=fCount?fTotal/fCount:0;
+        const popRank=catFilter!=="all"?categoryPopularityRank[catFilter]:null;
+        return<div style={{display:"flex",gap:6,marginBottom:14,overflowX:"auto"}}>
+          <div style={{flexShrink:0,background:"white",border:"1px solid #eee",borderRadius:9,padding:"7px 12px",textAlign:"center"}}><div style={{fontSize:14,fontWeight:800,color:"#222"}}>{fCount}</div><div style={{fontSize:8,color:"#999"}}>অর্ডার</div></div>
+          <div style={{flexShrink:0,background:"white",border:"1px solid #eee",borderRadius:9,padding:"7px 12px",textAlign:"center"}}><div style={{fontSize:12,fontWeight:800,color:"#166534"}}>{money(fTotal)}</div><div style={{fontSize:8,color:"#999"}}>মোট মূল্য</div></div>
+          <div style={{flexShrink:0,background:"white",border:"1px solid #eee",borderRadius:9,padding:"7px 12px",textAlign:"center"}}><div style={{fontSize:12,fontWeight:800,color:"#1d4ed8"}}>{money(fAvg)}</div><div style={{fontSize:8,color:"#999"}}>গড় মূল্য</div></div>
+          {popRank&&<div style={{flexShrink:0,background:"#fffbeb",border:"1px solid #fde68a",borderRadius:9,padding:"7px 12px",textAlign:"center"}}><div style={{fontSize:14,fontWeight:800,color:"#92400e"}}>#{popRank}</div><div style={{fontSize:8,color:"#92400e"}}>জনপ্রিয়তায়</div></div>}
+        </div>
+      })()}
       {filtered.length===0?<div style={{textAlign:"center",color:"#aaa",padding:"50px 20px",fontSize:13}}>কোনো অর্ডার পাওয়া যায়নি</div>
       :filtered.map((o,i)=>{
         const paid=(o.payments||[]).reduce((s,p)=>s+(parseFloat(p.amount)||0),0);
@@ -5478,30 +5686,30 @@ function Hist({orders,db,onBack,onView,highlightNo,q,setQ,statusFilter,setStatus
           <div style={{flex:1,minWidth:0,padding:"12px"}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
               <div style={{display:"flex",minWidth:0,flex:1,gap:9}}>
-                <div style={{minWidth:0,flexShrink:0}}>
+                <div style={{minWidth:0,flexShrink:0,maxWidth:118}}>
                   <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
-                    <span style={{fontWeight:700,fontSize:13,textDecoration:o.cancelled?"line-through":"none"}}>{o.cust.name}</span>
-                    {sortMode==="rank"&&rank&&<span style={{fontSize:9,background:"#fef3c7",color:"#92400e",borderRadius:8,padding:"1px 7px",fontWeight:700}}>#{rank}</span>}
+                    <span style={{fontWeight:700,fontSize:13,textDecoration:o.cancelled?"line-through":"none",display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",overflow:"hidden",lineHeight:1.25}}>{o.cust.name}</span>
+                    {sortMode==="rank"&&rank&&<span style={{fontSize:9,background:"#fef3c7",color:"#92400e",borderRadius:8,padding:"1px 7px",fontWeight:700,flexShrink:0}}>#{rank}</span>}
                   </div>
                   <div style={{fontSize:11,color:"#555",marginTop:1}}>{o.cust.phone}</div>
-                  {o.cust.address&&<div style={{fontSize:9,color:"#888",marginTop:2,maxWidth:130}}>📍 {o.cust.address}</div>}
+                  {o.cust.address&&<div style={{fontSize:9,color:"#888",marginTop:2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>📍 {o.cust.address}</div>}
                   <div style={{fontSize:9,color:"#bbb",marginTop:1}}>{o.no}</div>
                 </div>
                 <div style={{width:1,background:"#e5e5e5",flexShrink:0,alignSelf:"stretch"}}></div>
                 <div style={{minWidth:0,flex:1}}>
-                  <div style={{fontSize:11,color:"#333",fontWeight:700}}>{categoryOf(o).join(", ")}</div>
-                  <div style={{fontSize:9,color:"#999",marginTop:1}}>{o.items.map(it=>it.variantBn).join(", ")}</div>
+                  <div style={{fontSize:11,color:"#333",fontWeight:700,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{categoryOf(o).join(", ")}</div>
+                  <div style={{fontSize:9,color:"#999",marginTop:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{o.items.map(it=>it.variantBn).join(", ")}</div>
                 </div>
               </div>
               <div style={{textAlign:"right",flexShrink:0,marginLeft:8}}>
                 <div style={{fontWeight:700,fontSize:13,color:RED}}>{money(o.cust.total)}</div>
-                <div style={{fontSize:10,color:o.cancelled?"#991b1b":o.delivered?"#0f766e":full?"#16a34a":"#f97316",marginTop:2,fontWeight:600}}>{o.cancelled?"❌ বাতিল":o.delivered?"📦 ডেলিভারড":full?"✅ পরিশোধ":"⏳ বাকি আছে"}</div>
+                <div style={{fontSize:10,color:o.cancelled?"#991b1b":o.delivered?"#0f766e":full?"#16a34a":"#f97316",marginTop:2,fontWeight:600}}>{o.cancelled?"❌ বাতিল":o.delivered?"📦 ডেলিভারড":full?"✅ পরিশোধ":`⏳ বাকি ${money((parseFloat(o.cust.total)||0)-paid)}`}</div>
                 <div style={{fontSize:10,color:"#aaa",marginTop:1}}>{o.delivered?fmtDate(o.deliveredAt):fmtDate(o.cust.date)}</div>
               </div>
             </div>
-            <div style={{display:"flex",gap:6,marginTop:8}} onClick={e=>e.stopPropagation()}>
-              <a href={`tel:${o.cust.phone}`} style={{flex:1,textAlign:"center",background:"#eff6ff",color:"#1d4ed8",border:"none",borderRadius:6,padding:"8px 9px",minHeight:36,fontSize:10,fontWeight:700,textDecoration:"none"}}>📱 কল</a>
-              <a href={`https://wa.me/${toIntlPhone(o.cust.phone)}`} target="_blank" rel="noopener noreferrer" style={{flex:1,textAlign:"center",background:"#f0fdf4",color:"#166534",border:"none",borderRadius:6,padding:"8px 9px",minHeight:36,fontSize:10,fontWeight:700,textDecoration:"none"}}>💬 WhatsApp</a>
+            <div style={{display:"flex",justifyContent:"space-between",gap:6,marginTop:8}} onClick={e=>e.stopPropagation()}>
+              <a href={`tel:${o.cust.phone}`} style={{width:112,textAlign:"center",background:"#eff6ff",color:"#1d4ed8",border:"none",borderRadius:6,padding:"8px 9px",minHeight:36,fontSize:10,fontWeight:700,textDecoration:"none"}}>📱 কল</a>
+              <a href={`https://wa.me/${toIntlPhone(o.cust.phone)}`} target="_blank" rel="noopener noreferrer" style={{width:112,textAlign:"center",background:"#f0fdf4",color:"#166534",border:"none",borderRadius:6,padding:"8px 9px",minHeight:36,fontSize:10,fontWeight:700,textDecoration:"none"}}>💬 WhatsApp</a>
             </div>
           </div>
         </div>
