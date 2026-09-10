@@ -104,7 +104,7 @@ function compressImage(file,maxDim=1200,quality=0.82,maxBytes=110000){
 /* ── FULL-RESOLUTION LOCAL FOLDER STORAGE (desktop Chrome/Edge/Brave only) ──
    Original, uncompressed images are saved as real files in a folder you choose
    on your computer. Only a small compressed thumbnail syncs to the cloud/mobile. */
-const BUILD_TAG="4.75";
+const BUILD_TAG="4.77";
 const FS_SUPPORTED=typeof window!=="undefined"&&"showDirectoryPicker" in window;
 function idbOpen(){
   return new Promise((resolve,reject)=>{
@@ -1651,6 +1651,8 @@ function App({firebaseConfig,onResetConfig}){
   const[orders,setOrders]=useState([]);
   const ordersRef=useRef(orders);
   ordersRef.current=orders;
+  const pendingSinceRef=useRef({}); // orderNo -> কখন থেকে hasPendingWrites দেখা যাচ্ছে
+  const autoResolveAttemptedRef=useRef({}); // orderNo -> এই "পেন্ডিং পর্ব"-এ একবার চেষ্টা হয়ে গেছে কিনা (বারবার না করার জন্য)
   const[expenses,setExpenses]=useState([]);
   const[woodLots,setWoodLots]=useState([]);
   const[workers,setWorkers]=useState([]);
@@ -1734,23 +1736,52 @@ function App({firebaseConfig,onResetConfig}){
     return next;
   };
   // সাইজ সীমা পার হওয়া কোনো অর্ডার সম্পূর্ণ স্বয়ংক্রিয়ভাবে সমাধানের চেষ্টা — ক্রমান্বয়ে আরও কড়া
-  // কমপ্রেশনে, সফল হওয়া পর্যন্ত (বা যুক্তিসঙ্গত কয়েকবার চেষ্টার পর)
+  // কমপ্রেশনে, একদম ছোট আকার পর্যন্ত — আর তাতেও না হলে শেষ চেষ্টা হিসেবে ছবি পুরোপুরি বাদ দিয়ে
+  // শুধু অর্ডারের তথ্য (নাম/ফোন/মাপ/দাম/পেমেন্ট) পাঠানো, যাতে অন্তত অর্ডারটাই না হারায়
   const autoResolveTooLarge=async(orderNo,merge,data)=>{
     const fs=fsRef.current;
     if(!fs)return false;
     let current=data;
-    for(const target of[70000,45000,26000]){
+    for(const target of[70000,45000,26000,15000,9000,5000,3000]){
       current=await shrinkOrderImages(current,target);
       try{
         await fs.collection("orders").doc(orderNo).set(current,merge?{merge:true}:{});
         setOrders(prev=>prev.map(o=>o.no===orderNo?current:o));
         setDraft(d=>d&&d.no===orderNo?current:d);
+        clearPermanentSyncFailure(orderNo);
         return true;
       }catch(e){
-        if(!isLikelyTooLargeError(e))return false;
+        if(!isLikelyTooLargeError(e)){
+          markPermanentSyncFailure(orderNo,"সার্ভারে পাঠানো যাচ্ছে না: "+e.message);
+          return false;
+        }
       }
     }
-    return false;
+    const noImages={...current,refImgs:[],deliveryImgs:[],refImg:undefined,imagesDroppedDueToSize:true};
+    try{
+      await fs.collection("orders").doc(orderNo).set(noImages,merge?{merge:true}:{});
+      setOrders(prev=>prev.map(o=>o.no===orderNo?noImages:o));
+      setDraft(d=>d&&d.no===orderNo?noImages:d);
+      markPermanentSyncFailure(orderNo,"ছবি অনেক ছোট করার পরও পাঠানো যায়নি, তাই ছবি ছাড়া অর্ডারের তথ্য সংরক্ষণ করা হয়েছে — অর্ডারটা নিরাপদ আছে, শুধু ছবিগুলো আবার যোগ করে দিতে হবে");
+      return true;
+    }catch(e){
+      markPermanentSyncFailure(orderNo,"একেবারেই সার্ভারে পাঠানো যাচ্ছে না: "+e.message);
+      return false;
+    }
+  };
+  // ── কোনো অর্ডার শত চেষ্টার পরও সার্ভারে পাঠানো না গেলে এখানে রেকর্ড থাকে (localStorage-এ,
+  // তাই পাতা বন্ধ/রিলোড করলেও হারায় না) — ড্যাশবোর্ডের "নজর দরকার" এ এখান থেকেই দেখানো হয় ──
+  const loadPermanentSyncFailures=()=>{try{return JSON.parse(localStorage.getItem("rf_permanent_sync_failures")||"[]")}catch(e){return[]}};
+  const savePermanentSyncFailures=(list)=>{try{localStorage.setItem("rf_permanent_sync_failures",JSON.stringify(list))}catch(e){}};
+  const[permanentSyncFailures,setPermanentSyncFailures]=useState(loadPermanentSyncFailures);
+  const markPermanentSyncFailure=(orderNo,reason)=>{
+    const list=loadPermanentSyncFailures().filter(f=>f.no!==orderNo);
+    list.push({no:orderNo,reason,at:new Date().toISOString()});
+    savePermanentSyncFailures(list);setPermanentSyncFailures(list);
+  };
+  const clearPermanentSyncFailure=(orderNo)=>{
+    const list=loadPermanentSyncFailures().filter(f=>f.no!==orderNo);
+    savePermanentSyncFailures(list);setPermanentSyncFailures(list);
   };
   const retryPendingWrites=async()=>{
     const fs=fsRef.current;
@@ -1976,6 +2007,20 @@ function App({firebaseConfig,onResetConfig}){
         setOrders(list);
         setLastSyncAt(new Date());
         syncFailCountRef.current=0; // লাইভ সংযোগ থেকে ডেটা আসছে মানে সিঙ্ক ঠিক আছে — পুরনো ব্যর্থতার গণনা মুছে দিন
+        // ── কোনো অর্ডার কতক্ষণ ধরে "এই ডিভাইসেই লেখা, সার্ভার এখনো নিশ্চিত করেনি" অবস্থায়
+        // আছে তা এখানেই ট্র্যাক করা হয় (আলাদা কোনো বাড়তি পড়ার খরচ ছাড়াই, এই লিসেনারেরই তথ্য
+        // দিয়ে) — নিচের পর্যায়ক্রমিক sweep এটা দেখে স্বয়ংক্রিয়ভাবে সমাধানের চেষ্টা করবে ──
+        const now=Date.now();
+        const stillPendingNos=new Set();
+        snap.docs.forEach(d=>{
+          if(d.metadata&&d.metadata.hasPendingWrites){
+            stillPendingNos.add(d.id);
+            if(!pendingSinceRef.current[d.id])pendingSinceRef.current[d.id]=now;
+          }
+        });
+        Object.keys(pendingSinceRef.current).forEach(no=>{
+          if(!stillPendingNos.has(no)){delete pendingSinceRef.current[no];delete autoResolveAttemptedRef.current[no]}
+        });
       },err=>{clearTimeout(timer);setConnError(err.message)});
 
       const unsubExpenses=firestore.collection("expenses").onSnapshot(snap=>{
@@ -2080,7 +2125,22 @@ function App({firebaseConfig,onResetConfig}){
         localStorage.setItem("rf_migrated_to_cloud","true");
       })();
 
-      return()=>{clearTimeout(timer);unsubOrders();unsubExpenses();unsubLots();unsubDb();unsubGalleries();unsubWoodSettings();unsubLaborSettings();unsubAlertSettings();unsubRackSplits();unsubRackBands();unsubCarp();unsubWorkers();unsubPayroll()};
+      // ── প্রতি ৩০ সেকেন্ডে দেখা হয়, কোনো অর্ডার ৯০ সেকেন্ডের বেশি সময় ধরে "সার্ভার-নিশ্চিত না"
+      // অবস্থায় আটকে আছে কিনা — থাকলে কোনো বাটন/ক্লিক ছাড়াই নিজে থেকেই সমাধানের চেষ্টা শুরু হয়।
+      // ৯০ সেকেন্ডের এই অপেক্ষাটুকু ইচ্ছাকৃত — সদ্য করা স্বাভাবিক একটা লেখাও সার্ভার-নিশ্চিত হতে
+      // কয়েক সেকেন্ড লাগে, সেটাকে ভুল করে "আটকে গেছে" ধরে ফেলা এড়াতে ──
+      const stuckSweep=setInterval(()=>{
+        const now=Date.now();
+        Object.entries(pendingSinceRef.current).forEach(([no,since])=>{
+          if(now-since>90000&&!autoResolveAttemptedRef.current[no]){
+            autoResolveAttemptedRef.current[no]=true;
+            const order=ordersRef.current.find(o=>o.no===no);
+            if(order)autoResolveTooLarge(no,false,order);
+          }
+        });
+      },30000);
+
+      return()=>{clearTimeout(timer);clearInterval(stuckSweep);unsubOrders();unsubExpenses();unsubLots();unsubDb();unsubGalleries();unsubWoodSettings();unsubLaborSettings();unsubAlertSettings();unsubRackSplits();unsubRackBands();unsubCarp();unsubWorkers();unsubPayroll()};
     }catch(e){
       clearTimeout(timer);
       setConnError(e.message);
@@ -2390,11 +2450,11 @@ function App({firebaseConfig,onResetConfig}){
   if(page==="expense")return<ExpensePage expenses={expenses} onSave={saveExpense} onBack={goBack}/>;
   if(page==="payroll")return<PayrollPage workers={workers} saveWorker={saveWorker} deleteWorker={deleteWorker} payrollWeeks={payrollWeeks} savePayrollWeek={savePayrollWeek} updateAttendance={updateAttendance} addAdvanceEntry={addAdvanceEntry} removeAdvanceEntry={removeAdvanceEntry} onBack={goBack}/>;
   if(page==="plreport")return<PLReportPage orders={orders} expenses={expenses} workers={workers} payrollWeeks={payrollWeeks} woodLots={woodLots} woodSettings={woodSettings} laborSettings={laborSettings} onBack={goBack}/>;
-  return<Home orders={orders} expenses={expenses} woodLots={woodLots} db={db} woodSettings={woodSettings} laborSettings={laborSettings} workers={workers} payrollWeeks={payrollWeeks} alertSettings={alertSettings} saveAlertSettings={saveAlertSettings} backupFailed={backupFailed} lastSyncAt={lastSyncAt} onManualRefresh={manualRefresh} pendingWrites={pendingWrites} onCheckServerSync={checkServerSync} onAcceptServerVersion={acceptServerVersion} onUpdateOrder={updateOrder} onNew={()=>navigate({page:"form"})} onHist={()=>navigate({page:"history"})} onManage={()=>navigate({page:"manage"})} onExpense={()=>navigate({page:"expense"})} onWoodStock={()=>navigate({page:"woodstock",view:"list"})} onPayroll={()=>navigate({page:"payroll"})} onPLReport={()=>navigate({page:"plreport"})} onView={o=>navigate({page:"preview",orderNo:o.no,slip:0})} onViewDelivery={o=>navigate({page:"preview",orderNo:o.no,slip:5})} online={online} connError={connError} onResetConfig={onResetConfig} folderStatus={folderStatus} connectFolder={connectFolder} highlightNo={highlightNo} onBackupData={backupData} projectId={firebaseConfig?.projectId||""} appId={firebaseConfig?.appId||""}/>;
+  return<Home orders={orders} expenses={expenses} woodLots={woodLots} db={db} woodSettings={woodSettings} laborSettings={laborSettings} workers={workers} payrollWeeks={payrollWeeks} alertSettings={alertSettings} saveAlertSettings={saveAlertSettings} backupFailed={backupFailed} lastSyncAt={lastSyncAt} onManualRefresh={manualRefresh} pendingWrites={pendingWrites} onCheckServerSync={checkServerSync} onAcceptServerVersion={acceptServerVersion} onUpdateOrder={updateOrder} onNew={()=>navigate({page:"form"})} onHist={()=>navigate({page:"history"})} onManage={()=>navigate({page:"manage"})} onExpense={()=>navigate({page:"expense"})} onWoodStock={()=>navigate({page:"woodstock",view:"list"})} onPayroll={()=>navigate({page:"payroll"})} onPLReport={()=>navigate({page:"plreport"})} onView={o=>navigate({page:"preview",orderNo:o.no,slip:0})} onViewDelivery={o=>navigate({page:"preview",orderNo:o.no,slip:5})} online={online} connError={connError} onResetConfig={onResetConfig} folderStatus={folderStatus} connectFolder={connectFolder} highlightNo={highlightNo} onBackupData={backupData} projectId={firebaseConfig?.projectId||""} appId={firebaseConfig?.appId||""} permanentSyncFailures={permanentSyncFailures}/>;
 }
 
 /* ── HOME / DASHBOARD ── */
-function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,payrollWeeks,alertSettings,saveAlertSettings,backupFailed,lastSyncAt,onManualRefresh,pendingWrites,onCheckServerSync,onAcceptServerVersion,onUpdateOrder,onNew,onHist,onManage,onExpense,onWoodStock,onPayroll,onPLReport,onView,onViewDelivery,online,connError,onResetConfig,folderStatus,connectFolder,highlightNo,onBackupData,projectId,appId}){
+function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,payrollWeeks,alertSettings,saveAlertSettings,backupFailed,lastSyncAt,onManualRefresh,pendingWrites,onCheckServerSync,onAcceptServerVersion,onUpdateOrder,onNew,onHist,onManage,onExpense,onWoodStock,onPayroll,onPLReport,onView,onViewDelivery,online,connError,onResetConfig,folderStatus,connectFolder,highlightNo,onBackupData,projectId,appId,permanentSyncFailures}){
   const now=new Date();
   const[showAllRunning,setShowAllRunning]=useState(false);
   const[showSystemZone,setShowSystemZone]=useState(false);
@@ -2977,6 +3037,7 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
         if(lowStock.length)issues.push({t:`${lowStock.map(a=>a.wood).join(", ")} কাঠ কম`,z:"z-wood"});
         if(stats.readyNotCollected&&stats.readyNotCollected.length)issues.push({t:`${stats.readyNotCollected.length}টা পণ্য পড়ে আছে`,z:"z-urgent"});
         if(stats.emptyWoodModels&&stats.emptyWoodModels.length)issues.push({t:`${stats.emptyWoodModels.length}টা মডেলে কাঠের মাপ নেই`,z:"z-wood"});
+        if(permanentSyncFailures&&permanentSyncFailures.length)issues.push({t:`${permanentSyncFailures.length}টা অর্ডার সার্ভারে পাঠাতে সমস্যা হচ্ছে`,z:"z-sys"});
         const ok=issues.length===0;
         return<div style={{background:ok?"#f0fdf4":"#fef2f2",border:`1.5px solid ${ok?"#86efac":"#fca5a5"}`,borderRadius:11,padding:"11px 13px",marginBottom:14}}>
           <div style={{fontSize:13,fontWeight:800,color:ok?"#166534":"#991b1b",marginBottom:ok?0:6}}>{ok?"✅ সব ঠিক আছে":`⚠️ ${issues.length}টা বিষয়ে নজর দরকার`}</div>
@@ -3402,10 +3463,18 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
       </div>}
 
       <div id="z-sys" onClick={()=>setShowSystemZone(!showSystemZone)} style={{scrollMarginTop:56,fontSize:11,fontWeight:800,color:"#666",letterSpacing:"0.3px",margin:"18px 0 8px",paddingBottom:4,borderBottom:"2px solid #dddddd",cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-        <span>⚙️ সিস্টেম ও ব্যাকআপ{(backupFailed||connError)&&<span style={{marginLeft:6,color:"#991b1b"}}>🔴</span>}</span>
+        <span>⚙️ সিস্টেম ও ব্যাকআপ{(backupFailed||connError||(permanentSyncFailures&&permanentSyncFailures.length>0))&&<span style={{marginLeft:6,color:"#991b1b"}}>🔴</span>}</span>
         <span style={{fontSize:14}}>{showSystemZone?"▲":"▼"}</span>
       </div>
       {showSystemZone&&<>
+      {permanentSyncFailures&&permanentSyncFailures.length>0&&<div style={{marginTop:16,background:"#fef2f2",border:"1.5px solid #fca5a5",borderRadius:10,padding:"12px 14px"}}>
+        <div style={{fontSize:12,fontWeight:700,color:"#991b1b",marginBottom:6}}>🔴 {permanentSyncFailures.length}টা অর্ডার সার্ভারে পাঠাতে সমস্যা হচ্ছে</div>
+        <div style={{fontSize:9.5,color:"#7f1d1d",marginBottom:8,lineHeight:1.5}}>চিন্তা নেই — অর্ডারগুলো এই ডিভাইসে নিরাপদে আছে, শুধু আসল সার্ভারে এখনো নিশ্চিতভাবে পৌঁছায়নি। অ্যাপ নিজে থেকেই বারবার চেষ্টা করে যাচ্ছে। যতক্ষণ না ঠিক হচ্ছে, ততক্ষণ এই ডিভাইসটা বন্ধ করবেন না বা ডেটা মুছবেন না।</div>
+        {permanentSyncFailures.map(f=><div key={f.no} style={{background:"white",borderRadius:7,padding:"7px 9px",marginBottom:5,fontSize:10}}>
+          <div style={{fontWeight:700,color:"#991b1b"}}>{f.no}</div>
+          <div style={{color:"#7f1d1d",marginTop:1}}>{f.reason}</div>
+        </div>)}
+      </div>}
       {/* Full-resolution image folder (desktop only) */}
       {folderStatus.supported&&<div style={{marginTop:16,background:"#fffbeb",border:"1px solid #fde68a",borderRadius:10,padding:"12px 14px"}}>
         <div style={{fontSize:12,fontWeight:700,color:"#92400e",marginBottom:6}}>🖥️ ফুল রেজোলিউশন ছবি ফোল্ডার (এই কম্পিউটার)</div>
@@ -3466,7 +3535,9 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
           {syncCheck&&syncCheck!=="loading"&&!syncCheck.error&&<div style={{marginTop:9}}>
             <div style={{fontSize:10,color:"#555",marginBottom:6}}>সার্ভারে আছে: <strong>{syncCheck.serverCount}</strong>টি · এই ডিভাইসে দেখাচ্ছে: <strong>{syncCheck.localCount}</strong>টি</div>
             {syncCheck.stillPendingHere&&syncCheck.stillPendingHere.length>0?
-              <div style={{background:"#fef2f2",color:"#991b1b",borderRadius:7,padding:"9px 11px",fontSize:10.5,fontWeight:700,lineHeight:1.7,marginBottom:9}}>⚠️ এই ডিভাইসে {syncCheck.stillPendingHere.length}টা অর্ডার আসলে এখনো আসল সার্ভারে পৌঁছায়নি — শুধু এই ডিভাইসেই লেখা আছে, নিশ্চিত হয়নি। এইজন্যই উপরের সংখ্যাটা ভুলভাবে মিলে যাচ্ছিল। ইন্টারনেট সংযোগ যাচাই করে পাতাটা রিলোড করুন — কয়েক মিনিট পর আবার "যাচাই করুন" চাপুন। এই সংখ্যা না কমলে জানাবেন।</div>
+              <div style={{background:"#fef2f2",color:"#991b1b",borderRadius:7,padding:"9px 11px",fontSize:10.5,fontWeight:700,lineHeight:1.7,marginBottom:9}}>
+                ⚠️ এই ডিভাইসে {syncCheck.stillPendingHere.length}টা অর্ডার আসলে এখনো আসল সার্ভারে পৌঁছায়নি — শুধু এই ডিভাইসেই লেখা আছে, নিশ্চিত হয়নি। কিছু করার দরকার নেই — অ্যাপ নিজে থেকেই ছবি ছোট করে বারবার পাঠানোর চেষ্টা করে যাচ্ছে (৯০ সেকেন্ডের মধ্যে শুরু হয়ে যাবে)। ছবি ছোট করেও না হলে ছবি ছাড়াই অর্ডারের তথ্য পাঠিয়ে দেবে, যাতে অর্ডারটা কখনো না হারায়। কিছুক্ষণ পর আবার "যাচাই করুন" চেপে দেখুন সংখ্যা কমেছে কিনা।
+              </div>
             :null}
             {(!syncCheck.stillPendingHere||syncCheck.stillPendingHere.length===0)&&syncCheck.localOnly.length===0&&(!syncCheck.mismatched||syncCheck.mismatched.length===0)?
               <div style={{background:"#f0fdf4",color:"#166534",borderRadius:7,padding:"8px 10px",fontSize:10,fontWeight:600}}>✅ সব ঠিক আছে — এই ডিভাইসের সবকিছুই সার্ভারের সাথে মিলছে</div>
