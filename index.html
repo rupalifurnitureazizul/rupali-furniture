@@ -104,7 +104,7 @@ function compressImage(file,maxDim=1200,quality=0.82,maxBytes=110000){
 /* ── FULL-RESOLUTION LOCAL FOLDER STORAGE (desktop Chrome/Edge/Brave only) ──
    Original, uncompressed images are saved as real files in a folder you choose
    on your computer. Only a small compressed thumbnail syncs to the cloud/mobile. */
-const BUILD_TAG="4.78";
+const BUILD_TAG="4.79";
 const FS_SUPPORTED=typeof window!=="undefined"&&"showDirectoryPicker" in window;
 function idbOpen(){
   return new Promise((resolve,reject)=>{
@@ -1773,6 +1773,7 @@ function App({firebaseConfig,onResetConfig}){
   const loadPermanentSyncFailures=()=>{try{return JSON.parse(localStorage.getItem("rf_permanent_sync_failures")||"[]")}catch(e){return[]}};
   const savePermanentSyncFailures=(list)=>{try{localStorage.setItem("rf_permanent_sync_failures",JSON.stringify(list))}catch(e){}};
   const[permanentSyncFailures,setPermanentSyncFailures]=useState(loadPermanentSyncFailures);
+  const[autoStuckStatus,setAutoStuckStatus]=useState(null); // {lastRunAt, lastError, foundCount, resolvedCount, running}
   const markPermanentSyncFailure=(orderNo,reason)=>{
     const list=loadPermanentSyncFailures().filter(f=>f.no!==orderNo);
     list.push({no:orderNo,reason,at:new Date().toISOString()});
@@ -2116,6 +2117,7 @@ function App({firebaseConfig,onResetConfig}){
       // শুরু হয়ে যায় ──
       const autoStuckCheck=async()=>{
         const fs2=fsRef.current;
+        setAutoStuckStatus(prev=>({...(prev||{}),running:true,lastRunAt:new Date().toISOString(),lastError:!fs2?"সংযোগ (fsRef) তৈরিই হয়নি":null}));
         if(!fs2)return;
         try{
           const snap2=await fs2.collection("orders").get({source:"server"});
@@ -2134,16 +2136,29 @@ function App({firebaseConfig,onResetConfig}){
           Object.keys(autoResolveAttemptedRef.current).forEach(no=>{
             if(!stillPendingIds.has(no))delete autoResolveAttemptedRef.current[no];
           });
+          setAutoStuckStatus(prev=>({...(prev||{}),totalDocs:snap2.docs.length,foundPendingCount:stillPendingIds.size,queuedThisRun:toResolve.length,resolvedThisRun:0,failedThisRun:0,lastAttemptDetail:[]}));
           // ── একসাথে অনেকগুলো চালালে ফোন ধীর হয়ে যেতে পারে (ছবি ছোট করা + নেটওয়ার্ক, দুটোই
           // ভারী কাজ) — তাই একটার পর একটা, ধারাবাহিকভাবে সমাধানের চেষ্টা হয় ──
           for(const no of toResolve){
             const order=ordersRef.current.find(o=>o.no===no);
-            if(order)await autoResolveTooLarge(no,false,order);
+            if(!order){
+              setAutoStuckStatus(prev=>({...prev,lastAttemptDetail:[...(prev.lastAttemptDetail||[]),{no,ok:false,reason:"এই ডিভাইসের orders তালিকায় এই নম্বরটাই নেই"}]}));
+              continue;
+            }
+            try{
+              const ok=await autoResolveTooLarge(no,false,order);
+              setAutoStuckStatus(prev=>({...prev,resolvedThisRun:(prev.resolvedThisRun||0)+(ok?1:0),failedThisRun:(prev.failedThisRun||0)+(ok?0:1),lastAttemptDetail:[...(prev.lastAttemptDetail||[]),{no,ok}]}));
+            }catch(e2){
+              setAutoStuckStatus(prev=>({...prev,failedThisRun:(prev.failedThisRun||0)+1,lastAttemptDetail:[...(prev.lastAttemptDetail||[]),{no,ok:false,reason:e2.message}]}));
+            }
           }
-        }catch(e){/* নিরবে — পরের চক্রে আবার চেষ্টা হবে */}
+          setAutoStuckStatus(prev=>({...prev,running:false}));
+        }catch(e){
+          setAutoStuckStatus(prev=>({...(prev||{}),running:false,lastError:e.message}));
+        }
       };
-      const firstStuckCheck=setTimeout(autoStuckCheck,15000);
-      const stuckCheckInterval=setInterval(autoStuckCheck,120000);
+      const firstStuckCheck=setTimeout(autoStuckCheck,5000);
+      const stuckCheckInterval=setInterval(autoStuckCheck,30000);
 
       return()=>{clearTimeout(timer);clearTimeout(firstStuckCheck);clearInterval(stuckCheckInterval);unsubOrders();unsubExpenses();unsubLots();unsubDb();unsubGalleries();unsubWoodSettings();unsubLaborSettings();unsubAlertSettings();unsubRackSplits();unsubRackBands();unsubCarp();unsubWorkers();unsubPayroll()};
     }catch(e){
@@ -2455,11 +2470,11 @@ function App({firebaseConfig,onResetConfig}){
   if(page==="expense")return<ExpensePage expenses={expenses} onSave={saveExpense} onBack={goBack}/>;
   if(page==="payroll")return<PayrollPage workers={workers} saveWorker={saveWorker} deleteWorker={deleteWorker} payrollWeeks={payrollWeeks} savePayrollWeek={savePayrollWeek} updateAttendance={updateAttendance} addAdvanceEntry={addAdvanceEntry} removeAdvanceEntry={removeAdvanceEntry} onBack={goBack}/>;
   if(page==="plreport")return<PLReportPage orders={orders} expenses={expenses} workers={workers} payrollWeeks={payrollWeeks} woodLots={woodLots} woodSettings={woodSettings} laborSettings={laborSettings} onBack={goBack}/>;
-  return<Home orders={orders} expenses={expenses} woodLots={woodLots} db={db} woodSettings={woodSettings} laborSettings={laborSettings} workers={workers} payrollWeeks={payrollWeeks} alertSettings={alertSettings} saveAlertSettings={saveAlertSettings} backupFailed={backupFailed} lastSyncAt={lastSyncAt} onManualRefresh={manualRefresh} pendingWrites={pendingWrites} onCheckServerSync={checkServerSync} onAcceptServerVersion={acceptServerVersion} onUpdateOrder={updateOrder} onNew={()=>navigate({page:"form"})} onHist={()=>navigate({page:"history"})} onManage={()=>navigate({page:"manage"})} onExpense={()=>navigate({page:"expense"})} onWoodStock={()=>navigate({page:"woodstock",view:"list"})} onPayroll={()=>navigate({page:"payroll"})} onPLReport={()=>navigate({page:"plreport"})} onView={o=>navigate({page:"preview",orderNo:o.no,slip:0})} onViewDelivery={o=>navigate({page:"preview",orderNo:o.no,slip:5})} online={online} connError={connError} onResetConfig={onResetConfig} folderStatus={folderStatus} connectFolder={connectFolder} highlightNo={highlightNo} onBackupData={backupData} projectId={firebaseConfig?.projectId||""} appId={firebaseConfig?.appId||""} permanentSyncFailures={permanentSyncFailures}/>;
+  return<Home orders={orders} expenses={expenses} woodLots={woodLots} db={db} woodSettings={woodSettings} laborSettings={laborSettings} workers={workers} payrollWeeks={payrollWeeks} alertSettings={alertSettings} saveAlertSettings={saveAlertSettings} backupFailed={backupFailed} lastSyncAt={lastSyncAt} onManualRefresh={manualRefresh} pendingWrites={pendingWrites} onCheckServerSync={checkServerSync} onAcceptServerVersion={acceptServerVersion} onUpdateOrder={updateOrder} onNew={()=>navigate({page:"form"})} onHist={()=>navigate({page:"history"})} onManage={()=>navigate({page:"manage"})} onExpense={()=>navigate({page:"expense"})} onWoodStock={()=>navigate({page:"woodstock",view:"list"})} onPayroll={()=>navigate({page:"payroll"})} onPLReport={()=>navigate({page:"plreport"})} onView={o=>navigate({page:"preview",orderNo:o.no,slip:0})} onViewDelivery={o=>navigate({page:"preview",orderNo:o.no,slip:5})} online={online} connError={connError} onResetConfig={onResetConfig} folderStatus={folderStatus} connectFolder={connectFolder} highlightNo={highlightNo} onBackupData={backupData} projectId={firebaseConfig?.projectId||""} appId={firebaseConfig?.appId||""} permanentSyncFailures={permanentSyncFailures} autoStuckStatus={autoStuckStatus}/>;
 }
 
 /* ── HOME / DASHBOARD ── */
-function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,payrollWeeks,alertSettings,saveAlertSettings,backupFailed,lastSyncAt,onManualRefresh,pendingWrites,onCheckServerSync,onAcceptServerVersion,onUpdateOrder,onNew,onHist,onManage,onExpense,onWoodStock,onPayroll,onPLReport,onView,onViewDelivery,online,connError,onResetConfig,folderStatus,connectFolder,highlightNo,onBackupData,projectId,appId,permanentSyncFailures}){
+function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,payrollWeeks,alertSettings,saveAlertSettings,backupFailed,lastSyncAt,onManualRefresh,pendingWrites,onCheckServerSync,onAcceptServerVersion,onUpdateOrder,onNew,onHist,onManage,onExpense,onWoodStock,onPayroll,onPLReport,onView,onViewDelivery,online,connError,onResetConfig,folderStatus,connectFolder,highlightNo,onBackupData,projectId,appId,permanentSyncFailures,autoStuckStatus}){
   const now=new Date();
   const[showAllRunning,setShowAllRunning]=useState(false);
   const[showSystemZone,setShowSystemZone]=useState(false);
@@ -3541,7 +3556,17 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
             <div style={{fontSize:10,color:"#555",marginBottom:6}}>সার্ভারে আছে: <strong>{syncCheck.serverCount}</strong>টি · এই ডিভাইসে দেখাচ্ছে: <strong>{syncCheck.localCount}</strong>টি</div>
             {syncCheck.stillPendingHere&&syncCheck.stillPendingHere.length>0?
               <div style={{background:"#fef2f2",color:"#991b1b",borderRadius:7,padding:"9px 11px",fontSize:10.5,fontWeight:700,lineHeight:1.7,marginBottom:9}}>
-                ⚠️ এই ডিভাইসে {syncCheck.stillPendingHere.length}টা অর্ডার আসলে এখনো আসল সার্ভারে পৌঁছায়নি — শুধু এই ডিভাইসেই লেখা আছে, নিশ্চিত হয়নি। কিছু করার দরকার নেই — অ্যাপ নিজে থেকেই প্রতি ২ মিনিটে যাচাই করে ছবি ছোট করে পাঠানোর চেষ্টা করে যাচ্ছে। ছবি ছোট করেও না হলে ছবি ছাড়াই অর্ডারের তথ্য পাঠিয়ে দেবে, যাতে অর্ডারটা কখনো না হারায়। ২-৩ মিনিট এই পাতাটা খোলা/সচল রেখে তারপর আবার "যাচাই করুন" চেপে দেখুন সংখ্যা কমেছে কিনা।
+                ⚠️ এই ডিভাইসে {syncCheck.stillPendingHere.length}টা অর্ডার আসলে এখনো আসল সার্ভারে পৌঁছায়নি — শুধু এই ডিভাইসেই লেখা আছে, নিশ্চিত হয়নি। কিছু করার দরকার নেই — অ্যাপ নিজে থেকেই প্রতি ৩০ সেকেন্ডে যাচাই করে ছবি ছোট করে পাঠানোর চেষ্টা করে যাচ্ছে। ছবি ছোট করেও না হলে ছবি ছাড়াই অর্ডারের তথ্য পাঠিয়ে দেবে, যাতে অর্ডারটা কখনো না হারায়। কিছুক্ষণ এই পাতাটা খোলা/সচল রেখে তারপর আবার "যাচাই করুন" চেপে দেখুন সংখ্যা কমেছে কিনা।
+                {autoStuckStatus&&<div style={{marginTop:9,paddingTop:9,borderTop:"1px dashed #fca5a5",fontWeight:400,fontSize:9.5,lineHeight:1.7}}>
+                  <div style={{fontWeight:700,marginBottom:3}}>🔧 স্বয়ংক্রিয় চেষ্টার অবস্থা (যাচাইয়ের জন্য):</div>
+                  <div>সর্বশেষ চেষ্টা: {autoStuckStatus.lastRunAt?new Date(autoStuckStatus.lastRunAt).toLocaleTimeString("bn-BD"):"এখনো হয়নি"} {autoStuckStatus.running?"(এখন চলছে...)":""}</div>
+                  {autoStuckStatus.lastError&&<div style={{color:"#991b1b",fontWeight:700}}>ত্রুটি: {autoStuckStatus.lastError}</div>}
+                  {autoStuckStatus.totalDocs!==undefined&&<div>সার্ভারে মোট দেখেছে: {autoStuckStatus.totalDocs}টি, তার মধ্যে আটকে: {autoStuckStatus.foundPendingCount}টি</div>}
+                  {autoStuckStatus.queuedThisRun!==undefined&&<div>এই দফায় নতুন করে চেষ্টা করেছে: {autoStuckStatus.queuedThisRun}টি (সফল: {autoStuckStatus.resolvedThisRun||0}, ব্যর্থ: {autoStuckStatus.failedThisRun||0})</div>}
+                  {autoStuckStatus.lastAttemptDetail&&autoStuckStatus.lastAttemptDetail.length>0&&<div style={{marginTop:4}}>
+                    {autoStuckStatus.lastAttemptDetail.slice(-5).map((d,i)=><div key={i}>• {d.no} — {d.ok?"✅ সফল":"❌ ব্যর্থ"}{d.reason?` (${d.reason})`:""}</div>)}
+                  </div>}
+                </div>}
               </div>
             :null}
             {(!syncCheck.stillPendingHere||syncCheck.stillPendingHere.length===0)&&syncCheck.localOnly.length===0&&(!syncCheck.mismatched||syncCheck.mismatched.length===0)?
