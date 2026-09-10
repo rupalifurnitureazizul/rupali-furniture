@@ -104,7 +104,7 @@ function compressImage(file,maxDim=1200,quality=0.82,maxBytes=110000){
 /* ── FULL-RESOLUTION LOCAL FOLDER STORAGE (desktop Chrome/Edge/Brave only) ──
    Original, uncompressed images are saved as real files in a folder you choose
    on your computer. Only a small compressed thumbnail syncs to the cloud/mobile. */
-const BUILD_TAG="4.70";
+const BUILD_TAG="4.72";
 const FS_SUPPORTED=typeof window!=="undefined"&&"showDirectoryPicker" in window;
 function idbOpen(){
   return new Promise((resolve,reject)=>{
@@ -170,10 +170,19 @@ function computePhotoGrid(count){
   return{cols:4,imgHeight:54};
 }
 // অর্ডারের প্রথম ফার্নিচারের ক্যাটাগরি অনুযায়ী ফোল্ডারের নাম — ছবি সেই ক্যাটাগরির সাবফোল্ডারে সেভ হয়
-function orderCategoryFolder(order,db){
-  const firstItem=(order&&order.items||[])[0];
-  if(!firstItem||!firstItem.catKey||!db||!db[firstItem.catKey])return"অন্যান্য";
-  return sanitizeFolderName(db[firstItem.catKey].bn);
+// ── ছবি এখন দুই ভাগে: "Order reference" (কার্পেন্টার কপির রেফারেন্স ছবি) ও "Finished order"
+// (ডেলিভারির সময়ের সম্পন্ন ফার্নিচারের ছবি) — এই দুটো কখনো একই ফোল্ডারে মেশে না। প্রতিটার
+// ভেতরে বছর/মাস উপ-ফোল্ডার, সবসময় অর্ডারের তারিখ অনুযায়ী (ডেলিভারির তারিখ না) — যাতে একই
+// অর্ডারের রেফারেন্স ও সম্পন্ন ছবি সবসময় একই মাসের ফোল্ডারে মেলে, ডেলিভারি অন্য মাসে/বছরে
+// হয়ে গেলেও। মাসের ফোল্ডারের নামে সংখ্যা আগে রাখা হয়েছে (০১-জানুয়ারি...) যাতে Windows/Finder-এ
+// সাজালে বর্ণানুক্রমিক না হয়ে ক্যালেন্ডার-ক্রমেই দেখায় ──
+function orderImageFolder(kind,order){
+  const topFolder=kind==="finished"?"Finished order":"Order reference";
+  const d=(order&&order.cust&&order.cust.date)?new Date(order.cust.date):new Date();
+  const year=isNaN(d.getTime())?new Date().getFullYear():d.getFullYear();
+  const monthIdx=isNaN(d.getTime())?new Date().getMonth():d.getMonth();
+  const monthFolder=`${String(monthIdx+1).padStart(2,"0")}-${monthName(monthIdx)}`;
+  return`${topFolder}/${year}/${monthFolder}`;
 }
 // relPath এ "/" থাকলে সেটাকে সাবফোল্ডার ধরে সেই অনুযায়ী ফোল্ডার তৈরি/খোঁজা হয় — না থাকলে আগের মতোই রুট ফোল্ডারে সরাসরি
 async function resolveFolderForPath(rootFolder,relPath){
@@ -776,7 +785,7 @@ function S2({order,onPrint,db,saveDb,galleries,onUpdateOrder,woodSettings,laborS
     e.target.value="";
     if(files.length===0)return;
     const newOnes=[];
-    const categoryFolder=orderCategoryFolder(order,db);
+    const categoryFolder=orderImageFolder("ref",order);
     for(let idx=0;idx<files.length;idx++){
       const compressed=await compressImage(files[idx]);
       if(!compressed)continue;
@@ -1113,7 +1122,7 @@ function S4({order,onPrint,db,saveDb,onUpdateOrder}){
       {images.length>0&&<div style={{marginBottom:10}}>
         <div style={{fontSize:9,color:"#92400e",fontWeight:700,marginBottom:5,textAlign:"center"}}>গ্রাহকের রেফারেন্স ছবি — এই অনুযায়ী তৈরি করুন</div>
         <div style={{display:"flex",flexWrap:"wrap",gap:6,justifyContent:"center"}}>
-          {images.map((img,i)=><div key={i} style={{textAlign:"center"}}><img src={img.src} className="ref-img" alt="ref" onClick={()=>openLightbox(img.src)} style={{maxHeight:120,cursor:"pointer"}}/><div style={{fontSize:8,color:"#888",marginTop:2}}>{img.caption}</div><FullImgBtn fileName={img.fileName}/></div>)}
+          {images.map((img,i)=><div key={i} style={{textAlign:"center"}}><img src={img.src} className="ref-img" alt="ref" onClick={()=>(img.fileName&&FS_SUPPORTED)?openFullResImageForPrint(img.fileName):openLightbox(img.src)} style={{maxHeight:120,cursor:"pointer"}}/><div style={{fontSize:8,color:"#888",marginTop:2}}>{img.caption}</div></div>)}
         </div>
       </div>}
       {items.map((it,i)=><div key={i} style={{border:"1.5px solid #92400e",borderRadius:8,overflow:"hidden",marginBottom:8}}>
@@ -2434,32 +2443,8 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
     // Exclude cancelled orders from all financial/analytical stats
     const activeOrders=orders.filter(o=>!o.cancelled);
 
-    // Last 6 months order count & revenue
-    const months=[];
-    for(let i=5;i>=0;i--){
-      const d=new Date(now.getFullYear(),now.getMonth()-i,1);
-      months.push({y:d.getFullYear(),m:d.getMonth()});
-    }
-    const monthlyOrders=months.map(({y,m})=>{
-      const count=activeOrders.filter(o=>{const od=new Date(o.cust.date);return od.getFullYear()===y&&od.getMonth()===m}).length;
-      const revenue=activeOrders.filter(o=>{const od=new Date(o.cust.date);return od.getFullYear()===y&&od.getMonth()===m}).reduce((s,o)=>s+(parseFloat(o.cust.total)||0),0);
-      return{label:monthName(m),count,revenue,y,m};
-    });
-    const monthlyExpense=months.map(({y,m})=>{
-      const total=expenses.filter(e=>{const ed=new Date(e.date);return ed.getFullYear()===y&&ed.getMonth()===m}).reduce((s,e)=>s+(parseFloat(e.total)||0),0);
-      // ── আয় বনাম খরচ চার্টে "খরচ" এখন শুধু ট্র্যাক-করা খরচ না — কাঠ ক্রয় ও বেতনও যোগ হয় ──
-      const woodCost=(woodLots||[]).filter(l=>{const ld=new Date(l.date);return ld.getFullYear()===y&&ld.getMonth()===m}).reduce((s,l)=>s+(l.logs||[]).reduce((ls,lg)=>ls+lg.cft,0)*(parseFloat(l.ratePerCft)||0),0);
-      let payrollCost=0;
-      Object.entries(payrollWeeks||{}).forEach(([weekEnd,wd])=>{
-        const wed=new Date(weekEnd);
-        if(wed.getFullYear()!==y||wed.getMonth()!==m)return;
-        Object.entries(wd.attendance||{}).forEach(([wid,days])=>{
-          const w=(workers||[]).find(x=>x.id===wid);
-          if(w)payrollCost+=(parseFloat(days)||0)*(parseFloat(w.dailyRate)||0);
-        });
-      });
-      return{label:monthName(m),value:total+woodCost+payrollCost};
-    });
+    // ── বিক্রয় বনাম খরচ এখন বছর-ভিত্তিক, আলাদা useMemo-তে (নিচে) — বছর বাছাই করলে যেন পুরো
+    // ড্যাশবোর্ড আবার হিসাব না হয় ──
     // Year over year - same months across 3 years
     const yoy=months.map(({y,m})=>{
       const thisY=activeOrders.filter(o=>{const od=new Date(o.cust.date);return od.getFullYear()===y&&od.getMonth()===m}).length;
@@ -2552,17 +2537,8 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
     const recentAvgProd=recentProd.length?Math.round(recentProd.reduce((s,p)=>s+p.days,0)/recentProd.length):null;
     const olderAvgProd=olderProd.length?Math.round(olderProd.reduce((s,p)=>s+p.days,0)/olderProd.length):null;
 
-    // ── ৪. মৌসুমি প্রবণতা: কোন মাসে গড়ে কত অর্ডার আসে (সব বছর মিলিয়ে) ──
-    const monthTotals=Array(12).fill(0),monthYears=Array(12).fill(null).map(()=>new Set());
-    activeOrders.forEach(o=>{
-      if(!o.cust.date)return;
-      const d=parseISO(o.cust.date);
-      monthTotals[d.getUTCMonth()]+=1;
-      monthYears[d.getUTCMonth()].add(d.getUTCFullYear());
-    });
-    const seasonal=monthTotals.map((total,i)=>({month:i,avg:monthYears[i].size?total/monthYears[i].size:0,total}));
-    const seasonalMax=Math.max(...seasonal.map(s=>s.avg),0);
-    const seasonalYearSpan=new Set(activeOrders.filter(o=>o.cust.date).map(o=>parseISO(o.cust.date).getUTCFullYear())).size;
+    // ── ৪. মৌসুমি প্রবণতা এখন আলাদা useMemo-তে সরানো হয়েছে (নিচে), যাতে সময়সীমা বাছাই করার
+    // সময় পুরো ড্যাশবোর্ড আবার হিসাব না হয় ──
 
     // ── ৫. কাঠের দাম বৃদ্ধির সতর্কতা: গত ৬ মাসে কোন কাঠের দাম কত % বেড়েছে ──
     const sixMonthsAgo=monthsAgo(todayStr(),6);
@@ -2854,7 +2830,7 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
         daysUntilOrder:dailyUse>0?Math.round((stock-reorderPoint)/dailyUse):null};
     }).filter(Boolean).sort((a,b)=>a.monthsLeft-b.monthsLeft);
 
-    return{running:withDays,monthlyOrders,monthlyExpense,yoy,totalRevenue,totalExpense,catPie,thisMonthCount:thisMonthOrders.length,avgOrderValue,totalOutstanding,topCategoryRanked,yearly,sameMonthTrend,sameMonthLabel,stockPie,payables,totalPayable,cfInflow,cfOutflow,cfNet,deptAvg,deptAvgMax,stuckItems,payrollProdByMonth,validPerCft,setLabourRate,emptyWoodModels,repeatRate,repeatCount:repeatCusts.length,totalCustCount:custList.length,repeatRevenueShare,stockAlerts,readyNotCollected,readyValueStuck,avgProdDays,recentAvgProd,olderAvgProd,prodCount:prodTimes.length,seasonal,seasonalMax,seasonalYearSpan,woodPriceAlerts,catProfitRanked,throughputRanked,bottleneckDeptBn,workerRanked};
+    return{running:withDays,yoy,totalRevenue,totalExpense,catPie,thisMonthCount:thisMonthOrders.length,avgOrderValue,totalOutstanding,topCategoryRanked,yearly,sameMonthTrend,sameMonthLabel,stockPie,payables,totalPayable,cfInflow,cfOutflow,cfNet,deptAvg,deptAvgMax,stuckItems,payrollProdByMonth,validPerCft,setLabourRate,emptyWoodModels,repeatRate,repeatCount:repeatCusts.length,totalCustCount:custList.length,repeatRevenueShare,stockAlerts,readyNotCollected,readyValueStuck,avgProdDays,recentAvgProd,olderAvgProd,prodCount:prodTimes.length,woodPriceAlerts,catProfitRanked,throughputRanked,bottleneckDeptBn,workerRanked};
   },[orders,expenses,db,woodLots,woodSettings,laborSettings,workers,payrollWeeks,alertSettings]);
 
   // ── "খরচ — ক্যাটাগরি অনুযায়ী" এখন সময়সীমা বাছাই করা যায় — এটা আলাদা, ছোট useMemo-তে রাখা
@@ -2921,6 +2897,53 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
 
     return{expensePie,expCatDetail};
   },[expenses,expRangeSelect]);
+
+  // ── মৌসুমি প্রবণতা — এখন কত বছরের গড় নেওয়া হবে তা বাছাই করা যায় ──
+  const[seasonRangeSelect,setSeasonRangeSelect]=useState(3); // 1|2|3|6 বছর
+  const seasonData=useMemo(()=>{
+    const now=new Date();
+    const cutoffYear=now.getFullYear()-seasonRangeSelect+1; // এই বছরসহ পিছনের N বছর
+    const activeOrders=(orders||[]).filter(o=>!o.cancelled);
+    const monthTotals=Array(12).fill(0),monthYears=Array(12).fill(null).map(()=>new Set());
+    activeOrders.forEach(o=>{
+      if(!o.cust.date)return;
+      const d=parseISO(o.cust.date);
+      const y=d.getUTCFullYear();
+      if(y<cutoffYear)return;
+      monthTotals[d.getUTCMonth()]+=1;
+      monthYears[d.getUTCMonth()].add(y);
+    });
+    const seasonal=monthTotals.map((total,i)=>({month:i,avg:monthYears[i].size?total/monthYears[i].size:0,total}));
+    const seasonalMax=Math.max(...seasonal.map(s=>s.avg),0);
+    const seasonalYearSpan=new Set(activeOrders.filter(o=>o.cust.date&&parseISO(o.cust.date).getUTCFullYear()>=cutoffYear).map(o=>parseISO(o.cust.date).getUTCFullYear())).size;
+    return{seasonal,seasonalMax,seasonalYearSpan};
+  },[orders,seasonRangeSelect]);
+
+  // ── বিক্রয় বনাম খরচ — এখন বছর বাছাই করা যায় (এই বছর/গত বছর/তার আগের বছর), সবসময় ১২ মাস
+  // (জানুয়ারি-ডিসেম্বর) দেখায় ──
+  const[svExpYearSelect,setSvExpYearSelect]=useState("this"); // this|last|last2
+  const svExpData=useMemo(()=>{
+    const now=new Date();
+    const year=svExpYearSelect==="this"?now.getFullYear():svExpYearSelect==="last"?now.getFullYear()-1:now.getFullYear()-2;
+    const activeOrders=(orders||[]).filter(o=>!o.cancelled);
+    const monthly=Array.from({length:12},(_,m)=>{
+      const revenue=activeOrders.filter(o=>{const od=new Date(o.cust.date);return od.getFullYear()===year&&od.getMonth()===m}).reduce((s,o)=>s+(parseFloat(o.cust.total)||0),0);
+      const total=(expenses||[]).filter(e=>{const ed=new Date(e.date);return ed.getFullYear()===year&&ed.getMonth()===m}).reduce((s,e)=>s+(parseFloat(e.total)||0),0);
+      // ── "খরচ" শুধু ট্র্যাক-করা খরচ না — কাঠ ক্রয় ও বেতনও যোগ হয় (আগের মতোই) ──
+      const woodCost=(woodLots||[]).filter(l=>{const ld=new Date(l.date);return ld.getFullYear()===year&&ld.getMonth()===m}).reduce((s,l)=>s+(l.logs||[]).reduce((ls,lg)=>ls+lg.cft,0)*(parseFloat(l.ratePerCft)||0),0);
+      let payrollCost=0;
+      Object.entries(payrollWeeks||{}).forEach(([weekEnd,wd])=>{
+        const wed=new Date(weekEnd);
+        if(wed.getFullYear()!==year||wed.getMonth()!==m)return;
+        Object.entries(wd.attendance||{}).forEach(([wid,days])=>{
+          const w=(workers||[]).find(x=>x.id===wid);
+          if(w)payrollCost+=(parseFloat(days)||0)*(parseFloat(w.dailyRate)||0);
+        });
+      });
+      return{label:monthName(m),revenue,expense:total+woodCost+payrollCost};
+    });
+    return{year,monthly};
+  },[orders,expenses,woodLots,payrollWeeks,workers,svExpYearSelect]);
 
 
   return<div style={{minHeight:"100vh",background:`linear-gradient(150deg,${RED} 0%,#8B0020 100%)`,position:"relative"}}>
@@ -3109,17 +3132,22 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
         </div>
       </div>}
 
-      {stats.seasonalYearSpan>=1&&stats.seasonalMax>0&&<div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 14px",marginBottom:14}}>
-        <div style={{fontSize:12,fontWeight:700,color:"#b45309",marginBottom:3}}>📅 মৌসুমি প্রবণতা — কোন মাসে অর্ডার বেশি</div>
-        <div style={{fontSize:9,color:"#999",marginBottom:8}}>{stats.seasonalYearSpan>=2?`${stats.seasonalYearSpan} বছরের গড় — আগে থেকে কাঠ ও কর্মী পরিকল্পনায় কাজে লাগবে।`:"এখনো ১ বছরের কম তথ্য — আরও ডেটা জমলে প্রবণতা স্পষ্ট হবে।"}</div>
-        <div style={{display:"flex",alignItems:"flex-end",gap:3,height:70}}>
-          {stats.seasonal.map(s=><div key={s.month} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"flex-end",height:"100%"}}>
-            <div style={{fontSize:7,color:"#666",marginBottom:2}}>{s.avg>0?s.avg.toFixed(s.avg<10?1:0):""}</div>
-            <div style={{width:"100%",height:`${stats.seasonalMax>0?(s.avg/stats.seasonalMax)*100:0}%`,background:s.avg>=stats.seasonalMax*0.75?"#b45309":"#fcd9a8",borderRadius:"3px 3px 0 0",minHeight:s.avg>0?3:0}}></div>
-            <div style={{fontSize:7,color:"#999",marginTop:2}}>{monthName(s.month)}</div>
-          </div>)}
+      <div style={{marginBottom:14}}>
+        <div style={{fontSize:12,fontWeight:700,color:"#b45309",marginBottom:6}}>📅 মৌসুমি প্রবণতা — কোন মাসে অর্ডার বেশি</div>
+        <div style={{display:"flex",gap:6,marginBottom:8,overflowX:"auto"}}>
+          {[{v:1,l:"আগের বছর"},{v:2,l:"আগের ২ বছর"},{v:3,l:"আগের ৩ বছর"},{v:6,l:"আগের ৬ বছর"}].map(o=><button key={o.v} onClick={()=>setSeasonRangeSelect(o.v)} style={{flexShrink:0,padding:"6px 12px",borderRadius:20,border:seasonRangeSelect===o.v?"none":"1px solid #ddd",background:seasonRangeSelect===o.v?"#b45309":"white",color:seasonRangeSelect===o.v?"white":"#666",fontSize:10,fontWeight:600}}>{o.l}</button>)}
         </div>
-      </div>}
+        {seasonData.seasonalYearSpan>=1&&seasonData.seasonalMax>0?<div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 14px"}}>
+          <div style={{fontSize:9,color:"#999",marginBottom:8}}>{seasonData.seasonalYearSpan>=2?`${seasonData.seasonalYearSpan} বছরের গড় — আগে থেকে কাঠ ও কর্মী পরিকল্পনায় কাজে লাগবে।`:"এখনো ১ বছরের কম তথ্য — আরও ডেটা জমলে প্রবণতা স্পষ্ট হবে।"}</div>
+          <div style={{display:"flex",alignItems:"flex-end",gap:3,height:70}}>
+            {seasonData.seasonal.map(s=><div key={s.month} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"flex-end",height:"100%"}}>
+              <div style={{fontSize:7,color:"#666",marginBottom:2}}>{s.avg>0?s.avg.toFixed(s.avg<10?1:0):""}</div>
+              <div style={{width:"100%",height:`${seasonData.seasonalMax>0?(s.avg/seasonData.seasonalMax)*100:0}%`,background:s.avg>=seasonData.seasonalMax*0.75?"#b45309":"#fcd9a8",borderRadius:"3px 3px 0 0",minHeight:s.avg>0?3:0}}></div>
+              <div style={{fontSize:7,color:"#999",marginTop:2}}>{monthName(s.month)}</div>
+            </div>)}
+          </div>
+        </div>:<div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"14px",textAlign:"center",fontSize:11,color:"#999"}}>এই সময়সীমায় কোনো অর্ডার নেই</div>}
+      </div>
 
       {/* Year over Year - এখন ৩ বছরের তুলনা */}
       <div style={{marginBottom:16}}>
@@ -3150,9 +3178,34 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
       <div id="z-health" style={{scrollMarginTop:56,fontSize:11,fontWeight:800,color:"#1d4ed8",letterSpacing:"0.3px",margin:"18px 0 8px",paddingBottom:4,borderBottom:"2px solid #1d4ed822"}}>📊 ব্যবসার স্বাস্থ্য</div>
       {/* Revenue vs Expense */}
       <div style={{marginBottom:18}}>
-        <div style={{fontWeight:700,fontSize:13,color:"#222",marginBottom:8}}>💰 বিক্রয় বনাম খরচ (৬ মাস)</div>
-        <div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 8px"}}>
-          <DualBarChart data={stats.monthlyOrders.map((m,i)=>({label:m.label,a:stats.monthlyExpense[i]?.value||0,b:m.revenue}))} labelA="খরচ" labelB="বিক্রয়" showValues={true}/>
+        <div style={{fontWeight:700,fontSize:13,color:"#222",marginBottom:6}}>💰 বিক্রয় বনাম খরচ ({svExpData.year})</div>
+        <div style={{display:"flex",gap:6,marginBottom:8,overflowX:"auto"}}>
+          {[{v:"this",l:"এই বছর"},{v:"last",l:"গত বছর"},{v:"last2",l:"তার আগের বছর"}].map(o=><button key={o.v} onClick={()=>setSvExpYearSelect(o.v)} style={{flexShrink:0,padding:"6px 12px",borderRadius:20,border:svExpYearSelect===o.v?"none":"1px solid #ddd",background:svExpYearSelect===o.v?"#166534":"white",color:svExpYearSelect===o.v?"white":"#666",fontSize:10,fontWeight:600}}>{o.l}</button>)}
+        </div>
+        <div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 8px",overflowX:"auto"}}>
+          {(()=>{
+            const maxV=Math.max(...svExpData.monthly.map(m=>Math.max(m.revenue,m.expense)),1);
+            const shortMoney=(v)=>v>=1000?(v/1000).toFixed(v>=10000?0:1)+"হা":Math.round(v).toString();
+            return<div style={{display:"flex",alignItems:"stretch",gap:4,height:150,minWidth:580}}>
+              {svExpData.monthly.map((m,i)=><div key={i} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",height:"100%"}}>
+                <div style={{flex:1,width:"100%",display:"flex",alignItems:"flex-end",gap:1}}>
+                  <div style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"flex-end",height:"100%"}}>
+                    <div style={{fontSize:7,color:"#777",marginBottom:1}}>{m.expense>0?shortMoney(m.expense):""}</div>
+                    <div style={{width:"100%",height:`${(m.expense/maxV)*100}%`,background:CHART_SOFT_GREY,borderRadius:"2px 2px 0 0",minHeight:m.expense>0?2:0}}></div>
+                  </div>
+                  <div style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"flex-end",height:"100%"}}>
+                    <div style={{fontSize:7,color:"#b45858",marginBottom:1}}>{m.revenue>0?shortMoney(m.revenue):""}</div>
+                    <div style={{width:"100%",height:`${(m.revenue/maxV)*100}%`,background:CHART_SOFT_RED,borderRadius:"2px 2px 0 0",minHeight:m.revenue>0?2:0}}></div>
+                  </div>
+                </div>
+                <div style={{fontSize:8,color:"#999",marginTop:3}}>{m.label}</div>
+              </div>)}
+            </div>
+          })()}
+          <div style={{display:"flex",gap:14,justifyContent:"center",marginTop:8}}>
+            <div style={{display:"flex",alignItems:"center",gap:4,fontSize:10,color:"#666"}}><div style={{width:9,height:9,background:CHART_SOFT_GREY,borderRadius:2}}></div>খরচ</div>
+            <div style={{display:"flex",alignItems:"center",gap:4,fontSize:10,color:"#666"}}><div style={{width:9,height:9,background:CHART_SOFT_RED,borderRadius:2}}></div>বিক্রয়</div>
+          </div>
         </div>
       </div>
 
@@ -5244,7 +5297,7 @@ function Form({onSave,onBack,db,saveDb,galleries,woodSettings,laborSettings,orde
     e.target.value="";
     if(!orderNo){alert("একটু অপেক্ষা করুন, অর্ডার নম্বর তৈরি হচ্ছে — কয়েক সেকেন্ড পর আবার চেষ্টা করুন।");return}
     let baseIdx=refImgs.length;
-    const categoryFolder=items.length>0?orderCategoryFolder({items},db):"অন্যান্য";
+    const categoryFolder=orderImageFolder("ref",{cust:c});
     for(const file of files){
       const compressed=await compressImage(file);
       if(!compressed)continue;
@@ -5465,15 +5518,9 @@ function Preview({order,onBack,slip,setSlip,onUpdate,onAddPayment,onSetDelivered
   // ── আগে এখানে পেমেন্ট-এডিট আর তথ্য-সম্পাদনা ফর্ম ছিল, যা সব ট্যাবেই (গ্রাহক/অর্ডার
   // বুক/ট্র্যাকিং/...) দেখা যেত। এখন সব এডিট শুধু "অর্ডার বুক কপি" ট্যাবে (S2), সংশ্লিষ্ট
   // জায়গাতেই, প্রতিটা তথ্য আলাদাভাবে এডিট করা যায় ──
-  // ── এক ক্লিকে রেফারেন্স ছবি + কার্পেন্টার কপি + পরিবহন কপি একসাথে প্রিন্ট ──
-  const[combinedPrintMode,setCombinedPrintMode]=useState(false);
-  useEffect(()=>{
-    if(!combinedPrintMode)return;
-    const t=setTimeout(()=>window.print(),80); // রেন্ডার সম্পূর্ণ হওয়ার সময় দেওয়া
-    const onAfter=()=>setCombinedPrintMode(false);
-    window.addEventListener("afterprint",onAfter);
-    return()=>{clearTimeout(t);window.removeEventListener("afterprint",onAfter)};
-  },[combinedPrintMode]);
+  // ── আগে এখানে রেফারেন্স ছবি+কার্পেন্টার+পরিবহন একসাথে প্রিন্ট করার বাটন ছিল। এখন এর বদলে
+  // কার্পেন্টার কপিতে রেফারেন্স ছবিতে ক্লিক করলেই সরাসরি ফুল-রেজোলিউশন ছবি নতুন ট্যাবে খুলে
+  // যায় (প্রিন্ট/সেভ দুটোই করা যায়), তাই এই আলাদা বাটনের দরকার নেই ──
   const[newPay,setNewPay]=useState({date:todayStr(),amount:"",note:"পেমেন্ট"});
   // ── সরাসরি লাইভ order prop থেকে — কোনো স্থানীয় (স্টেল হতে পারে এমন) কপি রাখা হচ্ছে না,
   // যাতে অন্য ডিভাইস (যেমন ফোন) থেকে ছবি যুক্ত করলে এই স্ক্রিনও সাথে সাথে দেখতে পায় ──
@@ -5484,7 +5531,7 @@ function Preview({order,onBack,slip,setSlip,onUpdate,onAddPayment,onSetDelivered
     const files=Array.from(e.target.files||[]);
     e.target.value="";
     if(files.length===0)return;
-    const categoryFolder=orderCategoryFolder(order,db);
+    const categoryFolder=orderImageFolder("finished",order);
     let next=[...deliveryImgs];
     let firstCompressed=null;
     for(const file of files){
@@ -5583,10 +5630,7 @@ function Preview({order,onBack,slip,setSlip,onUpdate,onAddPayment,onSetDelivered
     <div className="no-print" style={{background:"white",display:"flex",overflowX:"auto",borderBottom:"1px solid #eee"}}>
       {tabs.map(t=><button key={t.id} onClick={()=>!t.locked&&setSlip(t.id)} style={{flexShrink:0,padding:"10px 11px",border:"none",background:"none",fontSize:11,fontWeight:slip===t.id?700:400,color:t.locked?"#ccc":slip===t.id?t.c:"#888",borderBottom:slip===t.id?`3px solid ${t.c}`:"3px solid transparent",cursor:t.locked?"not-allowed":"pointer"}}>{t.l}</button>)}
     </div>
-    {(order.refImgs||[]).length>0&&<div className="no-print" style={{padding:"9px 14px",background:"#fdf4ff"}}>
-      <button onClick={()=>setCombinedPrintMode(true)} style={{width:"100%",background:"linear-gradient(135deg,#7c3aed,#6d28d9)",color:"white",border:"none",borderRadius:10,padding:"11px",fontSize:12,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center",gap:7,boxShadow:"0 2px 8px rgba(109,40,217,.3)"}}>🖨️📷 রেফারেন্স ছবি + কার্পেন্টার + পরিবহন — একসাথে প্রিন্ট</button>
-    </div>}
-    {!combinedPrintMode&&<div className="print-wrap" style={{padding:"12px",maxWidth:640,margin:"0 auto"}}>
+    <div className="print-wrap" style={{padding:"12px",maxWidth:640,margin:"0 auto"}}>
       <div className="slip-card" style={{background:"white",borderRadius:10,overflow:"hidden",boxShadow:"0 2px 10px rgba(0,0,0,.1)"}}>
         {slip===0&&<S1 order={order} onPrint={logPrint}/>}
         {slip===1&&<S2 order={order} onPrint={logPrint} db={db} saveDb={saveDb} galleries={galleries} onUpdateOrder={onUpdate} woodSettings={woodSettings} laborSettings={laborSettings}/>}
@@ -5595,24 +5639,7 @@ function Preview({order,onBack,slip,setSlip,onUpdate,onAddPayment,onSetDelivered
         {slip===4&&<S5 order={order} onPrint={logPrint} woodSettings={woodSettings} rackSplits={rackSplits}/>}
         {slip===5&&<S6 order={{...order,deliveryImgs}} onPrint={logPrint} onUpdateOrder={onUpdate} onSetDelivered={onSetDelivered} onPhotoChange={handleDeliveryImg} onRemovePhoto={removeDeliveryImg} allOrders={allOrders} printLocked={!isFullyPaid}/>}
       </div>
-    </div>}
-    {combinedPrintMode&&<div className="print-wrap" style={{padding:0}}>
-      <div className="slip-card" style={{background:"white",padding:"14px"}}>
-        <div style={{fontWeight:700,fontSize:13,marginBottom:8}}>📷 রেফারেন্স ছবি — {order.no}</div>
-        {(order.refImgs||[]).map((img,i)=><div key={i} style={{marginBottom:14,textAlign:"center"}}>
-          <img src={img.src} style={{maxWidth:"100%",maxHeight:650,objectFit:"contain"}}/>
-          {img.caption&&<div style={{fontSize:11,color:"#666",marginTop:4}}>{img.caption}</div>}
-        </div>)}
-      </div>
-      <div style={{pageBreakBefore:"always"}}></div>
-      <div className="slip-card" style={{background:"white"}}>
-        <S4 order={order} onPrint={()=>{}} db={db} saveDb={saveDb} onUpdateOrder={onUpdate}/>
-      </div>
-      <div style={{pageBreakBefore:"always"}}></div>
-      <div className="slip-card" style={{background:"white"}}>
-        <S5 order={order} onPrint={()=>{}} woodSettings={woodSettings} rackSplits={rackSplits}/>
-      </div>
-    </div>}
+    </div>
   </div>
 }
 
