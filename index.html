@@ -104,7 +104,7 @@ function compressImage(file,maxDim=1200,quality=0.82,maxBytes=110000){
 /* ── FULL-RESOLUTION LOCAL FOLDER STORAGE (desktop Chrome/Edge/Brave only) ──
    Original, uncompressed images are saved as real files in a folder you choose
    on your computer. Only a small compressed thumbnail syncs to the cloud/mobile. */
-const BUILD_TAG="4.74";
+const BUILD_TAG="4.75";
 const FS_SUPPORTED=typeof window!=="undefined"&&"showDirectoryPicker" in window;
 function idbOpen(){
   return new Promise((resolve,reject)=>{
@@ -1793,7 +1793,15 @@ function App({firebaseConfig,onResetConfig}){
     try{
       const snap=await fs.collection("orders").get({source:"server"});
       const serverDocs={};
-      snap.docs.forEach(d=>{serverDocs[d.id]=d.data()});
+      // ── গুরুত্বপূর্ণ: {source:"server"} চাইলেও Firestore এই ডিভাইসের নিজের এখনো-নিশ্চিত-না-হওয়া
+      // লেখাগুলো "সার্ভার" ফলাফলের সাথে মিশিয়ে দেখায় — তাই এই ডিভাইসে যদি কিছু লেখা কোনো কারণে
+      // কখনো সত্যিকারের সার্ভারে না পৌঁছে আটকে থাকে, তাহলেও এই চেক ভুলবশত "✅ ঠিক আছে" দেখাতে
+      // পারে। প্রতিটা ডকুমেন্টের metadata.hasPendingWrites দেখে সেটা আলাদা করে ধরা হচ্ছে ──
+      const stillPendingHere=[];
+      snap.docs.forEach(d=>{
+        serverDocs[d.id]=d.data();
+        if(d.metadata&&d.metadata.hasPendingWrites)stillPendingHere.push(d.id);
+      });
       const serverNos=new Set(Object.keys(serverDocs));
       const localOnly=orders.filter(o=>!serverNos.has(o.no));
       // ── শুধু "সার্ভারে নেই" তা না, "সার্ভারে আছে কিন্তু এই ডিভাইসের কপির সাথে মিলছে না"
@@ -1803,7 +1811,7 @@ function App({firebaseConfig,onResetConfig}){
         if(!sv)return false;
         return JSON.stringify(sv)!==JSON.stringify(o);
       });
-      return{localOnly,mismatched,serverDocs,serverCount:serverNos.size,localCount:orders.length};
+      return{localOnly,mismatched,serverDocs,serverCount:serverNos.size,localCount:orders.length,stillPendingHere};
     }catch(e){return{error:e.message}};
   };
   // ── সিঙ্ক-পরীক্ষায় "মিলছে না" চিহ্নিত কোনো অর্ডারে সার্ভারের কপিটাই সঠিক ধরে নিয়ে
@@ -3457,7 +3465,10 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
           {syncCheck&&syncCheck!=="loading"&&syncCheck.error&&<div style={{marginTop:8,fontSize:10,color:RED}}>⚠️ সার্ভারে পৌঁছানো যায়নি: {syncCheck.error}</div>}
           {syncCheck&&syncCheck!=="loading"&&!syncCheck.error&&<div style={{marginTop:9}}>
             <div style={{fontSize:10,color:"#555",marginBottom:6}}>সার্ভারে আছে: <strong>{syncCheck.serverCount}</strong>টি · এই ডিভাইসে দেখাচ্ছে: <strong>{syncCheck.localCount}</strong>টি</div>
-            {syncCheck.localOnly.length===0&&(!syncCheck.mismatched||syncCheck.mismatched.length===0)?
+            {syncCheck.stillPendingHere&&syncCheck.stillPendingHere.length>0?
+              <div style={{background:"#fef2f2",color:"#991b1b",borderRadius:7,padding:"9px 11px",fontSize:10.5,fontWeight:700,lineHeight:1.7,marginBottom:9}}>⚠️ এই ডিভাইসে {syncCheck.stillPendingHere.length}টা অর্ডার আসলে এখনো আসল সার্ভারে পৌঁছায়নি — শুধু এই ডিভাইসেই লেখা আছে, নিশ্চিত হয়নি। এইজন্যই উপরের সংখ্যাটা ভুলভাবে মিলে যাচ্ছিল। ইন্টারনেট সংযোগ যাচাই করে পাতাটা রিলোড করুন — কয়েক মিনিট পর আবার "যাচাই করুন" চাপুন। এই সংখ্যা না কমলে জানাবেন।</div>
+            :null}
+            {(!syncCheck.stillPendingHere||syncCheck.stillPendingHere.length===0)&&syncCheck.localOnly.length===0&&(!syncCheck.mismatched||syncCheck.mismatched.length===0)?
               <div style={{background:"#f0fdf4",color:"#166534",borderRadius:7,padding:"8px 10px",fontSize:10,fontWeight:600}}>✅ সব ঠিক আছে — এই ডিভাইসের সবকিছুই সার্ভারের সাথে মিলছে</div>
               :<div>
                 {syncCheck.localOnly.length>0&&<>
