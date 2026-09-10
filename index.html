@@ -104,7 +104,7 @@ function compressImage(file,maxDim=1200,quality=0.82,maxBytes=110000){
 /* ── FULL-RESOLUTION LOCAL FOLDER STORAGE (desktop Chrome/Edge/Brave only) ──
    Original, uncompressed images are saved as real files in a folder you choose
    on your computer. Only a small compressed thumbnail syncs to the cloud/mobile. */
-const BUILD_TAG="4.77";
+const BUILD_TAG="4.78";
 const FS_SUPPORTED=typeof window!=="undefined"&&"showDirectoryPicker" in window;
 function idbOpen(){
   return new Promise((resolve,reject)=>{
@@ -1651,7 +1651,6 @@ function App({firebaseConfig,onResetConfig}){
   const[orders,setOrders]=useState([]);
   const ordersRef=useRef(orders);
   ordersRef.current=orders;
-  const pendingSinceRef=useRef({}); // orderNo -> কখন থেকে hasPendingWrites দেখা যাচ্ছে
   const autoResolveAttemptedRef=useRef({}); // orderNo -> এই "পেন্ডিং পর্ব"-এ একবার চেষ্টা হয়ে গেছে কিনা (বারবার না করার জন্য)
   const[expenses,setExpenses]=useState([]);
   const[woodLots,setWoodLots]=useState([]);
@@ -2007,20 +2006,6 @@ function App({firebaseConfig,onResetConfig}){
         setOrders(list);
         setLastSyncAt(new Date());
         syncFailCountRef.current=0; // লাইভ সংযোগ থেকে ডেটা আসছে মানে সিঙ্ক ঠিক আছে — পুরনো ব্যর্থতার গণনা মুছে দিন
-        // ── কোনো অর্ডার কতক্ষণ ধরে "এই ডিভাইসেই লেখা, সার্ভার এখনো নিশ্চিত করেনি" অবস্থায়
-        // আছে তা এখানেই ট্র্যাক করা হয় (আলাদা কোনো বাড়তি পড়ার খরচ ছাড়াই, এই লিসেনারেরই তথ্য
-        // দিয়ে) — নিচের পর্যায়ক্রমিক sweep এটা দেখে স্বয়ংক্রিয়ভাবে সমাধানের চেষ্টা করবে ──
-        const now=Date.now();
-        const stillPendingNos=new Set();
-        snap.docs.forEach(d=>{
-          if(d.metadata&&d.metadata.hasPendingWrites){
-            stillPendingNos.add(d.id);
-            if(!pendingSinceRef.current[d.id])pendingSinceRef.current[d.id]=now;
-          }
-        });
-        Object.keys(pendingSinceRef.current).forEach(no=>{
-          if(!stillPendingNos.has(no)){delete pendingSinceRef.current[no];delete autoResolveAttemptedRef.current[no]}
-        });
       },err=>{clearTimeout(timer);setConnError(err.message)});
 
       const unsubExpenses=firestore.collection("expenses").onSnapshot(snap=>{
@@ -2125,22 +2110,42 @@ function App({firebaseConfig,onResetConfig}){
         localStorage.setItem("rf_migrated_to_cloud","true");
       })();
 
-      // ── প্রতি ৩০ সেকেন্ডে দেখা হয়, কোনো অর্ডার ৯০ সেকেন্ডের বেশি সময় ধরে "সার্ভার-নিশ্চিত না"
-      // অবস্থায় আটকে আছে কিনা — থাকলে কোনো বাটন/ক্লিক ছাড়াই নিজে থেকেই সমাধানের চেষ্টা শুরু হয়।
-      // ৯০ সেকেন্ডের এই অপেক্ষাটুকু ইচ্ছাকৃত — সদ্য করা স্বাভাবিক একটা লেখাও সার্ভার-নিশ্চিত হতে
-      // কয়েক সেকেন্ড লাগে, সেটাকে ভুল করে "আটকে গেছে" ধরে ফেলা এড়াতে ──
-      const stuckSweep=setInterval(()=>{
-        const now=Date.now();
-        Object.entries(pendingSinceRef.current).forEach(([no,since])=>{
-          if(now-since>90000&&!autoResolveAttemptedRef.current[no]){
-            autoResolveAttemptedRef.current[no]=true;
+      // ── প্রতি ২ মিনিটে সরাসরি সার্ভার থেকে (ঠিক "সার্ভার-সিঙ্ক পরীক্ষা" বাটনের মতোই)
+      // যাচাই করা হয় কোনো অর্ডার এখনো সার্ভার-নিশ্চিত হয়নি কিনা — বাটনে চাপার অপেক্ষা না
+      // করেই। পাওয়া গেলে সেই অর্ডারের জন্য স্বয়ংক্রিয়ভাবে ছবি ছোট করে আবার পাঠানোর চেষ্টা
+      // শুরু হয়ে যায় ──
+      const autoStuckCheck=async()=>{
+        const fs2=fsRef.current;
+        if(!fs2)return;
+        try{
+          const snap2=await fs2.collection("orders").get({source:"server"});
+          const stillPendingIds=new Set();
+          const toResolve=[];
+          snap2.docs.forEach(d=>{
+            if(d.metadata&&d.metadata.hasPendingWrites){
+              stillPendingIds.add(d.id);
+              if(!autoResolveAttemptedRef.current[d.id]){
+                autoResolveAttemptedRef.current[d.id]=true;
+                toResolve.push(d.id);
+              }
+            }
+          });
+          // আর পেন্ডিং না এমন অর্ডারের ফ্ল্যাগ সাফ করা — ভবিষ্যতে আবার আটকালে যেন নতুন করে ধরা যায়
+          Object.keys(autoResolveAttemptedRef.current).forEach(no=>{
+            if(!stillPendingIds.has(no))delete autoResolveAttemptedRef.current[no];
+          });
+          // ── একসাথে অনেকগুলো চালালে ফোন ধীর হয়ে যেতে পারে (ছবি ছোট করা + নেটওয়ার্ক, দুটোই
+          // ভারী কাজ) — তাই একটার পর একটা, ধারাবাহিকভাবে সমাধানের চেষ্টা হয় ──
+          for(const no of toResolve){
             const order=ordersRef.current.find(o=>o.no===no);
-            if(order)autoResolveTooLarge(no,false,order);
+            if(order)await autoResolveTooLarge(no,false,order);
           }
-        });
-      },30000);
+        }catch(e){/* নিরবে — পরের চক্রে আবার চেষ্টা হবে */}
+      };
+      const firstStuckCheck=setTimeout(autoStuckCheck,15000);
+      const stuckCheckInterval=setInterval(autoStuckCheck,120000);
 
-      return()=>{clearTimeout(timer);clearInterval(stuckSweep);unsubOrders();unsubExpenses();unsubLots();unsubDb();unsubGalleries();unsubWoodSettings();unsubLaborSettings();unsubAlertSettings();unsubRackSplits();unsubRackBands();unsubCarp();unsubWorkers();unsubPayroll()};
+      return()=>{clearTimeout(timer);clearTimeout(firstStuckCheck);clearInterval(stuckCheckInterval);unsubOrders();unsubExpenses();unsubLots();unsubDb();unsubGalleries();unsubWoodSettings();unsubLaborSettings();unsubAlertSettings();unsubRackSplits();unsubRackBands();unsubCarp();unsubWorkers();unsubPayroll()};
     }catch(e){
       clearTimeout(timer);
       setConnError(e.message);
@@ -3536,7 +3541,7 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
             <div style={{fontSize:10,color:"#555",marginBottom:6}}>সার্ভারে আছে: <strong>{syncCheck.serverCount}</strong>টি · এই ডিভাইসে দেখাচ্ছে: <strong>{syncCheck.localCount}</strong>টি</div>
             {syncCheck.stillPendingHere&&syncCheck.stillPendingHere.length>0?
               <div style={{background:"#fef2f2",color:"#991b1b",borderRadius:7,padding:"9px 11px",fontSize:10.5,fontWeight:700,lineHeight:1.7,marginBottom:9}}>
-                ⚠️ এই ডিভাইসে {syncCheck.stillPendingHere.length}টা অর্ডার আসলে এখনো আসল সার্ভারে পৌঁছায়নি — শুধু এই ডিভাইসেই লেখা আছে, নিশ্চিত হয়নি। কিছু করার দরকার নেই — অ্যাপ নিজে থেকেই ছবি ছোট করে বারবার পাঠানোর চেষ্টা করে যাচ্ছে (৯০ সেকেন্ডের মধ্যে শুরু হয়ে যাবে)। ছবি ছোট করেও না হলে ছবি ছাড়াই অর্ডারের তথ্য পাঠিয়ে দেবে, যাতে অর্ডারটা কখনো না হারায়। কিছুক্ষণ পর আবার "যাচাই করুন" চেপে দেখুন সংখ্যা কমেছে কিনা।
+                ⚠️ এই ডিভাইসে {syncCheck.stillPendingHere.length}টা অর্ডার আসলে এখনো আসল সার্ভারে পৌঁছায়নি — শুধু এই ডিভাইসেই লেখা আছে, নিশ্চিত হয়নি। কিছু করার দরকার নেই — অ্যাপ নিজে থেকেই প্রতি ২ মিনিটে যাচাই করে ছবি ছোট করে পাঠানোর চেষ্টা করে যাচ্ছে। ছবি ছোট করেও না হলে ছবি ছাড়াই অর্ডারের তথ্য পাঠিয়ে দেবে, যাতে অর্ডারটা কখনো না হারায়। ২-৩ মিনিট এই পাতাটা খোলা/সচল রেখে তারপর আবার "যাচাই করুন" চেপে দেখুন সংখ্যা কমেছে কিনা।
               </div>
             :null}
             {(!syncCheck.stillPendingHere||syncCheck.stillPendingHere.length===0)&&syncCheck.localOnly.length===0&&(!syncCheck.mismatched||syncCheck.mismatched.length===0)?
