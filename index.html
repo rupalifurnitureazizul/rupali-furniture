@@ -104,7 +104,7 @@ function compressImage(file,maxDim=1200,quality=0.82,maxBytes=110000){
 /* ── FULL-RESOLUTION LOCAL FOLDER STORAGE (desktop Chrome/Edge/Brave only) ──
    Original, uncompressed images are saved as real files in a folder you choose
    on your computer. Only a small compressed thumbnail syncs to the cloud/mobile. */
-const BUILD_TAG="4.83";
+const BUILD_TAG="4.84";
 const FS_SUPPORTED=typeof window!=="undefined"&&"showDirectoryPicker" in window;
 function idbOpen(){
   return new Promise((resolve,reject)=>{
@@ -1651,12 +1651,16 @@ function App({firebaseConfig,onResetConfig}){
   const[orders,setOrders]=useState([]);
   const ordersRef=useRef(orders);
   ordersRef.current=orders;
+  // ── অর্ডারের মতোই বাকি তথ্যগুলোরও সর্বশেষ অবস্থা, স্বয়ংক্রিয় মিলকরণের জন্য (নিচে সেট করা হয়,
+  // কারণ সংশ্লিষ্ট state গুলো এই লাইনের পরে ঘোষণা করা) ──
+  const otherDataRef=useRef({});
   const autoResolveAttemptedRef=useRef({}); // orderNo -> এই "পেন্ডিং পর্ব"-এ একবার চেষ্টা হয়ে গেছে কিনা (বারবার না করার জন্য)
   const[expenses,setExpenses]=useState([]);
   const[woodLots,setWoodLots]=useState([]);
   const[workers,setWorkers]=useState([]);
   const[payrollWeeks,setPayrollWeeks]=useState({});
   const[db,setDb]=useState(null);
+  otherDataRef.current={expenses,woodLots,workers,payrollWeeks,db};
   const[carpenters,setCarpenters]=useState([]);
   const[draft,setDraft]=useState(null);
   const viewed=page==="preview"&&curScreen.orderNo?(orders.find(o=>o.no===curScreen.orderNo)||(draft&&draft.no===curScreen.orderNo?draft:null)):null;
@@ -2260,6 +2264,50 @@ function App({firebaseConfig,onResetConfig}){
               setAutoStuckStatus(prev=>({...prev,failedThisRun:(prev.failedThisRun||0)+1,lastAttemptDetail:[...(prev.lastAttemptDetail||[]),{no,ok:false,reason:e2.message}]}));
             }
           }
+          // ── অর্ডারের বাইরের তথ্যগুলোও একইভাবে মেলানো হয় (খরচ, কাঠ, কর্মী, বেতন, ফার্নিচার
+          // ডেটাবেস) — এগুলোও একই আটকে থাকা সারির পেছনে আটকে ছিল, যার ফলে "৩০ দিনের নগদ প্রবাহ"
+          // আর "কাঠের মাপ নেই" সংখ্যাগুলো ডিভাইসে ডিভাইসে আলাদা দেখাচ্ছিল ──
+          const reconcileCollection=async(name,localList,setter)=>{
+            try{
+              const s=await fs2.collection(name).get({source:"server"});
+              if((s.metadata&&s.metadata.fromCache)||(s.docs.length===0&&(localList||[]).length>0))return;
+              const serverList=s.docs.map(d=>d.data());
+              const serverIds=new Set(s.docs.map(d=>d.id));
+              // সার্ভারে আছে কিন্তু এখানে নেই/ভিন্ন → নিয়ে নেওয়া
+              if(!sameOrderData(serverList,localList||[]))setter(serverList);
+              // এখানে আছে কিন্তু সার্ভারে নেই → পাঠিয়ে দেওয়া
+              for(const item of(localList||[])){
+                if(item&&item.id&&!serverIds.has(item.id)){
+                  try{await withTimeout(fs2.collection(name).doc(item.id).set(item),45000)}catch(e3){}
+                }
+              }
+            }catch(e3){/* নিরবে — পরের দফায় আবার */}
+          };
+          const od=otherDataRef.current||{};
+          await reconcileCollection("expenses",od.expenses,setExpenses);
+          await reconcileCollection("woodlots",od.woodLots,setWoodLots);
+          await reconcileCollection("workers",od.workers,setWorkers);
+          // ফার্নিচার ডেটাবেস (একটাই নথি) — সার্ভারেরটাই সবার জন্য এক রাখা হয়
+          try{
+            const dbSnap=await fs2.doc("meta/db").get({source:"server"});
+            if(dbSnap.exists&&!(dbSnap.metadata&&dbSnap.metadata.fromCache)){
+              const sv=dbSnap.data();
+              if(od.db&&!sameOrderData(sv,od.db))setDb(sv);
+            }
+          }catch(e3){}
+          // সাপ্তাহিক বেতন (নথির আইডি = সপ্তাহের শেষ তারিখ)
+          try{
+            const pw=await fs2.collection("payrollWeeks").get({source:"server"});
+            if(!(pw.metadata&&pw.metadata.fromCache)){
+              const map={};pw.docs.forEach(d=>{map[d.id]=d.data()});
+              if(!(pw.docs.length===0&&Object.keys(od.payrollWeeks||{}).length>0)){
+                if(!sameOrderData(map,od.payrollWeeks||{}))setPayrollWeeks(map);
+                for(const[wk,val]of Object.entries(od.payrollWeeks||{})){
+                  if(!map[wk]){try{await withTimeout(fs2.collection("payrollWeeks").doc(wk).set(val),45000)}catch(e4){}}
+                }
+              }
+            }
+          }catch(e3){}
           setAutoStuckStatus(prev=>({...prev,running:false}));
         }catch(e){
           setAutoStuckStatus(prev=>({...(prev||{}),running:false,lastError:e.message}));
