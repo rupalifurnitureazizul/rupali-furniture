@@ -104,7 +104,7 @@ function compressImage(file,maxDim=1200,quality=0.82,maxBytes=110000){
 /* ── FULL-RESOLUTION LOCAL FOLDER STORAGE (desktop Chrome/Edge/Brave only) ──
    Original, uncompressed images are saved as real files in a folder you choose
    on your computer. Only a small compressed thumbnail syncs to the cloud/mobile. */
-const BUILD_TAG="4.85";
+const BUILD_TAG="4.86";
 const FS_SUPPORTED=typeof window!=="undefined"&&"showDirectoryPicker" in window;
 function idbOpen(){
   return new Promise((resolve,reject)=>{
@@ -2298,7 +2298,7 @@ function App({firebaseConfig,onResetConfig}){
           await reconcileCollection("workers",od.workers,setWorkers);
           // ফার্নিচার ডেটাবেস (একটাই নথি) — সার্ভারেরটাই সবার জন্য এক রাখা হয়
           try{
-            const dbSnap=await withTimeout(fs2.doc("meta/db").get({source:"server"}),20000,"সময়সীমা পার");
+            const dbSnap=await withTimeout(fs2.doc("meta/db").get({source:"server"}),60000,"সময়সীমা পার");
             if(dbSnap.exists&&!(dbSnap.metadata&&dbSnap.metadata.fromCache)){
               const sv=dbSnap.data();
               const changed=od.db&&!sameOrderData(sv,od.db);
@@ -5216,6 +5216,10 @@ function ManageDB({db,saveDb,galleries,saveGalleryEntry,onBack,navigate,goBack,r
   const[editSections,setEditSections]=useState(null);
   const[newPiece,setNewPiece]=useState({sectionIdx:0,bn:"",pc:"",h:"",l:"",w:""});
   const[expandedJointFor,setExpandedJointFor]=useState(null);
+  // ── এক মডেলের কাঠের তালিকা (সব সেকশনসহ) কপি করে আরেক মডেলে বসানোর জন্য — কাছাকাছি মডেলের
+  // পুরো তালিকা কপি করে নতুন মডেলে পেস্ট করে শুধু যেখানে দরকার এডিট করা যায় ──
+  const[copiedSections,setCopiedSections]=useState(null);
+  const[copiedFromName,setCopiedFromName]=useState("");
   // ── "কাঠ" ট্যাবে ঢোকার সময় (বা ভিন্ন মডেলে গেলে) সম্পাদনার কপিটা তাজা করে নেওয়া — useLayoutEffect
   // যাতে পুরনো মডেলের ডেটা এক ফ্রেমের জন্যও দেখা না যায় ──
   useLayoutEffect(()=>{
@@ -5354,7 +5358,14 @@ function ManageDB({db,saveDb,galleries,saveGalleryEntry,onBack,navigate,goBack,r
       </div>}
       {tab==="edit"&&editSections&&<div>
         <div style={{fontWeight:700,fontSize:14,marginBottom:6}}>{db[selCat]?.variants[selVar]?.bn} — কাঠের তালিকা সম্পাদনা</div>
-        <div style={{fontSize:11,color:"#78350f",fontWeight:700,marginBottom:10,background:"#fef3c7",borderRadius:8,padding:"6px 10px",display:"inline-block"}}>মোট CFT (সবগুলো সেকশন মিলিয়ে): {totalCft(editSections).toFixed(3)}</div>
+        <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap",marginBottom:10}}>
+          <div style={{fontSize:11,color:"#78350f",fontWeight:700,background:"#fef3c7",borderRadius:8,padding:"6px 10px"}}>মোট CFT (সবগুলো সেকশন মিলিয়ে): {totalCft(editSections).toFixed(3)}</div>
+          <button onClick={()=>{setCopiedSections(JSON.parse(JSON.stringify(editSections)));setCopiedFromName(db[selCat]?.variants[selVar]?.bn||"")}} style={{background:"#e0e7ff",color:"#3730a3",border:"none",borderRadius:8,padding:"6px 10px",fontSize:11,fontWeight:700}}>📋 এই তালিকা কপি করুন</button>
+          {copiedSections&&<button onClick={()=>{
+            if(!window.confirm(`"${copiedFromName}"-এর পুরো কাঠের তালিকা এখানে বসাতে চান? বর্তমান তালিকা মুছে প্রতিস্থাপিত হবে (এখনো সংরক্ষণ করা হয়নি — বাতিল করতে চাইলে সংরক্ষণ না করেই বেরিয়ে যান)।`))return;
+            setEditSections(JSON.parse(JSON.stringify(copiedSections)));
+          }} style={{background:"#dcfce7",color:"#166534",border:"none",borderRadius:8,padding:"6px 10px",fontSize:11,fontWeight:700}}>📥 "{copiedFromName}" থেকে বসান</button>}
+        </div>
         {editSections.map((sec,si)=>{
           const sectionCft=sec.pieces.reduce((ss,p)=>ss+cft(p.pc,p.h,p.l,p.w),0);
           return<div key={si} style={{background:"white",borderRadius:10,marginBottom:10,overflow:"hidden",boxShadow:"0 1px 4px rgba(0,0,0,.07)"}}>
