@@ -104,7 +104,7 @@ function compressImage(file,maxDim=1200,quality=0.82,maxBytes=110000){
 /* ── FULL-RESOLUTION LOCAL FOLDER STORAGE (desktop Chrome/Edge/Brave only) ──
    Original, uncompressed images are saved as real files in a folder you choose
    on your computer. Only a small compressed thumbnail syncs to the cloud/mobile. */
-const BUILD_TAG="4.84";
+const BUILD_TAG="4.85";
 const FS_SUPPORTED=typeof window!=="undefined"&&"showDirectoryPicker" in window;
 function idbOpen(){
   return new Promise((resolve,reject)=>{
@@ -1751,7 +1751,7 @@ function App({firebaseConfig,onResetConfig}){
   const autoResolveTooLarge=async(orderNo,merge,data)=>{
     // ── উদ্ধার-সংযোগ ব্যবহার করা হয় (লোকাল সারি ছাড়া), কারণ মূল সংযোগের সারিটাই আটকে আছে।
     // উদ্ধার-সংযোগ না থাকলে মূল সংযোগে ফিরে যাওয়া হয়, কিন্তু সময়সীমাসহ ──
-    const fs=recoveryFsRef.current||fsRef.current;
+    const fs=getRecoveryFs()||fsRef.current;
     if(!fs)return false;
     let current=data;
     for(const target of[70000,45000,26000,15000,9000,5000,3000]){
@@ -1856,7 +1856,7 @@ function App({firebaseConfig,onResetConfig}){
     // মূল সংযোগ দিয়ে পড়লে Firestore এই ডিভাইসের আটকে থাকা লেখাগুলোও ফলাফলে মিশিয়ে দেয়, ফলে
     // অর্ডার সফলভাবে সার্ভারে পৌঁছে যাওয়ার পরেও "আটকে আছে" সংখ্যাটা কমত না — এই ভুলটাই এতদিন
     // অগ্রগতি দেখতে দিচ্ছিল না ──
-    const fs=recoveryFsRef.current||fsRef.current;
+    const fs=getRecoveryFs()||fsRef.current;
     if(!fs)return{error:"সংযোগ নেই"};
     try{
       const snap=await fs.collection("orders").get({source:"server"});
@@ -1899,9 +1899,18 @@ function App({firebaseConfig,onResetConfig}){
   // ── উদ্ধার-সংযোগ: আলাদা একটা Firebase অ্যাপ, যেখানে অফলাইন-ক্যাশ ইচ্ছাকৃতভাবে চালু করা হয়নি।
   // মূল সংযোগে (fsRef) অফলাইন-ক্যাশ চালু থাকায় কোনো লেখা সার্ভারে আটকে গেলে সেটা লোকাল
   // সারিতে জমা হয়ে পরের সব লেখাকে আটকে দেয়, আর .set() কখনো সফল/ব্যর্থ কিছুই জানায় না —
-  // অনন্তকাল ঝুলে থাকে (এটাই এতদিনের আসল সমস্যা ছিল)। এই আলাদা সংযোগে কোনো লোকাল সারি নেই,
-  // তাই লেখা সরাসরি সার্ভারে যায় এবং সমস্যা হলে সাথে সাথেই আসল কারণ জানায় ──
+  // অনন্তকাল ঝুলে থাকে। এই আলাদা সংযোগে কোনো লোকাল সারি নেই, তাই লেখা সরাসরি সার্ভারে যায়।
+  // ── এখন এই সংযোগ শুধু প্রথমবার সত্যিই দরকার হলে তখনই তৈরি হয় — আগে প্রতিটা পাতা খোলার
+  // সময়ই তৈরি হতো, যা কিছু ব্রাউজারে (iOS Chrome) পাতা লোড হওয়াই আটকে দিচ্ছিল ──
   const recoveryFsRef=useRef(null);
+  const getRecoveryFs=()=>{
+    if(recoveryFsRef.current)return recoveryFsRef.current;
+    try{
+      const recApp=firebase.apps.find(a=>a.name==="recovery")||firebase.initializeApp(firebaseConfig,"recovery");
+      recoveryFsRef.current=recApp.firestore();
+    }catch(e){recoveryFsRef.current=null}
+    return recoveryFsRef.current;
+  };
 
   useEffect(()=>{
     const goOnline=()=>setOnline(true),goOffline=()=>setOnline(false);
@@ -2052,11 +2061,6 @@ function App({firebaseConfig,onResetConfig}){
     const timer=setTimeout(()=>setTimedOut(true),25000);
     try{
       if(!firebase.apps.length)firebase.initializeApp(firebaseConfig);
-      // উদ্ধার-সংযোগ তৈরি (আলাদা নামে, অফলাইন-ক্যাশ ছাড়া) — আটকে থাকা লেখা ঠিক করার জন্য
-      try{
-        const recApp=firebase.apps.find(a=>a.name==="recovery")||firebase.initializeApp(firebaseConfig,"recovery");
-        recoveryFsRef.current=recApp.firestore();
-      }catch(e){recoveryFsRef.current=null}
       const firestore=firebase.firestore();
       try{firestore.enablePersistence({synchronizeTabs:true}).catch(()=>{})}catch(e){}
       fsRef.current=firestore;
@@ -2180,7 +2184,7 @@ function App({firebaseConfig,onResetConfig}){
         // ── সার্ভারের আসল অবস্থা জানতে উদ্ধার-সংযোগ (লোকাল সারি ছাড়া) ব্যবহার করা হয়।
         // মূল সংযোগ দিয়ে পড়লে এই ডিভাইসের আটকে থাকা লেখাও ফলাফলে মিশে যায়, ফলে সফলভাবে
         // পাঠানোর পরেও সংখ্যা কমত না ──
-        const fs2=recoveryFsRef.current||fsRef.current;
+        const fs2=getRecoveryFs()||fsRef.current;
         setAutoStuckStatus(prev=>({...(prev||{}),running:true,lastRunAt:new Date().toISOString(),lastError:!fs2?"সংযোগ তৈরিই হয়নি":null}));
         if(!fs2)return;
         try{
@@ -2266,22 +2270,27 @@ function App({firebaseConfig,onResetConfig}){
           }
           // ── অর্ডারের বাইরের তথ্যগুলোও একইভাবে মেলানো হয় (খরচ, কাঠ, কর্মী, বেতন, ফার্নিচার
           // ডেটাবেস) — এগুলোও একই আটকে থাকা সারির পেছনে আটকে ছিল, যার ফলে "৩০ দিনের নগদ প্রবাহ"
-          // আর "কাঠের মাপ নেই" সংখ্যাগুলো ডিভাইসে ডিভাইসে আলাদা দেখাচ্ছিল ──
+          // আর "কাঠের মাপ নেই" সংখ্যাগুলো ডিভাইসে ডিভাইসে আলাদা দেখাচ্ছিল। প্রতিটা ধাপেই সময়সীমা
+          // দেওয়া আছে — একটা কালেকশন আটকালেও বাকিগুলো থেমে থাকবে না ──
+          const otherSyncStatus={};
           const reconcileCollection=async(name,localList,setter)=>{
             try{
-              const s=await fs2.collection(name).get({source:"server"});
-              if((s.metadata&&s.metadata.fromCache)||(s.docs.length===0&&(localList||[]).length>0))return;
+              const s=await withTimeout(fs2.collection(name).get({source:"server"}),20000,"সময়সীমা পার");
+              if((s.metadata&&s.metadata.fromCache)||(s.docs.length===0&&(localList||[]).length>0)){
+                otherSyncStatus[name]="দুর্বল সংযোগ, বাদ দেওয়া হয়েছে";return;
+              }
               const serverList=s.docs.map(d=>d.data());
               const serverIds=new Set(s.docs.map(d=>d.id));
-              // সার্ভারে আছে কিন্তু এখানে নেই/ভিন্ন → নিয়ে নেওয়া
-              if(!sameOrderData(serverList,localList||[]))setter(serverList);
-              // এখানে আছে কিন্তু সার্ভারে নেই → পাঠিয়ে দেওয়া
+              const changed=!sameOrderData(serverList,localList||[]);
+              if(changed)setter(serverList);
+              let pushedCount=0;
               for(const item of(localList||[])){
                 if(item&&item.id&&!serverIds.has(item.id)){
-                  try{await withTimeout(fs2.collection(name).doc(item.id).set(item),45000)}catch(e3){}
+                  try{await withTimeout(fs2.collection(name).doc(item.id).set(item),45000,"সময়সীমা পার");pushedCount++}catch(e3){}
                 }
               }
-            }catch(e3){/* নিরবে — পরের দফায় আবার */}
+              otherSyncStatus[name]=`সার্ভারে ${s.docs.length}টি${changed?", হালনাগাদ করা হয়েছে":""}${pushedCount?`, ${pushedCount}টি পাঠানো হয়েছে`:""}`;
+            }catch(e3){otherSyncStatus[name]="ত্রুটি: "+e3.message}
           };
           const od=otherDataRef.current||{};
           await reconcileCollection("expenses",od.expenses,setExpenses);
@@ -2289,26 +2298,30 @@ function App({firebaseConfig,onResetConfig}){
           await reconcileCollection("workers",od.workers,setWorkers);
           // ফার্নিচার ডেটাবেস (একটাই নথি) — সার্ভারেরটাই সবার জন্য এক রাখা হয়
           try{
-            const dbSnap=await fs2.doc("meta/db").get({source:"server"});
+            const dbSnap=await withTimeout(fs2.doc("meta/db").get({source:"server"}),20000,"সময়সীমা পার");
             if(dbSnap.exists&&!(dbSnap.metadata&&dbSnap.metadata.fromCache)){
               const sv=dbSnap.data();
-              if(od.db&&!sameOrderData(sv,od.db))setDb(sv);
+              const changed=od.db&&!sameOrderData(sv,od.db);
+              if(changed)setDb(sv);
+              otherSyncStatus.db=changed?"হালনাগাদ করা হয়েছে":"মিলে আছে";
             }
-          }catch(e3){}
+          }catch(e3){otherSyncStatus.db="ত্রুটি: "+e3.message}
           // সাপ্তাহিক বেতন (নথির আইডি = সপ্তাহের শেষ তারিখ)
           try{
-            const pw=await fs2.collection("payrollWeeks").get({source:"server"});
+            const pw=await withTimeout(fs2.collection("payrollWeeks").get({source:"server"}),20000,"সময়সীমা পার");
             if(!(pw.metadata&&pw.metadata.fromCache)){
               const map={};pw.docs.forEach(d=>{map[d.id]=d.data()});
               if(!(pw.docs.length===0&&Object.keys(od.payrollWeeks||{}).length>0)){
-                if(!sameOrderData(map,od.payrollWeeks||{}))setPayrollWeeks(map);
+                const changed=!sameOrderData(map,od.payrollWeeks||{});
+                if(changed)setPayrollWeeks(map);
                 for(const[wk,val]of Object.entries(od.payrollWeeks||{})){
-                  if(!map[wk]){try{await withTimeout(fs2.collection("payrollWeeks").doc(wk).set(val),45000)}catch(e4){}}
+                  if(!map[wk]){try{await withTimeout(fs2.collection("payrollWeeks").doc(wk).set(val),45000,"সময়সীমা পার")}catch(e4){}}
                 }
+                otherSyncStatus.payrollWeeks=changed?"হালনাগাদ করা হয়েছে":"মিলে আছে";
               }
             }
-          }catch(e3){}
-          setAutoStuckStatus(prev=>({...prev,running:false}));
+          }catch(e3){otherSyncStatus.payrollWeeks="ত্রুটি: "+e3.message}
+          setAutoStuckStatus(prev=>({...prev,running:false,otherSyncStatus}));
         }catch(e){
           setAutoStuckStatus(prev=>({...(prev||{}),running:false,lastError:e.message}));
         }
@@ -3710,19 +3723,23 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
           {syncCheck&&syncCheck!=="loading"&&syncCheck.error&&<div style={{marginTop:8,fontSize:10,color:RED}}>⚠️ সার্ভারে পৌঁছানো যায়নি: {syncCheck.error}</div>}
           {syncCheck&&syncCheck!=="loading"&&!syncCheck.error&&<div style={{marginTop:9}}>
             <div style={{fontSize:10,color:"#555",marginBottom:6}}>সার্ভারে আছে: <strong>{syncCheck.serverCount}</strong>টি · এই ডিভাইসে দেখাচ্ছে: <strong>{syncCheck.localCount}</strong>টি</div>
+            {autoStuckStatus&&<div style={{background:"#fafafa",border:"1px solid #ddd",borderRadius:7,padding:"9px 11px",fontSize:9.5,lineHeight:1.7,marginBottom:9}}>
+              <div style={{fontWeight:700,marginBottom:3}}>🔧 স্বয়ংক্রিয় মিলকরণের অবস্থা:</div>
+              <div>সর্বশেষ চেষ্টা: {autoStuckStatus.lastRunAt?new Date(autoStuckStatus.lastRunAt).toLocaleTimeString("bn-BD"):"এখনো হয়নি"} {autoStuckStatus.running?"(এখন চলছে...)":""}</div>
+              {autoStuckStatus.lastError&&<div style={{color:"#991b1b",fontWeight:700}}>ত্রুটি: {autoStuckStatus.lastError}</div>}
+              {autoStuckStatus.totalDocs!==undefined&&<div>অর্ডার — সার্ভারে মোট: {autoStuckStatus.totalDocs}টি, আটকে: {autoStuckStatus.foundPendingCount}টি</div>}
+              {autoStuckStatus.queuedThisRun!==undefined&&<div>এই দফায় নতুন চেষ্টা: {autoStuckStatus.queuedThisRun}টি (সফল: {autoStuckStatus.resolvedThisRun||0}, ব্যর্থ: {autoStuckStatus.failedThisRun||0})</div>}
+              {autoStuckStatus.lastAttemptDetail&&autoStuckStatus.lastAttemptDetail.length>0&&<div style={{marginTop:2}}>
+                {autoStuckStatus.lastAttemptDetail.slice(-5).map((d,i)=><div key={i}>• {d.no} — {d.ok?"✅ সফল":"❌ ব্যর্থ"}{d.reason?` (${d.reason})`:""}</div>)}
+              </div>}
+              {autoStuckStatus.otherSyncStatus&&<div style={{marginTop:4,paddingTop:4,borderTop:"1px dashed #ddd"}}>
+                <div style={{fontWeight:700,marginBottom:2}}>অন্যান্য তথ্য:</div>
+                {Object.entries({expenses:"খরচ",woodlots:"কাঠের স্টক",workers:"কর্মী",db:"ফার্নিচার ডেটাবেস",payrollWeeks:"সাপ্তাহিক বেতন"}).map(([k,l])=>autoStuckStatus.otherSyncStatus[k]&&<div key={k}>• {l}: {autoStuckStatus.otherSyncStatus[k]}</div>)}
+              </div>}
+            </div>}
             {syncCheck.stillPendingHere&&syncCheck.stillPendingHere.length>0?
               <div style={{background:"#fef2f2",color:"#991b1b",borderRadius:7,padding:"9px 11px",fontSize:10.5,fontWeight:700,lineHeight:1.7,marginBottom:9}}>
                 ⚠️ এই ডিভাইসের {syncCheck.stillPendingHere.length}টা অর্ডার এখনো আসল সার্ভারে পৌঁছায়নি। কিছু করার দরকার নেই — অ্যাপ নিজে থেকেই প্রতি ৩ মিনিটে সার্ভারের সাথে মিলিয়ে দেখে বাকিগুলো পাঠাতে থাকে (একটার পর একটা, ছবি ছোট করে; ছবি ছোট করেও না হলে ছবি ছাড়াই অর্ডারের তথ্য পাঠিয়ে দেয়, যাতে অর্ডার কখনো না হারায়)। এই সংখ্যাটা এখন সার্ভারের আসল অবস্থা থেকেই গোনা হয়, তাই যতগুলো সফল হচ্ছে ততটাই কমতে থাকবে। কয়েক মিনিট পাতাটা খোলা রেখে আবার "যাচাই করুন" চাপুন।
-                {autoStuckStatus&&<div style={{marginTop:9,paddingTop:9,borderTop:"1px dashed #fca5a5",fontWeight:400,fontSize:9.5,lineHeight:1.7}}>
-                  <div style={{fontWeight:700,marginBottom:3}}>🔧 স্বয়ংক্রিয় চেষ্টার অবস্থা (যাচাইয়ের জন্য):</div>
-                  <div>সর্বশেষ চেষ্টা: {autoStuckStatus.lastRunAt?new Date(autoStuckStatus.lastRunAt).toLocaleTimeString("bn-BD"):"এখনো হয়নি"} {autoStuckStatus.running?"(এখন চলছে...)":""}</div>
-                  {autoStuckStatus.lastError&&<div style={{color:"#991b1b",fontWeight:700}}>ত্রুটি: {autoStuckStatus.lastError}</div>}
-                  {autoStuckStatus.totalDocs!==undefined&&<div>সার্ভারে মোট দেখেছে: {autoStuckStatus.totalDocs}টি, তার মধ্যে আটকে: {autoStuckStatus.foundPendingCount}টি</div>}
-                  {autoStuckStatus.queuedThisRun!==undefined&&<div>এই দফায় নতুন করে চেষ্টা করেছে: {autoStuckStatus.queuedThisRun}টি (সফল: {autoStuckStatus.resolvedThisRun||0}, ব্যর্থ: {autoStuckStatus.failedThisRun||0})</div>}
-                  {autoStuckStatus.lastAttemptDetail&&autoStuckStatus.lastAttemptDetail.length>0&&<div style={{marginTop:4}}>
-                    {autoStuckStatus.lastAttemptDetail.slice(-5).map((d,i)=><div key={i}>• {d.no} — {d.ok?"✅ সফল":"❌ ব্যর্থ"}{d.reason?` (${d.reason})`:""}</div>)}
-                  </div>}
-                </div>}
               </div>
             :null}
             {(!syncCheck.stillPendingHere||syncCheck.stillPendingHere.length===0)&&syncCheck.localOnly.length===0&&(!syncCheck.mismatched||syncCheck.mismatched.length===0)?
