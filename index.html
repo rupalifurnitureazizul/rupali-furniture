@@ -104,7 +104,7 @@ function compressImage(file,maxDim=1200,quality=0.82,maxBytes=110000){
 /* ── FULL-RESOLUTION LOCAL FOLDER STORAGE (desktop Chrome/Edge/Brave only) ──
    Original, uncompressed images are saved as real files in a folder you choose
    on your computer. Only a small compressed thumbnail syncs to the cloud/mobile. */
-const BUILD_TAG="4.79";
+const BUILD_TAG="4.80";
 const FS_SUPPORTED=typeof window!=="undefined"&&"showDirectoryPicker" in window;
 function idbOpen(){
   return new Promise((resolve,reject)=>{
@@ -1734,23 +1734,33 @@ function App({firebaseConfig,onResetConfig}){
     }
     return next;
   };
+  // ── প্রতিটা লেখার জন্য সময়সীমা — অফলাইন-ক্যাশওয়ালা সংযোগে .set() কখনো কখনো চিরকাল ঝুলে
+  // থাকে (সফলও হয় না, ব্যর্থও হয় না)। এতদিন ঠিক এই কারণেই স্বয়ংক্রিয় চেষ্টা প্রথম অর্ডারেই
+  // আটকে গিয়ে থেমে যাচ্ছিল, আর বাকি ৩৫টা কখনো চেষ্টাই হতো না ──
+  const withTimeout=(promise,ms,label)=>Promise.race([
+    promise,
+    new Promise((_,rej)=>setTimeout(()=>rej(new Error(label||"সময়সীমা পার — সার্ভার সাড়া দেয়নি")),ms))
+  ]);
   // সাইজ সীমা পার হওয়া কোনো অর্ডার সম্পূর্ণ স্বয়ংক্রিয়ভাবে সমাধানের চেষ্টা — ক্রমান্বয়ে আরও কড়া
   // কমপ্রেশনে, একদম ছোট আকার পর্যন্ত — আর তাতেও না হলে শেষ চেষ্টা হিসেবে ছবি পুরোপুরি বাদ দিয়ে
   // শুধু অর্ডারের তথ্য (নাম/ফোন/মাপ/দাম/পেমেন্ট) পাঠানো, যাতে অন্তত অর্ডারটাই না হারায়
   const autoResolveTooLarge=async(orderNo,merge,data)=>{
-    const fs=fsRef.current;
+    // ── উদ্ধার-সংযোগ ব্যবহার করা হয় (লোকাল সারি ছাড়া), কারণ মূল সংযোগের সারিটাই আটকে আছে।
+    // উদ্ধার-সংযোগ না থাকলে মূল সংযোগে ফিরে যাওয়া হয়, কিন্তু সময়সীমাসহ ──
+    const fs=recoveryFsRef.current||fsRef.current;
     if(!fs)return false;
     let current=data;
     for(const target of[70000,45000,26000,15000,9000,5000,3000]){
       current=await shrinkOrderImages(current,target);
       try{
-        await fs.collection("orders").doc(orderNo).set(current,merge?{merge:true}:{});
+        await withTimeout(fs.collection("orders").doc(orderNo).set(current,merge?{merge:true}:{}),45000);
         setOrders(prev=>prev.map(o=>o.no===orderNo?current:o));
         setDraft(d=>d&&d.no===orderNo?current:d);
         clearPermanentSyncFailure(orderNo);
         return true;
       }catch(e){
-        if(!isLikelyTooLargeError(e)){
+        // সাইজজনিত সমস্যা হলে আরও ছোট করে আবার চেষ্টা; অন্য কারণ হলে সেই কারণ জানিয়ে থামা
+        if(!isLikelyTooLargeError(e)&&!/সময়সীমা/.test(e.message||"")){
           markPermanentSyncFailure(orderNo,"সার্ভারে পাঠানো যাচ্ছে না: "+e.message);
           return false;
         }
@@ -1758,7 +1768,7 @@ function App({firebaseConfig,onResetConfig}){
     }
     const noImages={...current,refImgs:[],deliveryImgs:[],refImg:undefined,imagesDroppedDueToSize:true};
     try{
-      await fs.collection("orders").doc(orderNo).set(noImages,merge?{merge:true}:{});
+      await withTimeout(fs.collection("orders").doc(orderNo).set(noImages,merge?{merge:true}:{}),45000);
       setOrders(prev=>prev.map(o=>o.no===orderNo?noImages:o));
       setDraft(d=>d&&d.no===orderNo?noImages:d);
       markPermanentSyncFailure(orderNo,"ছবি অনেক ছোট করার পরও পাঠানো যায়নি, তাই ছবি ছাড়া অর্ডারের তথ্য সংরক্ষণ করা হয়েছে — অর্ডারটা নিরাপদ আছে, শুধু ছবিগুলো আবার যোগ করে দিতে হবে");
@@ -1856,6 +1866,12 @@ function App({firebaseConfig,onResetConfig}){
   const[rackSplits,setRackSplits]=useState([]);
   const[rackBands,setRackBands]=useState([]);
   const fsRef=useRef(null);
+  // ── উদ্ধার-সংযোগ: আলাদা একটা Firebase অ্যাপ, যেখানে অফলাইন-ক্যাশ ইচ্ছাকৃতভাবে চালু করা হয়নি।
+  // মূল সংযোগে (fsRef) অফলাইন-ক্যাশ চালু থাকায় কোনো লেখা সার্ভারে আটকে গেলে সেটা লোকাল
+  // সারিতে জমা হয়ে পরের সব লেখাকে আটকে দেয়, আর .set() কখনো সফল/ব্যর্থ কিছুই জানায় না —
+  // অনন্তকাল ঝুলে থাকে (এটাই এতদিনের আসল সমস্যা ছিল)। এই আলাদা সংযোগে কোনো লোকাল সারি নেই,
+  // তাই লেখা সরাসরি সার্ভারে যায় এবং সমস্যা হলে সাথে সাথেই আসল কারণ জানায় ──
+  const recoveryFsRef=useRef(null);
 
   useEffect(()=>{
     const goOnline=()=>setOnline(true),goOffline=()=>setOnline(false);
@@ -1925,6 +1941,16 @@ function App({firebaseConfig,onResetConfig}){
       woodSettings:d.woodSettings,laborSettings:d.laborSettings,
       note:"এটি রূপালী ফার্নিচার অ্যাপের একটি ডেটা ব্যাকআপ। এই ফাইলটি নিরাপদ কোথাও (Google Drive, ইমেইল ইত্যাদি) সংরক্ষণ করে রাখুন। সমস্যা হলে Claude-কে এই ফাইলটি দেখিয়ে সাহায্য চাইতে পারবেন।"
     };
+  };
+  // ── উদ্ধার শুরুর আগে একবার নিরাপত্তা-ব্যাকআপ: আটকে থাকা অর্ডারগুলোর হুবহু কপি আলাদা করে
+  // রেখে দেওয়া হয়, যাতে উদ্ধারের সময় যা-ই ঘটুক, একটা স্বাধীন কপি হাতে থাকে ──
+  const safetyBackupStuck=(stuckNos)=>{
+    try{
+      if(localStorage.getItem("rf_stuck_safety_backup"))return; // একবারই, পরে আর ওভাররাইট নয়
+      const stuck=(ordersRef.current||[]).filter(o=>stuckNos.includes(o.no));
+      if(!stuck.length)return;
+      localStorage.setItem("rf_stuck_safety_backup",JSON.stringify({at:new Date().toISOString(),count:stuck.length,orders:stuck}));
+    }catch(e){/* জায়গা না থাকলেও উদ্ধার থেমে থাকবে না */}
   };
   const backupData=()=>{
     const json=JSON.stringify(buildBackupSnapshot(false),null,2);
@@ -1996,6 +2022,11 @@ function App({firebaseConfig,onResetConfig}){
     const timer=setTimeout(()=>setTimedOut(true),8000);
     try{
       if(!firebase.apps.length)firebase.initializeApp(firebaseConfig);
+      // উদ্ধার-সংযোগ তৈরি (আলাদা নামে, অফলাইন-ক্যাশ ছাড়া) — আটকে থাকা লেখা ঠিক করার জন্য
+      try{
+        const recApp=firebase.apps.find(a=>a.name==="recovery")||firebase.initializeApp(firebaseConfig,"recovery");
+        recoveryFsRef.current=recApp.firestore();
+      }catch(e){recoveryFsRef.current=null}
       const firestore=firebase.firestore();
       try{firestore.enablePersistence({synchronizeTabs:true}).catch(()=>{})}catch(e){}
       fsRef.current=firestore;
@@ -2126,8 +2157,12 @@ function App({firebaseConfig,onResetConfig}){
           snap2.docs.forEach(d=>{
             if(d.metadata&&d.metadata.hasPendingWrites){
               stillPendingIds.add(d.id);
-              if(!autoResolveAttemptedRef.current[d.id]){
-                autoResolveAttemptedRef.current[d.id]=true;
+              // ── আগে একবার চেষ্টা হলেই স্থায়ীভাবে "চেষ্টা হয়ে গেছে" চিহ্ন বসে যেত, তাই আর
+              // কখনো দ্বিতীয়বার চেষ্টা হতো না (ঠিক এই কারণেই "০টি চেষ্টা" দেখাচ্ছিল)। এখন
+              // ৫ মিনিট পর আবার চেষ্টা করা যাবে ──
+              const lastTry=autoResolveAttemptedRef.current[d.id]||0;
+              if(Date.now()-lastTry>300000){
+                autoResolveAttemptedRef.current[d.id]=Date.now();
                 toResolve.push(d.id);
               }
             }
@@ -2137,6 +2172,7 @@ function App({firebaseConfig,onResetConfig}){
             if(!stillPendingIds.has(no))delete autoResolveAttemptedRef.current[no];
           });
           setAutoStuckStatus(prev=>({...(prev||{}),totalDocs:snap2.docs.length,foundPendingCount:stillPendingIds.size,queuedThisRun:toResolve.length,resolvedThisRun:0,failedThisRun:0,lastAttemptDetail:[]}));
+          if(toResolve.length)safetyBackupStuck([...stillPendingIds]);
           // ── একসাথে অনেকগুলো চালালে ফোন ধীর হয়ে যেতে পারে (ছবি ছোট করা + নেটওয়ার্ক, দুটোই
           // ভারী কাজ) — তাই একটার পর একটা, ধারাবাহিকভাবে সমাধানের চেষ্টা হয় ──
           for(const no of toResolve){
