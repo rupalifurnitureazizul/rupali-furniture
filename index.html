@@ -104,7 +104,7 @@ function compressImage(file,maxDim=1200,quality=0.82,maxBytes=110000){
 /* ── FULL-RESOLUTION LOCAL FOLDER STORAGE (desktop Chrome/Edge/Brave only) ──
    Original, uncompressed images are saved as real files in a folder you choose
    on your computer. Only a small compressed thumbnail syncs to the cloud/mobile. */
-const BUILD_TAG="4.81";
+const BUILD_TAG="4.82";
 const FS_SUPPORTED=typeof window!=="undefined"&&"showDirectoryPicker" in window;
 function idbOpen(){
   return new Promise((resolve,reject)=>{
@@ -1828,6 +1828,25 @@ function App({firebaseConfig,onResetConfig}){
   };
   // ── সত্যিটা যাচাই: এই ডিভাইসে যা দেখাচ্ছে তার সাথে আসল সার্ভারের তথ্য মিলিয়ে দেখা —
   // কোনো অর্ডার শুধু এই ডিভাইসেই আটকে আছে কিনা (কখনো সার্ভারে পৌঁছায়নি) সেটা ধরার জন্য ──
+  // ── দুটো অর্ডার সত্যিই ভিন্ন কিনা মেলানোর জন্য। সরাসরি JSON.stringify দিয়ে মেলানো যায় না,
+  // কারণ সার্ভার থেকে নতুন করে পড়লে ভেতরের ঘরগুলোর ক্রম বদলে যায় (তথ্য এক থাকলেও লেখাটা ভিন্ন
+  // হয়) — তাতে প্রতিটা অর্ডারই ভুলভাবে "ভিন্ন" দেখাত। তাই আগে সব ঘর নাম অনুযায়ী সাজিয়ে,
+  // খালি ঘরগুলো বাদ দিয়ে, তারপর মেলানো হয় ──
+  const normalizeForCompare=(v)=>{
+    if(v===undefined)return undefined;
+    if(v===null)return null;
+    if(Array.isArray(v))return v.map(normalizeForCompare);
+    if(typeof v==="object"){
+      const out={};
+      Object.keys(v).sort().forEach(k=>{
+        const nv=normalizeForCompare(v[k]);
+        if(nv!==undefined)out[k]=nv; // খালি ঘর আর অনুপস্থিত ঘরকে একই ধরা হয়
+      });
+      return out;
+    }
+    return v;
+  };
+  const sameOrderData=(a,b)=>JSON.stringify(normalizeForCompare(a))===JSON.stringify(normalizeForCompare(b));
   const checkServerSync=async()=>{
     // ── উদ্ধার-সংযোগ দিয়ে পড়া হয় (লোকাল ক্যাশ/সারি ছাড়া), তাই এটাই সার্ভারের আসল অবস্থা।
     // মূল সংযোগ দিয়ে পড়লে Firestore এই ডিভাইসের আটকে থাকা লেখাগুলোও ফলাফলে মিশিয়ে দেয়, ফলে
@@ -1848,7 +1867,7 @@ function App({firebaseConfig,onResetConfig}){
       const mismatched=orders.filter(o=>{
         const sv=serverDocs[o.no];
         if(!sv)return false;
-        return JSON.stringify(sv)!==JSON.stringify(o);
+        return !sameOrderData(sv,o);
       });
       return{localOnly,mismatched,serverDocs,serverCount:serverNos.size,localCount:orders.length,stillPendingHere};
     }catch(e){return{error:e.message}};
