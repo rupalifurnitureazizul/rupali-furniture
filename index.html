@@ -104,7 +104,7 @@ function compressImage(file,maxDim=1200,quality=0.82,maxBytes=110000){
 /* ── FULL-RESOLUTION LOCAL FOLDER STORAGE (desktop Chrome/Edge/Brave only) ──
    Original, uncompressed images are saved as real files in a folder you choose
    on your computer. Only a small compressed thumbnail syncs to the cloud/mobile. */
-const BUILD_TAG="4.82";
+const BUILD_TAG="4.83";
 const FS_SUPPORTED=typeof window!=="undefined"&&"showDirectoryPicker" in window;
 function idbOpen(){
   return new Promise((resolve,reject)=>{
@@ -1855,7 +1855,16 @@ function App({firebaseConfig,onResetConfig}){
     const fs=recoveryFsRef.current||fsRef.current;
     if(!fs)return{error:"সংযোগ নেই"};
     try{
-      const snap=await fs.collection("orders").get();
+      const snap=await fs.collection("orders").get({source:"server"});
+      // ── নিরাপত্তা: নেট দুর্বল হলে পড়াটা খালি ফলাফল দিতে পারে। সেটাকে ভুল করে "সার্ভারে কিছু
+      // নেই" ধরে নিলে ভালো তথ্যের উপর পুরনো তথ্য লিখে যাওয়ার ঝুঁকি থাকে — তাই সন্দেহজনক
+      // ফলাফল পেলে কোনো সিদ্ধান্তই নেওয়া হয় না ──
+      if(snap.metadata&&snap.metadata.fromCache)return{error:"এই মুহূর্তে সার্ভারের সাথে যোগাযোগ করা যাচ্ছে না — ইন্টারনেট ঠিক হলে আবার চেষ্টা করুন"};
+      if(snap.empty&&orders.length>0)return{error:"সার্ভার থেকে কোনো উত্তর পাওয়া যায়নি (সংযোগ দুর্বল) — ইন্টারনেট ঠিক হলে আবার চেষ্টা করুন"};
+      // ── নিরাপত্তা-পরীক্ষা: এই ডিভাইসে অনেক অর্ডার আছে অথচ সার্ভার একটাও ফেরত দিল না — এটা
+      // বাস্তবে সার্ভার খালি হওয়া নয়, বরং পড়াটাই ঠিকমতো হয়নি (দুর্বল সংযোগ ইত্যাদি)। এটাকে
+      // সত্যি ধরে নিলে "সব কটা অর্ডার হারিয়ে গেছে" বলে ভুল আতঙ্ক তৈরি হয় ──
+      if(snap.docs.length===0&&orders.length>0)return{error:"সার্ভারের তথ্য ঠিকমতো আসেনি (সংযোগ দুর্বল হতে পারে) — একটু পরে আবার চেষ্টা করুন"};
       const serverDocs={};
       snap.docs.forEach(d=>{serverDocs[d.id]=d.data()});
       const serverNos=new Set(Object.keys(serverDocs));
@@ -2036,7 +2045,7 @@ function App({firebaseConfig,onResetConfig}){
 
   useEffect(()=>{
     setTimedOut(false);
-    const timer=setTimeout(()=>setTimedOut(true),8000);
+    const timer=setTimeout(()=>setTimedOut(true),25000);
     try{
       if(!firebase.apps.length)firebase.initializeApp(firebaseConfig);
       // উদ্ধার-সংযোগ তৈরি (আলাদা নামে, অফলাইন-ক্যাশ ছাড়া) — আটকে থাকা লেখা ঠিক করার জন্য
@@ -2171,8 +2180,39 @@ function App({firebaseConfig,onResetConfig}){
         setAutoStuckStatus(prev=>({...(prev||{}),running:true,lastRunAt:new Date().toISOString(),lastError:!fs2?"সংযোগ তৈরিই হয়নি":null}));
         if(!fs2)return;
         try{
-          const snap2=await fs2.collection("orders").get();
+          const snap2=await fs2.collection("orders").get({source:"server"});
+          // নিরাপত্তা: দুর্বল সংযোগে খালি ফলাফল এলে কোনো সিদ্ধান্ত নেওয়া হয় না (নাহলে সব
+          // অর্ডার "সার্ভারে নেই" ধরে নিয়ে অকারণে আবার পাঠানোর চেষ্টা শুরু হতো)
+          if((snap2.metadata&&snap2.metadata.fromCache)||(snap2.empty&&(ordersRef.current||[]).length>0)){
+            setAutoStuckStatus(prev=>({...(prev||{}),running:false,lastError:"সংযোগ দুর্বল — এই দফায় যাচাই করা যায়নি"}));
+            return;
+          }
+          // ── নিরাপত্তা-পরীক্ষা (উপরের মতোই): সার্ভার একটাও ফেরত না দিলে সেটা ব্যর্থ পড়া ধরে
+          // নেওয়া হয় — নাহলে অ্যাপ ভুল করে সব কটা অর্ডার আবার আপলোড করা শুরু করত ──
+          if(snap2.docs.length===0&&(ordersRef.current||[]).length>0){
+            setAutoStuckStatus(prev=>({...(prev||{}),running:false,lastError:"সার্ভারের তথ্য ঠিকমতো আসেনি — পরের বার আবার চেষ্টা হবে"}));
+            return;
+          }
           const serverIds=new Set(snap2.docs.map(d=>d.id));
+          // ── স্বয়ংক্রিয় দুইমুখী মিলকরণ ──
+          // ক) সার্ভারে আছে কিন্তু এই ডিভাইসে নেই বা ভিন্ন → সার্ভারের কপি নিজে থেকেই নিয়ে নেওয়া
+          //    (আগে প্রতিটা অর্ডারে "সার্ভার থেকে নিন" চাপতে হতো, এখন আর লাগবে না)
+          // খ) এই ডিভাইসে আছে কিন্তু সার্ভারে নেই → নিজে থেকেই সার্ভারে পাঠানো (নিচে)
+          const localByNo={};
+          (ordersRef.current||[]).forEach(o=>{if(o&&o.no)localByNo[o.no]=o});
+          const pulled=[];
+          snap2.docs.forEach(d=>{
+            const sv=d.data();
+            const loc=localByNo[d.id];
+            if(!loc||!sameOrderData(sv,loc)){
+              pulled.push(d.id);
+              setOrders(prev=>{
+                const exists=prev.some(o=>o.no===d.id);
+                return exists?prev.map(o=>o.no===d.id?sv:o):[sv,...prev];
+              });
+              setDraft(dr=>dr&&dr.no===d.id?sv:dr);
+            }
+          });
           // সত্যিকারের আটকে থাকা = এই ডিভাইসে আছে কিন্তু সার্ভারে নেই
           const missingOnServer=(ordersRef.current||[]).filter(o=>o&&o.no&&!serverIds.has(o.no)).map(o=>o.no);
           const toResolve=[];
@@ -2189,6 +2229,20 @@ function App({firebaseConfig,onResetConfig}){
           Object.keys(autoResolveAttemptedRef.current).forEach(no=>{
             if(serverIds.has(no))delete autoResolveAttemptedRef.current[no];
           });
+          // ── সার্ভারে আছে কিন্তু এই ডিভাইসের কপির সাথে মিলছে না — এমন অর্ডার নিজে থেকেই
+          // সার্ভারের কপি দিয়ে বদলে দেওয়া হয় (সার্ভারই চূড়ান্ত সত্য)। আগে প্রতিটার জন্য হাতে
+          // "সার্ভার থেকে নিন" চাপতে হতো; এখন কিছু চাপার দরকার নেই, সব ডিভাইস নিজে থেকেই
+          // একই তথ্যে এসে মেলে ──
+          const serverById={};
+          snap2.docs.forEach(d=>{serverById[d.id]=d.data()});
+          const toAdopt=(ordersRef.current||[]).filter(o=>{
+            const sv=serverById[o.no];
+            return sv&&!sameOrderData(sv,o);
+          });
+          if(toAdopt.length){
+            setOrders(prev=>prev.map(o=>serverById[o.no]&&!sameOrderData(serverById[o.no],o)?serverById[o.no]:o));
+          }
+          setAutoStuckStatus(prev=>({...(prev||{}),adoptedFromServer:toAdopt.length}));
           setAutoStuckStatus(prev=>({...(prev||{}),totalDocs:serverIds.size,foundPendingCount:missingOnServer.length,queuedThisRun:toResolve.length,resolvedThisRun:0,failedThisRun:0,lastAttemptDetail:[]}));
           if(missingOnServer.length)safetyBackupStuck(missingOnServer);
           // ── একসাথে অনেকগুলো চালালে ফোন ধীর হয়ে যেতে পারে (ছবি ছোট করা + নেটওয়ার্ক, দুটোই
@@ -2211,8 +2265,8 @@ function App({firebaseConfig,onResetConfig}){
           setAutoStuckStatus(prev=>({...(prev||{}),running:false,lastError:e.message}));
         }
       };
-      const firstStuckCheck=setTimeout(autoStuckCheck,5000);
-      const stuckCheckInterval=setInterval(autoStuckCheck,30000);
+      const firstStuckCheck=setTimeout(autoStuckCheck,20000);
+      const stuckCheckInterval=setInterval(autoStuckCheck,180000);
 
       return()=>{clearTimeout(timer);clearTimeout(firstStuckCheck);clearInterval(stuckCheckInterval);unsubOrders();unsubExpenses();unsubLots();unsubDb();unsubGalleries();unsubWoodSettings();unsubLaborSettings();unsubAlertSettings();unsubRackSplits();unsubRackBands();unsubCarp();unsubWorkers();unsubPayroll()};
     }catch(e){
@@ -3610,7 +3664,7 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
             <div style={{fontSize:10,color:"#555",marginBottom:6}}>সার্ভারে আছে: <strong>{syncCheck.serverCount}</strong>টি · এই ডিভাইসে দেখাচ্ছে: <strong>{syncCheck.localCount}</strong>টি</div>
             {syncCheck.stillPendingHere&&syncCheck.stillPendingHere.length>0?
               <div style={{background:"#fef2f2",color:"#991b1b",borderRadius:7,padding:"9px 11px",fontSize:10.5,fontWeight:700,lineHeight:1.7,marginBottom:9}}>
-                ⚠️ এই ডিভাইসের {syncCheck.stillPendingHere.length}টা অর্ডার এখনো আসল সার্ভারে পৌঁছায়নি। কিছু করার দরকার নেই — অ্যাপ নিজে থেকেই প্রতি ৩০ সেকেন্ডে সার্ভারের সাথে মিলিয়ে দেখে বাকিগুলো পাঠাতে থাকে (একটার পর একটা, ছবি ছোট করে; ছবি ছোট করেও না হলে ছবি ছাড়াই অর্ডারের তথ্য পাঠিয়ে দেয়, যাতে অর্ডার কখনো না হারায়)। এই সংখ্যাটা এখন সার্ভারের আসল অবস্থা থেকেই গোনা হয়, তাই যতগুলো সফল হচ্ছে ততটাই কমতে থাকবে। কয়েক মিনিট পাতাটা খোলা রেখে আবার "যাচাই করুন" চাপুন।
+                ⚠️ এই ডিভাইসের {syncCheck.stillPendingHere.length}টা অর্ডার এখনো আসল সার্ভারে পৌঁছায়নি। কিছু করার দরকার নেই — অ্যাপ নিজে থেকেই প্রতি ৩ মিনিটে সার্ভারের সাথে মিলিয়ে দেখে বাকিগুলো পাঠাতে থাকে (একটার পর একটা, ছবি ছোট করে; ছবি ছোট করেও না হলে ছবি ছাড়াই অর্ডারের তথ্য পাঠিয়ে দেয়, যাতে অর্ডার কখনো না হারায়)। এই সংখ্যাটা এখন সার্ভারের আসল অবস্থা থেকেই গোনা হয়, তাই যতগুলো সফল হচ্ছে ততটাই কমতে থাকবে। কয়েক মিনিট পাতাটা খোলা রেখে আবার "যাচাই করুন" চাপুন।
                 {autoStuckStatus&&<div style={{marginTop:9,paddingTop:9,borderTop:"1px dashed #fca5a5",fontWeight:400,fontSize:9.5,lineHeight:1.7}}>
                   <div style={{fontWeight:700,marginBottom:3}}>🔧 স্বয়ংক্রিয় চেষ্টার অবস্থা (যাচাইয়ের জন্য):</div>
                   <div>সর্বশেষ চেষ্টা: {autoStuckStatus.lastRunAt?new Date(autoStuckStatus.lastRunAt).toLocaleTimeString("bn-BD"):"এখনো হয়নি"} {autoStuckStatus.running?"(এখন চলছে...)":""}</div>
