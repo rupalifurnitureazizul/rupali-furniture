@@ -104,7 +104,7 @@ function compressImage(file,maxDim=1200,quality=0.82,maxBytes=110000){
 /* ── FULL-RESOLUTION LOCAL FOLDER STORAGE (desktop Chrome/Edge/Brave only) ──
    Original, uncompressed images are saved as real files in a folder you choose
    on your computer. Only a small compressed thumbnail syncs to the cloud/mobile. */
-const BUILD_TAG="4.86";
+const BUILD_TAG="4.87";
 const FS_SUPPORTED=typeof window!=="undefined"&&"showDirectoryPicker" in window;
 function idbOpen(){
   return new Promise((resolve,reject)=>{
@@ -1175,7 +1175,7 @@ function S4({order,onPrint,db,saveDb,onUpdateOrder}){
 function S5({order,onPrint,woodSettings,rackSplits}){
   const{cust,items,no,printLogs}=order;
   const map={};
-  items.forEach(it=>{it.sections.forEach(sec=>{sec.pieces.forEach(p=>{const pw=pieceWoodType(p,sec,it.wood);const info=pieceRackInfo(pw,p.w,p.h,p.l,woodSettings,rackSplits);const code=info.code;const key=`${code}__${p.h}__${p.l}__${p.w}`;const pc=p.pc*it.qty;const cv=cft(pc,p.h,p.l,p.w);if(map[key]){map[key].pc+=pc;map[key].cv+=cv}else map[key]={code,name:p.bn,pc,h:p.h,l:p.l,w:p.w,cv,isSplit:info.isSplit,wood:pw}})})});
+  items.forEach(it=>{it.sections.forEach(sec=>{sec.pieces.forEach(p=>{const pw=pieceWoodType(p,sec,it.wood);const info=pieceRackInfo(pw,p.w,p.h,p.l,woodSettings,rackSplits);const code=info.code;const key=`${code}__${p.h}__${p.l}__${p.w}`;const pc=p.pc*it.qty;const cv=cft(pc,p.h,p.l,p.w);const jointCount=parseInt((p.jointRules||{})[pw])||1;if(map[key]){map[key].pc+=pc;map[key].cv+=cv}else map[key]={code,name:p.bn,pc,h:p.h,l:p.l,w:p.w,cv,isSplit:info.isSplit,wood:pw,jointCount}})})});
   const list=Object.values(map).sort((a,b)=>a.code.localeCompare(b.code));
   const tot=list.reduce((s,w)=>s+w.cv,0);
   return<div style={{fontSize:10}}>
@@ -1191,7 +1191,7 @@ function S5({order,onPrint,woodSettings,rackSplits}){
         <thead><tr style={{background:"#065f46",color:"white"}}>{["র‍্যাক কোড","কাঠের নাম","W×H×L","পিস","CFT"].map((h,i)=><th key={h} style={{padding:"5px 4px",textAlign:i<2?"left":"center",fontWeight:700}}>{h}</th>)}</tr></thead>
         <tbody>{list.map((w,i)=><tr key={i} style={{background:i%2===0?"#f0fdf4":"white",borderBottom:"1px solid #d1fae5"}}>
           <td style={{padding:"5px 4px",fontWeight:800,color:"#065f46",fontFamily:"monospace",fontSize:10}}>{w.code}{w.isSplit&&<span style={{marginLeft:4,fontSize:7,background:"#1d4ed8",color:"white",borderRadius:6,padding:"1px 4px",fontWeight:700,fontFamily:"sans-serif"}}>বিভক্ত</span>}</td>
-          <td style={{padding:"5px 4px"}}>{w.name}</td>
+          <td style={{padding:"5px 4px"}}>{w.name}{w.jointCount>1&&<div style={{fontSize:7.5,color:"#b45309",fontWeight:700,marginTop:1}}>🔗 এই কাঠে জোড়া: {w.jointCount}টি</div>}</td>
           <td style={{padding:"5px 4px",textAlign:"center",fontFamily:"monospace",color:"#555"}}>{w.w}×{w.h}×{w.l}</td>
           <td style={{padding:"5px 4px",textAlign:"center",fontWeight:700}}>{w.pc}</td>
           <td style={{padding:"5px 4px",textAlign:"center"}}>{w.cv.toFixed(3)}</td>
@@ -1205,11 +1205,24 @@ function S5({order,onPrint,woodSettings,rackSplits}){
 }
 
 /* ── SLIP 6: DELIVERY RECEIPT ── */
-function S6({order,onPrint,onUpdateOrder,onSetDelivered,onPhotoChange,onRemovePhoto,allOrders,printLocked}){
+function S6({order,onPrint,onUpdateOrder,onSetDelivered,onPhotoChange,onRemovePhoto,allOrders,printLocked,galleries,onAddFromGallery}){
   const{cust,items,payments,no,deliveryImgs,printLogs}=order;
   const images=deliveryImgs||[];
   const totalPaid=(payments||[]).reduce((s,p)=>s+(parseFloat(p.amount)||0),0);
   const due=Math.max(0,(parseFloat(cust.total)||0)-totalPaid);
+  // ── এই অর্ডারের ফার্নিচার মডেলগুলোর কভার ছবি (থাকলে) — নতুন করে ছবি না তুলে এখান থেকে
+  // সরাসরি ডেলিভারির ছবি হিসেবে বেছে নেওয়া যায় ──
+  const usedSrcs=new Set(images.map(im=>im.src));
+  const modelCoverPics=[];
+  const seenKeys=new Set();
+  (items||[]).forEach(it=>{
+    if(!it.catKey||!it.varKey)return;
+    const key=`${it.catKey}__${it.varKey}`;
+    if(seenKeys.has(key))return;
+    seenKeys.add(key);
+    const cov=galleries&&galleries[key]&&galleries[key].coverImage;
+    if(cov&&!usedSrcs.has(cov))modelCoverPics.push({key,src:cov,name:it.variantBn||""});
+  });
   const captureRef=useRef();
   const photoInput=useRef();
   // ── ডেলিভারি সম্পন্নর তারিখ — ডিফল্টে আজকের তারিখ (আগের মতোই), চাইলে টিক দিয়ে অতীতের
@@ -1263,16 +1276,34 @@ function S6({order,onPrint,onUpdateOrder,onSetDelivered,onPhotoChange,onRemovePh
             </div>
           </div>)}
         </div>
+        {modelCoverPics.length>0&&<div className="no-print" style={{margin:"8px 0"}}>
+          <div style={{fontSize:9.5,color:"#0f766e",fontWeight:600,marginBottom:4}}>মডেলের কভার ছবি থেকে যোগ করুন:</div>
+          <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+            {modelCoverPics.map(m=><button key={m.key} onClick={()=>onAddFromGallery(m.src)} style={{border:"1.5px solid #0f766e",borderRadius:8,padding:2,background:"white"}} title={m.name}>
+              <img src={m.src} style={{width:52,height:52,objectFit:"cover",borderRadius:5,display:"block"}} alt={m.name}/>
+            </button>)}
+          </div>
+        </div>}
         <div className="no-print" style={{textAlign:"center",marginTop:8}}><button onClick={()=>photoInput.current.click()} style={{background:"white",border:"1.5px solid #0f766e",color:"#0f766e",borderRadius:8,padding:"7px 14px",fontSize:11,fontWeight:600}}>📷 আরও ছবি যোগ করুন</button></div>
       </div>}
       {images.length===0&&<div className="no-print" style={{marginBottom:10}}>
+        {modelCoverPics.length>0&&<div style={{marginBottom:8}}>
+          <div style={{fontSize:9.5,color:"#0f766e",fontWeight:600,marginBottom:4}}>মডেলের কভার ছবি থেকে যোগ করুন:</div>
+          <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+            {modelCoverPics.map(m=><button key={m.key} onClick={()=>onAddFromGallery(m.src)} style={{border:"1.5px solid #0f766e",borderRadius:8,padding:2,background:"white"}} title={m.name}>
+              <img src={m.src} style={{width:52,height:52,objectFit:"cover",borderRadius:5,display:"block"}} alt={m.name}/>
+            </button>)}
+          </div>
+        </div>}
         <button onClick={()=>photoInput.current.click()} style={{width:"100%",background:"#f0fdfa",border:"2px dashed #0f766e",borderRadius:9,padding:"12px",fontSize:12,color:"#0f766e",fontWeight:600}}>📷 সম্পন্ন ফার্নিচারের ছবি যোগ করুন (একাধিক)</button>
       </div>}
       <div style={{background:"#f0fdfa",borderRadius:7,padding:"9px",marginBottom:12}}>
         <div style={{display:"flex",justifyContent:"space-between",fontSize:11,marginBottom:3}}><span>মোট মূল্য:</span><span style={{fontWeight:700}}>{money(cust.total)}</span></div>
         <div style={{display:"flex",justifyContent:"space-between",fontSize:11,color:"#166534",fontWeight:700}}><span>সম্পূর্ণ পরিশোধ:</span><span>{money(totalPaid)}</span></div>
       </div>
-      <div style={{background:"#ccfbf1",borderRadius:7,padding:"8px 11px",textAlign:"center",fontSize:11,fontWeight:700,color:"#0f766e",marginBottom:14}}>✅ সম্পূর্ণ পেমেন্ট সম্পন্ন — পণ্য ডেলিভারি দেওয়া হয়েছে</div>
+      {(parseFloat(cust.total)||0)-totalPaid<=0
+        ?<div style={{background:"#ccfbf1",borderRadius:7,padding:"8px 11px",textAlign:"center",fontSize:11,fontWeight:700,color:"#0f766e",marginBottom:14}}>✅ সম্পূর্ণ পেমেন্ট সম্পন্ন — পণ্য ডেলিভারি দেওয়া হয়েছে</div>
+        :<div style={{background:"#fef2f2",borderRadius:7,padding:"8px 11px",textAlign:"center",fontSize:11,fontWeight:700,color:RED,marginBottom:14}}>⚠️ পণ্য ডেলিভারি দেওয়া হয়েছে, কিন্তু বাকি আছে {money((parseFloat(cust.total)||0)-totalPaid)}</div>}
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
         {["গ্রাহকের স্বাক্ষর","রূপালী ফার্নিচার\nপরিচালক স্বাক্ষর"].map(t=><div key={t} style={{borderTop:"2px solid #0f766e",paddingTop:6,textAlign:"center",fontSize:9,color:"#555",whiteSpace:"pre-line"}}>{t}</div>)}
       </div>
@@ -1851,7 +1882,12 @@ function App({firebaseConfig,onResetConfig}){
     return v;
   };
   const sameOrderData=(a,b)=>JSON.stringify(normalizeForCompare(a))===JSON.stringify(normalizeForCompare(b));
+  const autoStuckCheckRef=useRef(null);
   const checkServerSync=async()=>{
+    // ── আগে সরাসরি রিপোর্ট করা হতো, এখন প্রথমে পূর্ণ মিলকরণ চালানো হয় (একই যেটা পর্যায়ক্রমিক
+    // ব্যাকগ্রাউন্ড প্রক্রিয়াতেও চলে) — তাই "যাচাই করুন" চাপলেই সাথে সাথে সব মিলে যায়, একটা
+    // একটা করে "সার্ভারের সঠিক তথ্য নিন" চাপার দরকার নেই ──
+    if(autoStuckCheckRef.current){try{await autoStuckCheckRef.current()}catch(e){}}
     // ── উদ্ধার-সংযোগ দিয়ে পড়া হয় (লোকাল ক্যাশ/সারি ছাড়া), তাই এটাই সার্ভারের আসল অবস্থা।
     // মূল সংযোগ দিয়ে পড়লে Firestore এই ডিভাইসের আটকে থাকা লেখাগুলোও ফলাফলে মিশিয়ে দেয়, ফলে
     // অর্ডার সফলভাবে সার্ভারে পৌঁছে যাওয়ার পরেও "আটকে আছে" সংখ্যাটা কমত না — এই ভুলটাই এতদিন
@@ -1938,34 +1974,34 @@ function App({firebaseConfig,onResetConfig}){
   const saveGalleryEntry=(catKey,varKey,data)=>{
     const key=`${catKey}__${varKey}`;
     setGalleries(prev=>({...prev,[key]:data}));
-    if(fsRef.current)fsRef.current.collection("galleries").doc(key).set(data).catch(err=>alert("⚠️ ছবি সেভ করতে সমস্যা হয়েছে: "+err.message));
+    if(fsRef.current)(getRecoveryFs()||fsRef.current).collection("galleries").doc(key).set(data).catch(err=>alert("⚠️ ছবি সেভ করতে সমস্যা হয়েছে: "+err.message));
   };
   const saveWoodSettings=(newSettings)=>{
     // __rackBands শুধু হিসাবের সুবিধার জন্য মেমরিতে যোগ করা হয় — এটা যেন কখনো
     // woodSettings ডকুমেন্টে সেভ হয়ে না যায়, তাই এখানে বাদ দেওয়া হচ্ছে
     const{__rackBands,...clean}=newSettings||{};
     setWoodSettings(clean);
-    if(fsRef.current)fsRef.current.doc("meta/woodSettings").set(clean).catch(err=>alert("⚠️ কাঠের সেটিংস সেভ করতে সমস্যা হয়েছে: "+err.message));
+    if(fsRef.current)(getRecoveryFs()||fsRef.current).doc("meta/woodSettings").set(clean).catch(err=>alert("⚠️ কাঠের সেটিংস সেভ করতে সমস্যা হয়েছে: "+err.message));
   };
   const saveAlertSettings=(s)=>{
     setAlertSettings(s);
-    if(fsRef.current)fsRef.current.doc("meta/alertSettings").set(s).catch(err=>alert("⚠️ সতর্কতার সীমা সেভ করতে সমস্যা হয়েছে: "+err.message));
+    if(fsRef.current)(getRecoveryFs()||fsRef.current).doc("meta/alertSettings").set(s).catch(err=>alert("⚠️ সতর্কতার সীমা সেভ করতে সমস্যা হয়েছে: "+err.message));
   };
   const saveLaborSettings=(newSettings)=>{
     setLaborSettings(newSettings);
-    if(fsRef.current)fsRef.current.doc("meta/laborSettings").set(newSettings).catch(err=>alert("⚠️ শ্রম হার সেভ করতে সমস্যা হয়েছে: "+err.message));
+    if(fsRef.current)(getRecoveryFs()||fsRef.current).doc("meta/laborSettings").set(newSettings).catch(err=>alert("⚠️ শ্রম হার সেভ করতে সমস্যা হয়েছে: "+err.message));
   };
   const addRackSplit=(split)=>{
     setRackSplits(prev=>[...prev,split]);
-    if(fsRef.current)fsRef.current.doc("meta/rackSplits").set({list:firebase.firestore.FieldValue.arrayUnion(split)},{merge:true}).catch(err=>alert("⚠️ নতুন র‍্যাক সেভ করতে সমস্যা হয়েছে: "+err.message));
+    if(fsRef.current)(getRecoveryFs()||fsRef.current).doc("meta/rackSplits").set({list:firebase.firestore.FieldValue.arrayUnion(split)},{merge:true}).catch(err=>alert("⚠️ নতুন র‍্যাক সেভ করতে সমস্যা হয়েছে: "+err.message));
   };
   const addRackBand=(band)=>{
     setRackBands(prev=>[...prev,band]);
-    if(fsRef.current)fsRef.current.doc("meta/rackBands").set({list:firebase.firestore.FieldValue.arrayUnion(band)},{merge:true}).catch(err=>alert("⚠️ হাইট ব্যান্ড সেভ করতে সমস্যা হয়েছে: "+err.message));
+    if(fsRef.current)(getRecoveryFs()||fsRef.current).doc("meta/rackBands").set({list:firebase.firestore.FieldValue.arrayUnion(band)},{merge:true}).catch(err=>alert("⚠️ হাইট ব্যান্ড সেভ করতে সমস্যা হয়েছে: "+err.message));
   };
   const removeRackBand=(band)=>{
     setRackBands(prev=>prev.filter(b=>!(b.wood===band.wood&&b.w===band.w&&b.from===band.from&&b.to===band.to&&b.rep===band.rep)));
-    if(fsRef.current)fsRef.current.doc("meta/rackBands").set({list:firebase.firestore.FieldValue.arrayRemove(band)},{merge:true}).catch(err=>alert("⚠️ ব্যান্ড মুছতে সমস্যা হয়েছে: "+err.message));
+    if(fsRef.current)(getRecoveryFs()||fsRef.current).doc("meta/rackBands").set({list:firebase.firestore.FieldValue.arrayRemove(band)},{merge:true}).catch(err=>alert("⚠️ ব্যান্ড মুছতে সমস্যা হয়েছে: "+err.message));
   };
   const latestDataRef=useRef({});
   latestDataRef.current={orders,expenses,woodLots,workers,payrollWeeks,db,carpenters,woodSettings,laborSettings};
@@ -2326,8 +2362,9 @@ function App({firebaseConfig,onResetConfig}){
           setAutoStuckStatus(prev=>({...(prev||{}),running:false,lastError:e.message}));
         }
       };
-      const firstStuckCheck=setTimeout(autoStuckCheck,20000);
-      const stuckCheckInterval=setInterval(autoStuckCheck,180000);
+      autoStuckCheckRef.current=autoStuckCheck;
+      const firstStuckCheck=setTimeout(autoStuckCheck,10000);
+      const stuckCheckInterval=setInterval(autoStuckCheck,60000);
 
       return()=>{clearTimeout(timer);clearTimeout(firstStuckCheck);clearInterval(stuckCheckInterval);unsubOrders();unsubExpenses();unsubLots();unsubDb();unsubGalleries();unsubWoodSettings();unsubLaborSettings();unsubAlertSettings();unsubRackSplits();unsubRackBands();unsubCarp();unsubWorkers();unsubPayroll()};
     }catch(e){
@@ -2433,7 +2470,7 @@ function App({firebaseConfig,onResetConfig}){
 
   const saveDb=(newDb)=>{
     setDb(newDb);
-    if(fsRef.current)fsRef.current.doc("meta/db").set(newDb).catch(err=>alert("⚠️ ক্লাউডে সেভ করতে সমস্যা হয়েছে: "+err.message));
+    if(fsRef.current)(getRecoveryFs()||fsRef.current).doc("meta/db").set(newDb).catch(err=>alert("⚠️ ক্লাউডে সেভ করতে সমস্যা হয়েছে: "+err.message));
   };
   // ── ক্রমিক অর্ডার নম্বর — Firestore transaction দিয়ে, যাতে দুইটা ডিভাইস একই সময়ে
   // নতুন অর্ডার শুরু করলেও কখনো একই নম্বর না পায়। ফরম্যাট আগের মতোই RF-YYYYMMDD-ক্রমিক,
@@ -2472,7 +2509,7 @@ function App({firebaseConfig,onResetConfig}){
       }
       if(!fsRef.current)return;
       try{
-        await fsRef.current.collection("orders").doc(o.no).set(o);
+        await (getRecoveryFs()||fsRef.current).collection("orders").doc(o.no).set(o);
       }catch(err){
         if(isLikelyTooLargeError(err))await autoResolveTooLarge(o.no,false,o);
         else queuePendingWrite({kind:"order",orderNo:o.no,data:o,merge:false});
@@ -2507,7 +2544,7 @@ function App({firebaseConfig,onResetConfig}){
       }
       if(!fsRef.current)return;
       try{
-        await fsRef.current.collection("orders").doc(safe.no).set(safe,{merge:true});
+        await (getRecoveryFs()||fsRef.current).collection("orders").doc(safe.no).set(safe,{merge:true});
       }catch(err){
         if(isLikelyTooLargeError(err))await autoResolveTooLarge(safe.no,true,safe);
         else queuePendingWrite({kind:"order",orderNo:safe.no,data:safe,merge:true});
@@ -2522,53 +2559,53 @@ function App({firebaseConfig,onResetConfig}){
     const withId={...payment,id:payment.id||("pay_"+Date.now())};
     setOrders(prev=>prev.map(o=>o.no===orderNo?{...o,payments:[...(o.payments||[]),withId]}:o));
     if(draft&&draft.no===orderNo)setDraft(prev=>({...prev,payments:[...(prev.payments||[]),withId]}));
-    if(fsRef.current)fsRef.current.collection("orders").doc(orderNo).set({payments:firebase.firestore.FieldValue.arrayUnion(withId)},{merge:true}).catch(err=>alert("⚠️ পেমেন্ট সিঙ্ক করতে সমস্যা হয়েছে — ইন্টারনেট সংযোগ যাচাই করুন: "+err.message));
+    if(fsRef.current)(getRecoveryFs()||fsRef.current).collection("orders").doc(orderNo).set({payments:firebase.firestore.FieldValue.arrayUnion(withId)},{merge:true}).catch(err=>alert("⚠️ পেমেন্ট সিঙ্ক করতে সমস্যা হয়েছে — ইন্টারনেট সংযোগ যাচাই করুন: "+err.message));
   };
   const setOrderDelivered=(orderNo,delivered,deliveredAt)=>{
     setOrders(prev=>prev.map(o=>o.no===orderNo?{...o,delivered,deliveredAt}:o));
     if(draft&&draft.no===orderNo)setDraft(prev=>({...prev,delivered,deliveredAt}));
-    if(fsRef.current)fsRef.current.collection("orders").doc(orderNo).set({delivered,deliveredAt},{merge:true}).catch(err=>alert("⚠️ ডেলিভারি স্ট্যাটাস সিঙ্ক করতে সমস্যা হয়েছে — ইন্টারনেট সংযোগ যাচাই করুন: "+err.message));
+    if(fsRef.current)(getRecoveryFs()||fsRef.current).collection("orders").doc(orderNo).set({delivered,deliveredAt},{merge:true}).catch(err=>alert("⚠️ ডেলিভারি স্ট্যাটাস সিঙ্ক করতে সমস্যা হয়েছে — ইন্টারনেট সংযোগ যাচাই করুন: "+err.message));
   };
   const deleteOrderPermanently=(orderNo)=>{
-    if(fsRef.current)fsRef.current.collection("orders").doc(orderNo).delete().catch(err=>alert("⚠️ ডিলিট করতে সমস্যা হয়েছে: "+err.message));
+    if(fsRef.current)(getRecoveryFs()||fsRef.current).collection("orders").doc(orderNo).delete().catch(err=>alert("⚠️ ডিলিট করতে সমস্যা হয়েছে: "+err.message));
     setDraft(null);
     goBack();
   };
   const saveExpense=(exp)=>{
     const id=exp.id||("exp_"+Date.now());
     const withId={...exp,id};
-    if(fsRef.current)fsRef.current.collection("expenses").doc(id).set(withId).catch(err=>alert("⚠️ খরচ সিঙ্ক করতে সমস্যা হয়েছে: "+err.message));
+    if(fsRef.current)(getRecoveryFs()||fsRef.current).collection("expenses").doc(id).set(withId).catch(err=>alert("⚠️ খরচ সিঙ্ক করতে সমস্যা হয়েছে: "+err.message));
   };
   const saveCarpenters=(list)=>{
     setCarpenters(list);
-    if(fsRef.current)fsRef.current.doc("meta/carpenters").set({list}).catch(()=>{});
+    if(fsRef.current)(getRecoveryFs()||fsRef.current).doc("meta/carpenters").set({list}).catch(()=>{});
   };
   const saveWoodLots=(newList)=>{
     setWoodLots(newList);
     if(!fsRef.current)return;
     const newIds=new Set(newList.map(l=>l.id));
-    newList.forEach(lot=>fsRef.current.collection("woodlots").doc(lot.id).set(lot).catch(err=>alert("⚠️ কাঠের স্টক সিঙ্ক করতে সমস্যা হয়েছে: "+err.message)));
-    woodLots.forEach(lot=>{if(!newIds.has(lot.id))fsRef.current.collection("woodlots").doc(lot.id).delete().catch(()=>{})});
+    newList.forEach(lot=>(getRecoveryFs()||fsRef.current).collection("woodlots").doc(lot.id).set(lot).catch(err=>alert("⚠️ কাঠের স্টক সিঙ্ক করতে সমস্যা হয়েছে: "+err.message)));
+    woodLots.forEach(lot=>{if(!newIds.has(lot.id))(getRecoveryFs()||fsRef.current).collection("woodlots").doc(lot.id).delete().catch(()=>{})});
   };
   // সাপ্লায়ারকে দেওয়া পেমেন্টও টাকার হিসাব — একই কারণে atomic (arrayUnion) লেখা হয়
   const addLotPayment=(lotId,payment)=>{
     const withId={...payment,id:payment.id||("lotpay_"+Date.now())};
     setWoodLots(prev=>prev.map(l=>l.id===lotId?{...l,payments:[...(l.payments||[]),withId]}:l));
-    if(fsRef.current)fsRef.current.collection("woodlots").doc(lotId).set({payments:firebase.firestore.FieldValue.arrayUnion(withId)},{merge:true}).catch(err=>alert("⚠️ পেমেন্ট সিঙ্ক করতে সমস্যা হয়েছে — ইন্টারনেট সংযোগ যাচাই করুন: "+err.message));
+    if(fsRef.current)(getRecoveryFs()||fsRef.current).collection("woodlots").doc(lotId).set({payments:firebase.firestore.FieldValue.arrayUnion(withId)},{merge:true}).catch(err=>alert("⚠️ পেমেন্ট সিঙ্ক করতে সমস্যা হয়েছে — ইন্টারনেট সংযোগ যাচাই করুন: "+err.message));
   };
   const saveWorker=(worker)=>{
     const id=worker.id||("worker_"+Date.now());
     const withId={...worker,id};
     setWorkers(prev=>{const exists=prev.some(w=>w.id===id);return exists?prev.map(w=>w.id===id?withId:w):[...prev,withId]});
-    if(fsRef.current)fsRef.current.collection("workers").doc(id).set(withId).catch(err=>alert("⚠️ কর্মীর তথ্য সিঙ্ক করতে সমস্যা হয়েছে: "+err.message));
+    if(fsRef.current)(getRecoveryFs()||fsRef.current).collection("workers").doc(id).set(withId).catch(err=>alert("⚠️ কর্মীর তথ্য সিঙ্ক করতে সমস্যা হয়েছে: "+err.message));
   };
   const deleteWorker=(id)=>{
     setWorkers(prev=>prev.filter(w=>w.id!==id));
-    if(fsRef.current)fsRef.current.collection("workers").doc(id).delete().catch(()=>{});
+    if(fsRef.current)(getRecoveryFs()||fsRef.current).collection("workers").doc(id).delete().catch(()=>{});
   };
   const savePayrollWeek=(weekEnd,data)=>{
     setPayrollWeeks(prev=>({...prev,[weekEnd]:data}));
-    if(fsRef.current)fsRef.current.collection("payrollWeeks").doc(weekEnd).set(data).catch(err=>alert("⚠️ পে-রোল সিঙ্ক করতে সমস্যা হয়েছে: "+err.message));
+    if(fsRef.current)(getRecoveryFs()||fsRef.current).collection("payrollWeeks").doc(weekEnd).set(data).catch(err=>alert("⚠️ পে-রোল সিঙ্ক করতে সমস্যা হয়েছে: "+err.message));
   };
   // ── নিচের তিনটা atomic (পরমাণু-সদৃশ) — একাধিক ডিভাইস থেকে একই সপ্তাহে একসাথে এন্ট্রি দিলেও
   // একজনের লেখা আরেকজনের লেখা মুছে ফেলবে না। উপরের savePayrollWeek পুরো ডকুমেন্ট বদলে দেয় বলে
@@ -2578,21 +2615,21 @@ function App({firebaseConfig,onResetConfig}){
       const wd=prev[weekEnd]||{attendance:{},advances:[]};
       return{...prev,[weekEnd]:{...wd,attendance:{...(wd.attendance||{}),[workerId]:days}}};
     });
-    if(fsRef.current)fsRef.current.collection("payrollWeeks").doc(weekEnd).set({[`attendance.${workerId}`]:days},{merge:true}).catch(err=>alert("⚠️ হাজিরা সিঙ্ক করতে সমস্যা হয়েছে: "+err.message));
+    if(fsRef.current)(getRecoveryFs()||fsRef.current).collection("payrollWeeks").doc(weekEnd).set({[`attendance.${workerId}`]:days},{merge:true}).catch(err=>alert("⚠️ হাজিরা সিঙ্ক করতে সমস্যা হয়েছে: "+err.message));
   };
   const addAdvanceEntry=(weekEnd,adv)=>{
     setPayrollWeeks(prev=>{
       const wd=prev[weekEnd]||{attendance:{},advances:[]};
       return{...prev,[weekEnd]:{...wd,advances:[...(wd.advances||[]),adv]}};
     });
-    if(fsRef.current)fsRef.current.collection("payrollWeeks").doc(weekEnd).set({advances:firebase.firestore.FieldValue.arrayUnion(adv)},{merge:true}).catch(err=>alert("⚠️ অগ্রিম সিঙ্ক করতে সমস্যা হয়েছে: "+err.message));
+    if(fsRef.current)(getRecoveryFs()||fsRef.current).collection("payrollWeeks").doc(weekEnd).set({advances:firebase.firestore.FieldValue.arrayUnion(adv)},{merge:true}).catch(err=>alert("⚠️ অগ্রিম সিঙ্ক করতে সমস্যা হয়েছে: "+err.message));
   };
   const removeAdvanceEntry=(weekEnd,adv)=>{
     setPayrollWeeks(prev=>{
       const wd=prev[weekEnd]||{attendance:{},advances:[]};
       return{...prev,[weekEnd]:{...wd,advances:(wd.advances||[]).filter(a=>a.id!==adv.id)}};
     });
-    if(fsRef.current)fsRef.current.collection("payrollWeeks").doc(weekEnd).set({advances:firebase.firestore.FieldValue.arrayRemove(adv)},{merge:true}).catch(err=>alert("⚠️ মুছতে সমস্যা হয়েছে: "+err.message));
+    if(fsRef.current)(getRecoveryFs()||fsRef.current).collection("payrollWeeks").doc(weekEnd).set({advances:firebase.firestore.FieldValue.arrayRemove(adv)},{merge:true}).catch(err=>alert("⚠️ মুছতে সমস্যা হয়েছে: "+err.message));
   };
 
   // পিস-লেভেল কোড হিসাবের জন্য woodSettings-এর সাথে র‍্যাক ব্যান্ডগুলো একসাথে পাঠানো হয়,
@@ -5865,6 +5902,11 @@ function Preview({order,onBack,slip,setSlip,onUpdate,onAddPayment,onSetDelivered
       });
     }
   };
+  const addDeliveryImgFromGallery=(src)=>{
+    if(!src)return;
+    const next=[...deliveryImgs,{src,fileName:null}];
+    onUpdate({...order,deliveryImgs:next,deliveryImg:next[0]?.src||null,deliveryImgFileName:next[0]?.fileName||null});
+  };
   const removeDeliveryImg=(idx)=>{
     if(!window.confirm("এই ছবিটি মুছে ফেলতে চান?"))return;
     const next=deliveryImgs.filter((_,i)=>i!==idx);
@@ -5942,7 +5984,7 @@ function Preview({order,onBack,slip,setSlip,onUpdate,onAddPayment,onSetDelivered
         {slip===2&&<S3 order={order} onPrint={logPrint} onUpdateOrder={onUpdate} workers={workers}/>}
         {slip===3&&<S4 order={order} onPrint={logPrint} db={db} saveDb={saveDb} onUpdateOrder={onUpdate}/>}
         {slip===4&&<S5 order={order} onPrint={logPrint} woodSettings={woodSettings} rackSplits={rackSplits}/>}
-        {slip===5&&<S6 order={{...order,deliveryImgs}} onPrint={logPrint} onUpdateOrder={onUpdate} onSetDelivered={onSetDelivered} onPhotoChange={handleDeliveryImg} onRemovePhoto={removeDeliveryImg} allOrders={allOrders} printLocked={!isFullyPaid}/>}
+        {slip===5&&<S6 order={{...order,deliveryImgs}} onPrint={logPrint} onUpdateOrder={onUpdate} onSetDelivered={onSetDelivered} onPhotoChange={handleDeliveryImg} onRemovePhoto={removeDeliveryImg} onAddFromGallery={addDeliveryImgFromGallery} allOrders={allOrders} printLocked={!isFullyPaid} galleries={galleries}/>}
       </div>
     </div>
   </div>
