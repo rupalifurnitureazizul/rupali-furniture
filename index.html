@@ -104,7 +104,7 @@ function compressImage(file,maxDim=1200,quality=0.82,maxBytes=110000){
 /* ── FULL-RESOLUTION LOCAL FOLDER STORAGE (desktop Chrome/Edge/Brave only) ──
    Original, uncompressed images are saved as real files in a folder you choose
    on your computer. Only a small compressed thumbnail syncs to the cloud/mobile. */
-const BUILD_TAG="4.89";
+const BUILD_TAG="4.90";
 const FS_SUPPORTED=typeof window!=="undefined"&&"showDirectoryPicker" in window;
 function idbOpen(){
   return new Promise((resolve,reject)=>{
@@ -2077,14 +2077,10 @@ function App({firebaseConfig,onResetConfig}){
 
       const unsubOrders=firestore.collection("orders").onSnapshot({includeMetadataChanges:true},snap=>{
         clearTimeout(timer);setTimedOut(false);
-        // ── এই ডিভাইসের পুরনো/স্থানীয় ক্যাশ থেকে আসা ফলাফল আর সার্ভারের আসল ফলাফল — দুটোই
-        // এখানে আসে। আগে দুটোকেই সমান ধরে বসিয়ে দেওয়া হতো, আর নিচের স্বয়ংক্রিয় মিলকরণ
-        // সার্ভারের আসল তথ্য বসাত — ফলে দুটো কোড একে অপরের উপর বারবার লিখে যাচ্ছিল এবং
-        // পাতা হঠাৎ এক অবস্থা থেকে আরেক অবস্থায় লাফ দিচ্ছিল (২৪ ↔ ৩২)। এখন একবার সার্ভারের
-        // আসল তথ্য পেয়ে গেলে আর ক্যাশের পুরনো তথ্য বসানো হয় না ──
-        const fromCache=snap.metadata&&snap.metadata.fromCache;
-        if(fromCache&&serverTruthSeenRef.current)return;
-        if(!fromCache)serverTruthSeenRef.current=true;
+        // ── এই লিসেনারই এখন অর্ডার তালিকার একমাত্র উৎস। Firestore নিজেই এখানে স্থানীয়
+        // পরিবর্তন সাথে সাথে দেখায় এবং সার্ভার নিশ্চিত করলে আবার পাঠায় — অন্য ডিভাইসের
+        // পরিবর্তনও এখান দিয়েই আসে। আগে এর পাশাপাশি পর্যায়ক্রমিক মিলকরণ কোডও তালিকা বসাত,
+        // ফলে আপনার সদ্য করা পরিবর্তন কয়েক সেকেন্ড পর পুরনো কপি দিয়ে মুছে যেত ──
         const list=snap.docs.map(d=>d.data()).sort((a,b)=>new Date(b.at||b.cust?.date||0)-new Date(a.at||a.cust?.date||0));
         setOrders(list);
         setLastSyncAt(new Date());
@@ -2092,25 +2088,21 @@ function App({firebaseConfig,onResetConfig}){
       },err=>{clearTimeout(timer);setConnError(err.message)});
 
       const unsubExpenses=firestore.collection("expenses").onSnapshot({includeMetadataChanges:true},snap=>{
-        if(snap.metadata&&snap.metadata.fromCache&&serverTruthSeenRef.current)return;
         const list=snap.docs.map(d=>d.data()).sort((a,b)=>new Date(b.at||b.date||0)-new Date(a.at||a.date||0));
         setExpenses(list);
       },err=>setConnError(err.message));
 
       const unsubLots=firestore.collection("woodlots").onSnapshot({includeMetadataChanges:true},snap=>{
-        if(snap.metadata&&snap.metadata.fromCache&&serverTruthSeenRef.current)return;
         const list=snap.docs.map(d=>d.data()).sort((a,b)=>new Date(b.date||0)-new Date(a.date||0));
         setWoodLots(list);
       },err=>setConnError(err.message));
 
       const unsubWorkers=firestore.collection("workers").onSnapshot({includeMetadataChanges:true},snap=>{
-        if(snap.metadata&&snap.metadata.fromCache&&serverTruthSeenRef.current)return;
         const list=snap.docs.map(d=>d.data());
         setWorkers(list);
       },err=>{});
 
       const unsubPayroll=firestore.collection("payrollWeeks").onSnapshot({includeMetadataChanges:true},snap=>{
-        if(snap.metadata&&snap.metadata.fromCache&&serverTruthSeenRef.current)return;
         const map={};
         snap.docs.forEach(d=>{map[d.id]=d.data()});
         setPayrollWeeks(map);
@@ -2223,26 +2215,13 @@ function App({firebaseConfig,onResetConfig}){
             return;
           }
           const serverIds=new Set(snap2.docs.map(d=>d.id));
-          // ── স্বয়ংক্রিয় দুইমুখী মিলকরণ ──
-          // ক) সার্ভারে আছে কিন্তু এই ডিভাইসে নেই বা ভিন্ন → সার্ভারের কপি নিজে থেকেই নিয়ে নেওয়া
-          //    (আগে প্রতিটা অর্ডারে "সার্ভার থেকে নিন" চাপতে হতো, এখন আর লাগবে না)
-          // খ) এই ডিভাইসে আছে কিন্তু সার্ভারে নেই → নিজে থেকেই সার্ভারে পাঠানো (নিচে)
-          const localByNo={};
-          (ordersRef.current||[]).forEach(o=>{if(o&&o.no)localByNo[o.no]=o});
-          const pulled=[];
-          snap2.docs.forEach(d=>{
-            const sv=d.data();
-            const loc=localByNo[d.id];
-            if(!loc||!sameOrderData(sv,loc)){
-              pulled.push(d.id);
-              setOrders(prev=>{
-                const exists=prev.some(o=>o.no===d.id);
-                return exists?prev.map(o=>o.no===d.id?sv:o):[sv,...prev];
-              });
-              setDraft(dr=>dr&&dr.no===d.id?sv:dr);
-            }
-          });
-          // সত্যিকারের আটকে থাকা = এই ডিভাইসে আছে কিন্তু সার্ভারে নেই
+          // ── এখানে আর সার্ভার থেকে টেনে এনে তালিকা বসানো হয় না ──
+          // আগে এই কোড সার্ভারের কপি দিয়ে স্থানীয় তালিকা প্রতিস্থাপন করত। কিন্তু আপনি কোনো
+          // পরিবর্তন করার ঠিক পরপরই যদি এটা চলত, তাহলে সার্ভারের পুরনো কপি এনে আপনার সদ্য
+          // করা পরিবর্তন মুছে দিত — "কয়েক সেকেন্ড পর আগের অবস্থায় ফিরে যাওয়া"র আসল কারণ
+          // এটাই ছিল। সার্ভারের পরিবর্তন আনার কাজটা রিয়েল-টাইম লিসেনার এমনিতেই করে (সেটাই
+          // তার কাজ), তাই এই অংশটা শুধু ক্ষতিই করছিল। এখন শুধু "সার্ভারে পৌঁছায়নি এমন কিছু
+          // থাকলে পাঠিয়ে দেওয়া" — এই একমুখী কাজটুকুই থাকে ──
           const missingOnServer=(ordersRef.current||[]).filter(o=>o&&o.no&&!serverIds.has(o.no)).map(o=>o.no);
           const toResolve=[];
           missingOnServer.forEach(no=>{
@@ -2262,16 +2241,6 @@ function App({firebaseConfig,onResetConfig}){
           // সার্ভারের কপি দিয়ে বদলে দেওয়া হয় (সার্ভারই চূড়ান্ত সত্য)। আগে প্রতিটার জন্য হাতে
           // "সার্ভার থেকে নিন" চাপতে হতো; এখন কিছু চাপার দরকার নেই, সব ডিভাইস নিজে থেকেই
           // একই তথ্যে এসে মেলে ──
-          const serverById={};
-          snap2.docs.forEach(d=>{serverById[d.id]=d.data()});
-          const toAdopt=(ordersRef.current||[]).filter(o=>{
-            const sv=serverById[o.no];
-            return sv&&!sameOrderData(sv,o);
-          });
-          if(toAdopt.length){
-            setOrders(prev=>prev.map(o=>serverById[o.no]&&!sameOrderData(serverById[o.no],o)?serverById[o.no]:o));
-          }
-          setAutoStuckStatus(prev=>({...(prev||{}),adoptedFromServer:toAdopt.length}));
           setAutoStuckStatus(prev=>({...(prev||{}),totalDocs:serverIds.size,foundPendingCount:missingOnServer.length,queuedThisRun:toResolve.length,resolvedThisRun:0,failedThisRun:0,lastAttemptDetail:[]}));
           if(missingOnServer.length)safetyBackupStuck(missingOnServer);
           // ── একসাথে অনেকগুলো চালালে ফোন ধীর হয়ে যেতে পারে (ছবি ছোট করা + নেটওয়ার্ক, দুটোই
@@ -2302,8 +2271,9 @@ function App({firebaseConfig,onResetConfig}){
               }
               const serverList=s.docs.map(d=>d.data());
               const serverIds=new Set(s.docs.map(d=>d.id));
-              const changed=!sameOrderData(serverList,localList||[]);
-              if(changed)setter(serverList);
+              // সার্ভার থেকে টেনে এনে বসানো হয় না — রিয়েল-টাইম লিসেনারই সেটা করে।
+              // এখানে বসালে সদ্য করা পরিবর্তন পুরনো কপি দিয়ে মুছে যেত।
+              const changed=false;
               let pushedCount=0;
               for(const item of(localList||[])){
                 if(item&&item.id&&!serverIds.has(item.id)){
@@ -2322,8 +2292,7 @@ function App({firebaseConfig,onResetConfig}){
             const dbSnap=await withTimeout(fs2.doc("meta/db").get({source:"server"}),60000,"সময়সীমা পার");
             if(dbSnap.exists&&!(dbSnap.metadata&&dbSnap.metadata.fromCache)){
               const sv=dbSnap.data();
-              const changed=od.db&&!sameOrderData(sv,od.db);
-              if(changed)setDb(sv);
+              const changed=false; // উপরের একই কারণে — লিসেনারই ডেটাবেস হালনাগাদ করে
               otherSyncStatus.db=changed?"হালনাগাদ করা হয়েছে":"মিলে আছে";
             }
           }catch(e3){otherSyncStatus.db="ত্রুটি: "+e3.message}
@@ -2333,8 +2302,7 @@ function App({firebaseConfig,onResetConfig}){
             if(!(pw.metadata&&pw.metadata.fromCache)){
               const map={};pw.docs.forEach(d=>{map[d.id]=d.data()});
               if(!(pw.docs.length===0&&Object.keys(od.payrollWeeks||{}).length>0)){
-                const changed=!sameOrderData(map,od.payrollWeeks||{});
-                if(changed)setPayrollWeeks(map);
+                const changed=false; // উপরের একই কারণে — লিসেনারই বেতন হালনাগাদ করে
                 for(const[wk,val]of Object.entries(od.payrollWeeks||{})){
                   if(!map[wk]){try{await withTimeout(fs2.collection("payrollWeeks").doc(wk).set(val),45000,"সময়সীমা পার")}catch(e4){}}
                 }
