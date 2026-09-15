@@ -104,7 +104,7 @@ function compressImage(file,maxDim=1200,quality=0.82,maxBytes=110000){
 /* ── FULL-RESOLUTION LOCAL FOLDER STORAGE (desktop Chrome/Edge/Brave only) ──
    Original, uncompressed images are saved as real files in a folder you choose
    on your computer. Only a small compressed thumbnail syncs to the cloud/mobile. */
-const BUILD_TAG="4.88";
+const BUILD_TAG="4.89";
 const FS_SUPPORTED=typeof window!=="undefined"&&"showDirectoryPicker" in window;
 function idbOpen(){
   return new Promise((resolve,reject)=>{
@@ -1657,6 +1657,8 @@ function App({firebaseConfig,onResetConfig}){
   // কারণ সংশ্লিষ্ট state গুলো এই লাইনের পরে ঘোষণা করা) ──
   const otherDataRef=useRef({});
   const autoResolveAttemptedRef=useRef({}); // orderNo -> এই "পেন্ডিং পর্ব"-এ একবার চেষ্টা হয়ে গেছে কিনা (বারবার না করার জন্য)
+  // ── একবার সার্ভারের আসল তথ্য পেয়ে গেছি কিনা — পেয়ে গেলে আর পুরনো ক্যাশের তথ্য বসানো হয় না ──
+  const serverTruthSeenRef=useRef(false);
   const[expenses,setExpenses]=useState([]);
   const[woodLots,setWoodLots]=useState([]);
   const[workers,setWorkers]=useState([]);
@@ -2073,30 +2075,42 @@ function App({firebaseConfig,onResetConfig}){
       fsRef.current=firestore;
       migrateLegacyPermanentFailures();
 
-      const unsubOrders=firestore.collection("orders").onSnapshot(snap=>{
+      const unsubOrders=firestore.collection("orders").onSnapshot({includeMetadataChanges:true},snap=>{
         clearTimeout(timer);setTimedOut(false);
+        // ── এই ডিভাইসের পুরনো/স্থানীয় ক্যাশ থেকে আসা ফলাফল আর সার্ভারের আসল ফলাফল — দুটোই
+        // এখানে আসে। আগে দুটোকেই সমান ধরে বসিয়ে দেওয়া হতো, আর নিচের স্বয়ংক্রিয় মিলকরণ
+        // সার্ভারের আসল তথ্য বসাত — ফলে দুটো কোড একে অপরের উপর বারবার লিখে যাচ্ছিল এবং
+        // পাতা হঠাৎ এক অবস্থা থেকে আরেক অবস্থায় লাফ দিচ্ছিল (২৪ ↔ ৩২)। এখন একবার সার্ভারের
+        // আসল তথ্য পেয়ে গেলে আর ক্যাশের পুরনো তথ্য বসানো হয় না ──
+        const fromCache=snap.metadata&&snap.metadata.fromCache;
+        if(fromCache&&serverTruthSeenRef.current)return;
+        if(!fromCache)serverTruthSeenRef.current=true;
         const list=snap.docs.map(d=>d.data()).sort((a,b)=>new Date(b.at||b.cust?.date||0)-new Date(a.at||a.cust?.date||0));
         setOrders(list);
         setLastSyncAt(new Date());
         syncFailCountRef.current=0; // লাইভ সংযোগ থেকে ডেটা আসছে মানে সিঙ্ক ঠিক আছে — পুরনো ব্যর্থতার গণনা মুছে দিন
       },err=>{clearTimeout(timer);setConnError(err.message)});
 
-      const unsubExpenses=firestore.collection("expenses").onSnapshot(snap=>{
+      const unsubExpenses=firestore.collection("expenses").onSnapshot({includeMetadataChanges:true},snap=>{
+        if(snap.metadata&&snap.metadata.fromCache&&serverTruthSeenRef.current)return;
         const list=snap.docs.map(d=>d.data()).sort((a,b)=>new Date(b.at||b.date||0)-new Date(a.at||a.date||0));
         setExpenses(list);
       },err=>setConnError(err.message));
 
-      const unsubLots=firestore.collection("woodlots").onSnapshot(snap=>{
+      const unsubLots=firestore.collection("woodlots").onSnapshot({includeMetadataChanges:true},snap=>{
+        if(snap.metadata&&snap.metadata.fromCache&&serverTruthSeenRef.current)return;
         const list=snap.docs.map(d=>d.data()).sort((a,b)=>new Date(b.date||0)-new Date(a.date||0));
         setWoodLots(list);
       },err=>setConnError(err.message));
 
-      const unsubWorkers=firestore.collection("workers").onSnapshot(snap=>{
+      const unsubWorkers=firestore.collection("workers").onSnapshot({includeMetadataChanges:true},snap=>{
+        if(snap.metadata&&snap.metadata.fromCache&&serverTruthSeenRef.current)return;
         const list=snap.docs.map(d=>d.data());
         setWorkers(list);
       },err=>{});
 
-      const unsubPayroll=firestore.collection("payrollWeeks").onSnapshot(snap=>{
+      const unsubPayroll=firestore.collection("payrollWeeks").onSnapshot({includeMetadataChanges:true},snap=>{
+        if(snap.metadata&&snap.metadata.fromCache&&serverTruthSeenRef.current)return;
         const map={};
         snap.docs.forEach(d=>{map[d.id]=d.data()});
         setPayrollWeeks(map);
