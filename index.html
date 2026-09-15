@@ -104,7 +104,7 @@ function compressImage(file,maxDim=1200,quality=0.82,maxBytes=110000){
 /* ── FULL-RESOLUTION LOCAL FOLDER STORAGE (desktop Chrome/Edge/Brave only) ──
    Original, uncompressed images are saved as real files in a folder you choose
    on your computer. Only a small compressed thumbnail syncs to the cloud/mobile. */
-const BUILD_TAG="4.93";
+const BUILD_TAG="4.97";
 const FS_SUPPORTED=typeof window!=="undefined"&&"showDirectoryPicker" in window;
 function idbOpen(){
   return new Promise((resolve,reject)=>{
@@ -2064,7 +2064,11 @@ function App({firebaseConfig,onResetConfig}){
     try{
       if(!firebase.apps.length)firebase.initializeApp(firebaseConfig);
       const firestore=firebase.firestore();
-      try{firestore.enablePersistence({synchronizeTabs:true}).catch(()=>{})}catch(e){}
+      // ── অফলাইন-ক্যাশ ইচ্ছাকৃতভাবে বন্ধ রাখা হলো। এই পুরো কথোপকথনে যত সিঙ্ক-সমস্যা ধরা
+      // পড়েছে (আটকে থাকা অর্ডার, ক্যাটাগরি সেভ না হওয়া, পে-রোলের হাজিরা, ডেলিভারির পেমেন্ট/ছবি)
+      // — প্রতিটারই মূল কারণ ছিল এই স্থানীয় লেখা-সারি, যেটা মাঝে মাঝে চুপচাপ আটকে যেত আর
+      // কোনো ত্রুটিও দেখাত না। ক্যাশ ছাড়া প্রতিটা লেখা এখন হয় সত্যিই সফল হবে, নয়তো সাথে
+      // সাথেই দৃশ্যমান ত্রুটি দেখাবে — নিরবে হারিয়ে যাওয়ার আর সুযোগ নেই।
       fsRef.current=firestore;
       migrateLegacyPermanentFailures();
 
@@ -2208,6 +2212,8 @@ function App({firebaseConfig,onResetConfig}){
             return;
           }
           const serverIds=new Set(snap2.docs.map(d=>d.id));
+          const serverById={};
+          snap2.docs.forEach(d=>{serverById[d.id]=d.data()});
           // ── এখানে আর সার্ভার থেকে টেনে এনে তালিকা বসানো হয় না ──
           // আগে এই কোড সার্ভারের কপি দিয়ে স্থানীয় তালিকা প্রতিস্থাপন করত। কিন্তু আপনি কোনো
           // পরিবর্তন করার ঠিক পরপরই যদি এটা চলত, তাহলে সার্ভারের পুরনো কপি এনে আপনার সদ্য
@@ -2216,8 +2222,19 @@ function App({firebaseConfig,onResetConfig}){
           // তার কাজ), তাই এই অংশটা শুধু ক্ষতিই করছিল। এখন শুধু "সার্ভারে পৌঁছায়নি এমন কিছু
           // থাকলে পাঠিয়ে দেওয়া" — এই একমুখী কাজটুকুই থাকে ──
           const missingOnServer=(ordersRef.current||[]).filter(o=>o&&o.no&&!serverIds.has(o.no)).map(o=>o.no);
+          // ── এই ডিভাইসে "ডেলিভারড" হিসেবে চিহ্নিত কিন্তু সার্ভারে এখনো তা প্রতিফলিত হয়নি —
+          // এটা প্রায় নিশ্চিতভাবেই মানে সেই লেখাটা (হয়তো অনেক আগে, পুরনো কোনো বাগের কারণে)
+          // কখনো সার্ভারে পৌঁছায়নি। তাই আবার পাঠানো নিরাপদ — এটা একমুখী (শুধু সার্ভারকে
+          // "ডেলিভারড" দিকে এগিয়ে নেয়, কখনো উল্টো দিকে না), তাই সদ্য করা কোনো পরিবর্তন
+          // এতে হারানোর ঝুঁকি নেই ──
+          const deliveredNotSynced=(ordersRef.current||[]).filter(o=>{
+            if(!o||!o.no||!o.delivered)return false;
+            const sv=serverById[o.no];
+            return !sv||!sv.delivered;
+          }).map(o=>o.no);
+          const missingOnServer2=[...new Set([...missingOnServer,...deliveredNotSynced])];
           const toResolve=[];
-          missingOnServer.forEach(no=>{
+          missingOnServer2.forEach(no=>{
             // ── আগে একবার চেষ্টা হলেই স্থায়ীভাবে "চেষ্টা হয়ে গেছে" চিহ্ন বসে যেত, তাই আর
             // কখনো দ্বিতীয়বার চেষ্টা হতো না। এখন ১ মিনিট পরই আবার চেষ্টা করা যাবে ──
             const lastTry=autoResolveAttemptedRef.current[no]||0;
@@ -2228,14 +2245,10 @@ function App({firebaseConfig,onResetConfig}){
           });
           // সার্ভারে পৌঁছে গেছে এমন অর্ডারের চিহ্ন সাফ করা
           Object.keys(autoResolveAttemptedRef.current).forEach(no=>{
-            if(serverIds.has(no))delete autoResolveAttemptedRef.current[no];
+            if(serverIds.has(no)&&!deliveredNotSynced.includes(no))delete autoResolveAttemptedRef.current[no];
           });
-          // ── সার্ভারে আছে কিন্তু এই ডিভাইসের কপির সাথে মিলছে না — এমন অর্ডার নিজে থেকেই
-          // সার্ভারের কপি দিয়ে বদলে দেওয়া হয় (সার্ভারই চূড়ান্ত সত্য)। আগে প্রতিটার জন্য হাতে
-          // "সার্ভার থেকে নিন" চাপতে হতো; এখন কিছু চাপার দরকার নেই, সব ডিভাইস নিজে থেকেই
-          // একই তথ্যে এসে মেলে ──
-          setAutoStuckStatus(prev=>({...(prev||{}),totalDocs:serverIds.size,foundPendingCount:missingOnServer.length,queuedThisRun:toResolve.length,resolvedThisRun:0,failedThisRun:0,lastAttemptDetail:[]}));
-          if(missingOnServer.length)safetyBackupStuck(missingOnServer);
+          setAutoStuckStatus(prev=>({...(prev||{}),totalDocs:serverIds.size,foundPendingCount:missingOnServer2.length,queuedThisRun:toResolve.length,resolvedThisRun:0,failedThisRun:0,lastAttemptDetail:[]}));
+          if(missingOnServer2.length)safetyBackupStuck(missingOnServer2);
           // ── একসাথে অনেকগুলো চালালে ফোন ধীর হয়ে যেতে পারে (ছবি ছোট করা + নেটওয়ার্ক, দুটোই
           // ভারী কাজ) — তাই একটার পর একটা, ধারাবাহিকভাবে সমাধানের চেষ্টা হয় ──
           for(const no of toResolve){
@@ -2833,6 +2846,35 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
       const l=bnDur[d.id];
       if(l.length>=2){const av=l.reduce((s,v)=>s+v,0)/l.length;if(av>bnBest){bnBest=av;bottleneckDeptId=d.id;bottleneckDeptBn=d.bn}}
     });
+    // ── ব্যাকলগ প্রবণতা: বাধা-বিভাগে প্রতি মাসে কতটা কাজ ঢুকছে (শুরু হয়েছে) বনাম কতটা বের
+    // হচ্ছে (শেষ হয়েছে), গত ৬ মাস। ঢোকা যদি বের হওয়ার চেয়ে বেশি হতে থাকে, ব্যাকলগ বাড়ছে —
+    // শুধু কর্মী/সময় বাড়িয়ে সমাধান হবে না, অর্ডার নেওয়ার হারও পুনর্বিবেচনা করতে হবে ──
+    const backlogTrend=(()=>{
+      if(!bottleneckDeptId)return null;
+      const nowB=new Date();
+      const monthsB=[];
+      for(let i=5;i>=0;i--){
+        const d=new Date(nowB.getFullYear(),nowB.getMonth()-i,1);
+        monthsB.push({y:d.getFullYear(),m:d.getMonth()});
+      }
+      const inCounts=Array(6).fill(0),outCounts=Array(6).fill(0);
+      activeOrders.forEach(o=>{
+        const ipx=effectiveItemProgress(o);
+        Object.values(ipx).forEach(itp=>{
+          const cur=itp&&itp[bottleneckDeptId];
+          if(!cur)return;
+          if(cur.start){
+            const sd=parseISO(cur.start);
+            monthsB.forEach((mo,idx)=>{if(sd.getUTCFullYear()===mo.y&&sd.getUTCMonth()===mo.m)inCounts[idx]++});
+          }
+          if(cur.end){
+            const ed=parseISO(cur.end);
+            monthsB.forEach((mo,idx)=>{if(ed.getUTCFullYear()===mo.y&&ed.getUTCMonth()===mo.m)outCounts[idx]++});
+          }
+        });
+      });
+      return{labels:monthsB.map(mo=>monthName(mo.m)),inCounts,outCounts};
+    })();
     const catProfit={};
     activeOrders.filter(o=>o.delivered).forEach(o=>{
       const lRate=orderLabourRate(o,laborSettings);
@@ -2842,9 +2884,11 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
         const labourCost=totalCft(it.sections||[])*(it.qty||1)*lRate;
         const revenue=(parseFloat(it.price)||0)*(parseFloat(it.qty)||1);
         if(revenue<=0)return;
-        if(!catProfit[catLabel])catProfit[catLabel]={label:catLabel,revenue:0,cost:0,count:0,bottleneckDays:0,bnSamples:0};
+        if(!catProfit[catLabel])catProfit[catLabel]={label:catLabel,revenue:0,cost:0,woodCost:0,labourCost:0,count:0,bottleneckDays:0,bnSamples:0};
         catProfit[catLabel].revenue+=revenue;
         catProfit[catLabel].cost+=woodCost+labourCost;
+        catProfit[catLabel].woodCost+=woodCost;
+        catProfit[catLabel].labourCost+=labourCost;
         catProfit[catLabel].count+=1;
         // থ্রুপুট অ্যাকাউন্টিং (Goldratt): এই আইটেম বাধা-বিভাগে কত দিন দখল করেছিল
         if(bottleneckDeptId){
@@ -2883,13 +2927,6 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
     });
     const workerRanked=Object.entries(workerCft).map(([name,c])=>({name,cft:c})).sort((a,b)=>b.cft-a.cft);
 
-    const catAllCount={};
-    activeOrders.filter(o=>new Date(o.cust.date)>=oneYearAgo).forEach(o=>o.items.forEach(it=>{
-      const catLabel=(db&&it.catKey&&db[it.catKey])?db[it.catKey].bn:(it.variantBn.split(" ")[0]||it.code);
-      catAllCount[catLabel]=(catAllCount[catLabel]||0)+1;
-    }));
-    const topCategoryRanked=Object.entries(catAllCount).sort((a,b)=>b[1]-a[1]).map(([label,count])=>({label,count}));
-
     // ── বাৎসরিক অর্ডার ও মূল্য: ডেটা যে বছরগুলোতে আছে তার বদলে সবসময় শেষ ৬ বছর (তথ্য না থাকা
     // বছরও ০ দেখাবে), আর প্রতিটার সাথে আগের বছরের তুলনায় প্রবৃদ্ধি % ──
     const revenueInYear=(y)=>activeOrders.filter(o=>new Date(o.cust.date).getFullYear()===y).reduce((s,o)=>s+(parseFloat(o.cust.total)||0),0);
@@ -2904,25 +2941,7 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
       return{label:String(y),count:yOrders.length,revenue,growthPct};
     });
 
-    // ── বর্তমান মাসটা গত ৬ বছরে (এই বছরসহ) কেমন গেছে — টাকার ভিত্তিতে, প্রতি বছরের প্রবৃদ্ধি%সহ ──
-    const monthlyAgg={}; // key "y-m" -> {count, revenue}
-    activeOrders.forEach(o=>{
-      const od=new Date(o.cust.date);
-      const key=`${od.getFullYear()}-${od.getMonth()}`;
-      monthlyAgg[key]=monthlyAgg[key]||{count:0,revenue:0,y:od.getFullYear(),m:od.getMonth()};
-      monthlyAgg[key].count+=1;
-      monthlyAgg[key].revenue+=(parseFloat(o.cust.total)||0);
-    });
-    const curMonthIdx=now.getMonth();
-    const revenueInMonthYear=(y)=>(monthlyAgg[`${y}-${curMonthIdx}`]||{revenue:0}).revenue;
-    const sameMonthTrend=[];
-    for(let y=curYearForYearly-5;y<=curYearForYearly;y++){
-      const agg=monthlyAgg[`${y}-${curMonthIdx}`]||{count:0,revenue:0};
-      const prevRevenue=revenueInMonthYear(y-1);
-      const growthPct=prevRevenue>0?((agg.revenue-prevRevenue)/prevRevenue)*100:null;
-      sameMonthTrend.push({label:String(y),count:agg.count,revenue:agg.revenue,growthPct});
-    }
-    const sameMonthLabel=monthName(curMonthIdx);
+    // ── ("[মাস]-এর প্রবণতা") এখন আলাদা, নেভিগেট-করা যায় এমন useMemo-তে (নিচে) সরানো হয়েছে ──
 
     // Wood stock pie (uncut/available logs by wood type)
     const WOOD_COLORS={S:CHART_SOFT_ORANGE,M:CHART_SOFT_RED,A:CHART_SOFT_GREEN,K:CHART_SOFT_TEAL,E:CHART_SOFT_PURPLE};
@@ -3091,7 +3110,7 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
         daysUntilOrder:dailyUse>0?Math.round((stock-reorderPoint)/dailyUse):null};
     }).filter(Boolean).sort((a,b)=>a.monthsLeft-b.monthsLeft);
 
-    return{running:withDays,yoy,totalRevenue,totalExpense,catPie,thisMonthCount:thisMonthOrders.length,avgOrderValue,totalOutstanding,topCategoryRanked,yearly,sameMonthTrend,sameMonthLabel,stockPie,payables,totalPayable,cfInflow,cfOutflow,cfNet,deptAvg,deptAvgMax,stuckItems,payrollProdByMonth,validPerCft,setLabourRate,emptyWoodModels,repeatRate,repeatCount:repeatCusts.length,totalCustCount:custList.length,repeatRevenueShare,stockAlerts,readyNotCollected,readyValueStuck,avgProdDays,recentAvgProd,olderAvgProd,prodCount:prodTimes.length,woodPriceAlerts,catProfitRanked,throughputRanked,bottleneckDeptBn,workerRanked};
+    return{running:withDays,yoy,totalRevenue,totalExpense,catPie,thisMonthCount:thisMonthOrders.length,avgOrderValue,totalOutstanding,yearly,stockPie,payables,totalPayable,cfInflow,cfOutflow,cfNet,deptAvg,deptAvgMax,stuckItems,payrollProdByMonth,validPerCft,setLabourRate,emptyWoodModels,repeatRate,repeatCount:repeatCusts.length,totalCustCount:custList.length,repeatRevenueShare,stockAlerts,readyNotCollected,readyValueStuck,avgProdDays,recentAvgProd,olderAvgProd,prodCount:prodTimes.length,woodPriceAlerts,catProfitRanked,throughputRanked,bottleneckDeptBn,workerRanked,backlogTrend};
   },[orders,expenses,db,woodLots,woodSettings,laborSettings,workers,payrollWeeks,alertSettings]);
 
   // ── "খরচ — ক্যাটাগরি অনুযায়ী" এখন সময়সীমা বাছাই করা যায় — এটা আলাদা, ছোট useMemo-তে রাখা
@@ -3200,10 +3219,46 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
   const seasonYearOptions=useMemo(()=>{
     const cy=new Date().getFullYear();
     const arr=[];
-    for(let y=cy-5;y<=cy;y++)arr.push(y);
+    for(let y=cy;y>=cy-5;y--)arr.push(y);
     return arr;
   },[]);
   const[seasonYearsSelect,setSeasonYearsSelect]=useState(()=>new Set([new Date().getFullYear()]));
+  const[popularYearSelect,setPopularYearSelect]=useState(()=>new Date().getFullYear());
+  const[profitDetailOpen,setProfitDetailOpen]=useState(false);
+  const popularFurnitureData=useMemo(()=>{
+    const activeOrders2=(orders||[]).filter(o=>!o.cancelled);
+    const catAllCount={};
+    activeOrders2.filter(o=>o.cust.date&&new Date(o.cust.date).getFullYear()===popularYearSelect).forEach(o=>(o.items||[]).forEach(it=>{
+      const catLabel=(db&&it.catKey&&db[it.catKey])?db[it.catKey].bn:(it.variantBn.split(" ")[0]||it.code);
+      catAllCount[catLabel]=(catAllCount[catLabel]||0)+1;
+    }));
+    return Object.entries(catAllCount).sort((a,b)=>b[1]-a[1]).map(([label,count])=>({label,count}));
+  },[orders,db,popularYearSelect]);
+  const[monthNavOffset,setMonthNavOffset]=useState(0); // 0=বর্তমান মাস, + মানে পরের মাস, - মানে আগের মাস
+  const monthTrendData=useMemo(()=>{
+    const now2=new Date();
+    const viewedMonthIdx=((now2.getMonth()+monthNavOffset)%12+12)%12;
+    const curYear2=now2.getFullYear();
+    const activeOrders2=(orders||[]).filter(o=>!o.cancelled);
+    const monthlyAgg={}; // key "y-m" -> {count, revenue}
+    activeOrders2.forEach(o=>{
+      if(!o.cust.date)return;
+      const od=new Date(o.cust.date);
+      const key=`${od.getFullYear()}-${od.getMonth()}`;
+      monthlyAgg[key]=monthlyAgg[key]||{count:0,revenue:0};
+      monthlyAgg[key].count+=1;
+      monthlyAgg[key].revenue+=(parseFloat(o.cust.total)||0);
+    });
+    const revenueInMonthYear=(y)=>(monthlyAgg[`${y}-${viewedMonthIdx}`]||{revenue:0}).revenue;
+    const trend=[];
+    for(let y=curYear2-5;y<=curYear2;y++){
+      const agg=monthlyAgg[`${y}-${viewedMonthIdx}`]||{count:0,revenue:0};
+      const prevRevenue=revenueInMonthYear(y-1);
+      const growthPct=prevRevenue>0?((agg.revenue-prevRevenue)/prevRevenue)*100:null;
+      trend.push({label:String(y),count:agg.count,revenue:agg.revenue,growthPct});
+    }
+    return{trend,monthLabel:monthName(viewedMonthIdx)};
+  },[orders,monthNavOffset]);
   const seasonData=useMemo(()=>{
     const activeOrders=(orders||[]).filter(o=>!o.cancelled);
     const selected=seasonYearsSelect.size?seasonYearsSelect:new Set([new Date().getFullYear()]);
@@ -3225,22 +3280,20 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
     return{seasonal,seasonalMax,selectedCount:selected.size};
   },[orders,seasonYearsSelect]);
 
-  // ── কালেকশন বনাম খরচ — এখন বছর বাছাই করা যায় (এই বছর/গত বছর/তার আগের বছর), সবসময় ১২ মাস
-  // (জানুয়ারি-ডিসেম্বর) দেখায়। "কালেকশন" মানে সেই মাসে আসলে কত টাকা হাতে এসেছে — অর্ডারের
-  // সময় নেওয়া অগ্রিম, বা আগের যেকোনো অর্ডারের বাকি টাকা সেই মাসে পরিশোধ হলে সেটাও ধরা হয়
-  // (অর্ডারটা কবে করা হয়েছিল তা দিয়ে না, পেমেন্টের তারিখ দিয়ে) ──
-  const[svExpYearSelect,setSvExpYearSelect]=useState("this"); // this|last|last2
-  const svExpData=useMemo(()=>{
-    const now=new Date();
-    const year=svExpYearSelect==="this"?now.getFullYear():svExpYearSelect==="last"?now.getFullYear()-1:now.getFullYear()-2;
+  // ── কালেকশন বনাম খরচ (এখন "সংগ্রহ বনাম ব্যয়") আর "মাসিক আয়" — দুটোই একই মাসিক
+  // সংগ্রহ/ব্যয় হিসাব ব্যবহার করে, শুধু নিজস্ব আলাদা সাল-নির্বাচন সহ। "কালেকশন" মানে সেই
+  // মাসে আসলে কত টাকা হাতে এসেছে — অর্ডারের সময় নেওয়া অগ্রিম, বা আগের যেকোনো অর্ডারের বাকি
+  // টাকা সেই মাসে পরিশোধ হলে সেটাও ধরা হয় (অর্ডারটা কবে করা হয়েছিল তা দিয়ে না, পেমেন্টের
+  // তারিখ দিয়ে) ──
+  const computeMonthlyFinance=(year)=>{
     const activeOrders=(orders||[]).filter(o=>!o.cancelled);
-    const monthly=Array.from({length:12},(_,m)=>{
+    return Array.from({length:12},(_,m)=>{
       const collection=activeOrders.reduce((sum,o)=>sum+(o.payments||[]).filter(p=>{
         const pd=new Date(p.date);
         return pd.getFullYear()===year&&pd.getMonth()===m;
       }).reduce((s,p)=>s+(parseFloat(p.amount)||0),0),0);
       const total=(expenses||[]).filter(e=>{const ed=new Date(e.date);return ed.getFullYear()===year&&ed.getMonth()===m}).reduce((s,e)=>s+(parseFloat(e.total)||0),0);
-      // ── "খরচ" শুধু ট্র্যাক-করা খরচ না — কাঠ ক্রয় ও বেতনও যোগ হয় (আগের মতোই) ──
+      // ── "ব্যয়" শুধু ট্র্যাক-করা খরচ না — কাঠ ক্রয় ও বেতনও যোগ হয় (আগের মতোই) ──
       const woodCost=(woodLots||[]).filter(l=>{const ld=new Date(l.date);return ld.getFullYear()===year&&ld.getMonth()===m}).reduce((s,l)=>s+(l.logs||[]).reduce((ls,lg)=>ls+lg.cft,0)*(parseFloat(l.ratePerCft)||0),0);
       let payrollCost=0;
       Object.entries(payrollWeeks||{}).forEach(([weekEnd,wd])=>{
@@ -3253,8 +3306,17 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
       });
       return{label:monthName(m),revenue:collection,expense:total+woodCost+payrollCost};
     });
-    return{year,monthly};
-  },[orders,expenses,woodLots,payrollWeeks,workers,svExpYearSelect]);
+  };
+  const[svExpYearSelect,setSvExpYearSelect]=useState(()=>new Date().getFullYear());
+  const svExpData=useMemo(()=>({year:svExpYearSelect,monthly:computeMonthlyFinance(svExpYearSelect)}),[orders,expenses,woodLots,payrollWeeks,workers,svExpYearSelect]);
+  const[monthlyIncomeYearSelect,setMonthlyIncomeYearSelect]=useState(()=>new Date().getFullYear());
+  const monthlyIncomeData=useMemo(()=>({year:monthlyIncomeYearSelect,monthly:computeMonthlyFinance(monthlyIncomeYearSelect)}),[orders,expenses,woodLots,payrollWeeks,workers,monthlyIncomeYearSelect]);
+  const financeYearOptions=useMemo(()=>{
+    const cy=new Date().getFullYear();
+    const arr=[];
+    for(let y=cy;y>=cy-5;y--)arr.push(y);
+    return arr;
+  },[]);
 
 
   return<div style={{minHeight:"100vh",background:`linear-gradient(150deg,${RED} 0%,#8B0020 100%)`,position:"relative"}}>
@@ -3415,23 +3477,31 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
 
       <div id="z-trend" style={{scrollMarginTop:56,fontSize:11,fontWeight:800,color:"#b45309",letterSpacing:"0.3px",margin:"18px 0 8px",paddingBottom:4,borderBottom:"2px solid #b4530922"}}>📅 প্রবণতা ও পরিকল্পনা</div>
 
-      {stats.topCategoryRanked&&stats.topCategoryRanked.length>0&&<div style={{background:"#fffbeb",border:"1px solid #fde68a",borderRadius:10,padding:"12px 14px",marginBottom:18}}>
-        <div style={{fontSize:12,fontWeight:700,color:"#92400e",marginBottom:8}}>🏆 জনপ্রিয় ফার্নিচার (গত ১ বছর)</div>
-        {stats.topCategoryRanked.slice(0,6).map((c,i)=><div key={c.label} style={{display:"flex",alignItems:"center",gap:8,marginBottom:i<stats.topCategoryRanked.length-1?6:0}}>
-          <div style={{width:20,height:20,borderRadius:"50%",background:i===0?"#f59e0b":i===1?"#94a3b8":i===2?"#b45309":"#e5e7eb",color:i<3?"white":"#666",display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,fontWeight:800,flexShrink:0}}>{i+1}</div>
-          <span style={{flex:1,fontSize:12,color:"#333",fontWeight:600}}>{c.label}</span>
-          <span style={{fontSize:11,color:"#92400e",fontWeight:700}}>{c.count} অর্ডার</span>
-        </div>)}
-      </div>}
+      <div style={{marginBottom:18}}>
+        <div style={{fontSize:12,fontWeight:700,color:"#92400e",marginBottom:6}}>🏆 জনপ্রিয় ফার্নিচার</div>
+        <div style={{display:"flex",gap:5,marginBottom:8,overflowX:"auto"}}>
+          {financeYearOptions.map(y=><button key={y} onClick={()=>setPopularYearSelect(y)} style={{flexShrink:0,padding:"6px 12px",borderRadius:20,border:popularYearSelect===y?"none":"1px solid #ddd",background:popularYearSelect===y?"#92400e":"white",color:popularYearSelect===y?"white":"#666",fontSize:10,fontWeight:600}}>{y}</button>)}
+        </div>
+        {popularFurnitureData.length>0?<div style={{background:"#fffbeb",border:"1px solid #fde68a",borderRadius:10,padding:"12px 14px"}}>
+          {popularFurnitureData.slice(0,6).map((c,i)=><div key={c.label} style={{display:"flex",alignItems:"center",gap:8,marginBottom:i<Math.min(6,popularFurnitureData.length)-1?6:0}}>
+            <div style={{width:20,height:20,borderRadius:"50%",background:i===0?"#f59e0b":i===1?"#94a3b8":i===2?"#b45309":"#e5e7eb",color:i<3?"white":"#666",display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,fontWeight:800,flexShrink:0}}>{i+1}</div>
+            <span style={{flex:1,fontSize:12,color:"#333",fontWeight:600}}>{c.label}</span>
+            <span style={{fontSize:11,color:"#92400e",fontWeight:700}}>{c.count} অর্ডার</span>
+          </div>)}
+        </div>:<div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"14px",textAlign:"center",fontSize:11,color:"#999"}}>এই সালে কোনো অর্ডার নেই</div>}
+      </div>
 
-      {/* সর্বোচ্চ অর্ডারের মাস (আগে "সর্বকালের সেরা মাস বনাম এখন" ছিল) — এখন বর্তমান মাসটা গত ৬
-      বছরে কেমন গেছে তার প্রবণতা, বাৎসরিক চার্টের মতোই টাকাভিত্তিক, নিচে ছোট করে সংখ্যা, প্রতি
-      বছরের প্রবৃদ্ধি%সহ */}
-      {stats.sameMonthTrend&&stats.sameMonthTrend.some(m=>m.count>0)&&<div style={{marginBottom:16}}>
-        <div style={{fontWeight:700,fontSize:13,color:"#222",marginBottom:8}}>🏅 {stats.sameMonthLabel}-এর প্রবণতা (গত ৬ বছর)</div>
-        <div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 8px"}}>
-          {(()=>{const maxR=Math.max(...stats.sameMonthTrend.map(y=>y.revenue),1);return<div style={{display:"flex",alignItems:"stretch",gap:6,height:150}}>
-            {stats.sameMonthTrend.map(y=><div key={y.label} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",height:"100%"}}>
+      <div style={{marginBottom:16}}>
+        <div style={{fontWeight:700,fontSize:13,color:"#222",marginBottom:8,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+          <span>🏅 {monthTrendData.monthLabel}-এর প্রবণতা (গত ৬ বছর)</span>
+          <span style={{display:"flex",gap:6}}>
+            <button onClick={()=>setMonthNavOffset(v=>v-1)} style={{width:26,height:26,borderRadius:7,border:"1px solid #ddd",background:"white",color:"#b45309",fontSize:13,fontWeight:800}}>‹</button>
+            <button onClick={()=>setMonthNavOffset(v=>v+1)} style={{width:26,height:26,borderRadius:7,border:"1px solid #ddd",background:"white",color:"#b45309",fontSize:13,fontWeight:800}}>›</button>
+          </span>
+        </div>
+        {monthTrendData.trend.some(m=>m.count>0)?<div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 8px"}}>
+          {(()=>{const maxR=Math.max(...monthTrendData.trend.map(y=>y.revenue),1);return<div style={{display:"flex",alignItems:"stretch",gap:6,height:150}}>
+            {monthTrendData.trend.map(y=><div key={y.label} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",height:"100%"}}>
               <div style={{fontSize:8,color:"#166534",fontWeight:700,marginBottom:2}}>{money(y.revenue)}</div>
               <div style={{fontSize:9,color:"#666",marginBottom:2}}>{y.count}টি</div>
               <div style={{flex:1,width:"100%",display:"flex",alignItems:"flex-end"}}>
@@ -3441,8 +3511,8 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
               <div style={{fontSize:8,marginTop:2,fontWeight:600,minHeight:11,visibility:y.growthPct===null?"hidden":"visible",color:y.growthPct>=0?CHART_SOFT_GREEN:CHART_SOFT_RED}}>{y.growthPct!==null?`${y.growthPct>=0?"↑":"↓"} ${Math.abs(y.growthPct).toFixed(0)}%`:"—"}</div>
             </div>)}
           </div>})()}
-        </div>
-      </div>}
+        </div>:<div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"14px",textAlign:"center",fontSize:11,color:"#999"}}>এই মাসে কোনো অর্ডার নেই</div>}
+      </div>
 
       <div style={{marginBottom:14}}>
         <div style={{fontSize:12,fontWeight:700,color:"#b45309",marginBottom:6}}>📅 মৌসুমি প্রবণতা — কোন মাসে অর্ডার বেশি</div>
@@ -3476,6 +3546,24 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
         </div>:<div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"14px",textAlign:"center",fontSize:11,color:"#999"}}>এই সালগুলোয় কোনো অর্ডার নেই</div>}
       </div>
 
+      {/* Yearly totals - অর্ডার সংখ্যা ও মূল্য এখন একই চার্টে, বার + উপরে মূল্যের লেবেল */}
+      {stats.yearly&&stats.yearly.length>1&&<div style={{marginBottom:16}}>
+        <div style={{fontWeight:700,fontSize:13,color:"#222",marginBottom:8}}>📅 বাৎসরিক অর্ডার ও মূল্য (গত ৬ বছর)</div>
+        <div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 8px"}}>
+          {(()=>{const maxR=Math.max(...stats.yearly.map(y=>y.revenue),1);return<div style={{display:"flex",alignItems:"stretch",gap:6,height:150}}>
+            {stats.yearly.map(y=><div key={y.label} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",height:"100%"}}>
+              <div style={{fontSize:8,color:"#166534",fontWeight:700,marginBottom:2}}>{money(y.revenue)}</div>
+              <div style={{fontSize:9,color:"#666",marginBottom:2}}>{y.count}টি</div>
+              <div style={{flex:1,width:"100%",display:"flex",alignItems:"flex-end"}}>
+                <div style={{width:"100%",height:`${(y.revenue/maxR)*100}%`,background:CHART_SOFT_BLUE,borderRadius:"3px 3px 0 0",minHeight:4}}></div>
+              </div>
+              <div style={{fontSize:9,color:"#999",marginTop:3}}>{y.label}</div>
+              <div style={{fontSize:8,marginTop:2,fontWeight:600,minHeight:11,visibility:y.growthPct===null?"hidden":"visible",color:y.growthPct>=0?CHART_SOFT_GREEN:CHART_SOFT_RED}}>{y.growthPct!==null?`${y.growthPct>=0?"↑":"↓"} ${Math.abs(y.growthPct).toFixed(0)}%`:"—"}</div>
+            </div>)}
+          </div>})()}
+        </div>
+      </div>}
+
       {/* পেমেন্ট সংগ্রহের গতি — গত ৬ মাসের অর্ডার গড়ে কত দিনে পুরো টাকা উঠছে */}
       <div style={{marginBottom:16}}>
         <div style={{fontWeight:700,fontSize:13,color:"#222",marginBottom:4}}>⏱️ পেমেন্ট সংগ্রহের গতি (গত ৬ মাস)</div>
@@ -3495,54 +3583,65 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
         </div>
       </div>
 
-      {/* Yearly totals - অর্ডার সংখ্যা ও মূল্য এখন একই চার্টে, বার + উপরে মূল্যের লেবেল */}
-      {stats.yearly&&stats.yearly.length>1&&<div style={{marginBottom:16}}>
-        <div style={{fontWeight:700,fontSize:13,color:"#222",marginBottom:8}}>📅 বাৎসরিক অর্ডার ও মূল্য (গত ৬ বছর)</div>
-        <div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 8px"}}>
-          {(()=>{const maxR=Math.max(...stats.yearly.map(y=>y.revenue),1);return<div style={{display:"flex",alignItems:"stretch",gap:6,height:150}}>
-            {stats.yearly.map(y=><div key={y.label} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",height:"100%"}}>
-              <div style={{fontSize:8,color:"#166534",fontWeight:700,marginBottom:2}}>{money(y.revenue)}</div>
-              <div style={{fontSize:9,color:"#666",marginBottom:2}}>{y.count}টি</div>
-              <div style={{flex:1,width:"100%",display:"flex",alignItems:"flex-end"}}>
-                <div style={{width:"100%",height:`${(y.revenue/maxR)*100}%`,background:CHART_SOFT_BLUE,borderRadius:"3px 3px 0 0",minHeight:4}}></div>
-              </div>
-              <div style={{fontSize:9,color:"#999",marginTop:3}}>{y.label}</div>
-              <div style={{fontSize:8,marginTop:2,fontWeight:600,minHeight:11,visibility:y.growthPct===null?"hidden":"visible",color:y.growthPct>=0?CHART_SOFT_GREEN:CHART_SOFT_RED}}>{y.growthPct!==null?`${y.growthPct>=0?"↑":"↓"} ${Math.abs(y.growthPct).toFixed(0)}%`:"—"}</div>
-            </div>)}
-          </div>})()}
+      {/* মাসিক আয় — প্রতি মাসে সংগ্রহ বাদ ব্যয়, যা হাতে থাকার কথা */}
+      <div style={{marginBottom:16}}>
+        <div style={{fontWeight:700,fontSize:13,color:"#222",marginBottom:6}}>💵 মাসিক আয় ({monthlyIncomeData.year})</div>
+        <div style={{fontSize:9,color:"#999",marginBottom:8}}>সেই মাসের সংগ্রহ থেকে ব্যয় (কাঠ+বেতন+খরচ) বাদ দিলে যা হাতে থাকার কথা।</div>
+        <div style={{display:"flex",gap:5,marginBottom:8,overflowX:"auto"}}>
+          {financeYearOptions.map(y=><button key={y} onClick={()=>setMonthlyIncomeYearSelect(y)} style={{flexShrink:0,padding:"6px 12px",borderRadius:20,border:monthlyIncomeYearSelect===y?"none":"1px solid #ddd",background:monthlyIncomeYearSelect===y?"#166534":"white",color:monthlyIncomeYearSelect===y?"white":"#666",fontSize:10,fontWeight:600}}>{y}</button>)}
         </div>
-      </div>}
+        <div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 8px"}}>
+          {(()=>{
+            const shortMoney=(v)=>(v<0?"-":"")+(Math.abs(v)>=1000?(Math.abs(v)/1000).toFixed(Math.abs(v)>=10000?0:1)+"হা":Math.round(Math.abs(v)).toString());
+            const nets=monthlyIncomeData.monthly.map(m=>m.revenue-m.expense);
+            const maxAbs=Math.max(...nets.map(n=>Math.abs(n)),1);
+            return<div style={{display:"flex",alignItems:"stretch",gap:4,height:150}}>
+              {monthlyIncomeData.monthly.map((m,i)=>{
+                const net=nets[i];
+                return<div key={i} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",height:"100%"}}>
+                  <div style={{flex:1,width:"100%",display:"flex",flexDirection:"column",justifyContent:net>=0?"flex-end":"flex-start"}}>
+                    {net>=0&&<div style={{fontSize:7,color:"#166534",marginBottom:1,textAlign:"center"}}>{shortMoney(net)}</div>}
+                    <div style={{width:"100%",height:`${(Math.abs(net)/maxAbs)*100}%`,background:net>=0?CHART_SOFT_GREEN:CHART_SOFT_RED,borderRadius:net>=0?"2px 2px 0 0":"0 0 2px 2px",minHeight:2}}></div>
+                    {net<0&&<div style={{fontSize:7,color:RED,marginTop:1,textAlign:"center"}}>{shortMoney(net)}</div>}
+                  </div>
+                  <div style={{fontSize:8,color:"#999",marginTop:3}}>{m.label}</div>
+                </div>;
+              })}
+            </div>;
+          })()}
+        </div>
+      </div>
 
       <div id="z-health" style={{scrollMarginTop:56,fontSize:11,fontWeight:800,color:"#1d4ed8",letterSpacing:"0.3px",margin:"18px 0 8px",paddingBottom:4,borderBottom:"2px solid #1d4ed822"}}>📊 ব্যবসার স্বাস্থ্য</div>
       {/* Revenue vs Expense */}
       <div style={{marginBottom:18}}>
-        <div style={{fontWeight:700,fontSize:13,color:"#222",marginBottom:6}}>💰 কালেকশন বনাম খরচ ({svExpData.year})</div>
-        <div style={{display:"flex",gap:6,marginBottom:8,overflowX:"auto"}}>
-          {[{v:"this",l:"এই বছর"},{v:"last",l:"গত বছর"},{v:"last2",l:"তার আগের বছর"}].map(o=><button key={o.v} onClick={()=>setSvExpYearSelect(o.v)} style={{flexShrink:0,padding:"6px 12px",borderRadius:20,border:svExpYearSelect===o.v?"none":"1px solid #ddd",background:svExpYearSelect===o.v?"#166534":"white",color:svExpYearSelect===o.v?"white":"#666",fontSize:10,fontWeight:600}}>{o.l}</button>)}
+        <div style={{fontWeight:700,fontSize:13,color:"#222",marginBottom:6}}>💰 সংগ্রহ বনাম ব্যয় ({svExpData.year})</div>
+        <div style={{display:"flex",gap:5,marginBottom:8,overflowX:"auto"}}>
+          {financeYearOptions.map(y=><button key={y} onClick={()=>setSvExpYearSelect(y)} style={{flexShrink:0,padding:"6px 12px",borderRadius:20,border:svExpYearSelect===y?"none":"1px solid #ddd",background:svExpYearSelect===y?"#166534":"white",color:svExpYearSelect===y?"white":"#666",fontSize:10,fontWeight:600}}>{y}</button>)}
         </div>
-        <div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 8px",overflowX:"auto"}}>
+        <div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 6px"}}>
           {(()=>{
             const maxV=Math.max(...svExpData.monthly.map(m=>Math.max(m.revenue,m.expense)),1);
             const shortMoney=(v)=>v>=1000?(v/1000).toFixed(v>=10000?0:1)+"হা":Math.round(v).toString();
-            return<div style={{display:"flex",alignItems:"stretch",gap:4,height:150,minWidth:580}}>
+            return<div style={{display:"flex",alignItems:"stretch",gap:2,height:150}}>
               {svExpData.monthly.map((m,i)=><div key={i} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",height:"100%"}}>
                 <div style={{flex:1,width:"100%",display:"flex",alignItems:"flex-end",gap:1}}>
                   <div style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"flex-end",height:"100%"}}>
-                    <div style={{fontSize:7,color:"#777",marginBottom:1}}>{m.expense>0?shortMoney(m.expense):""}</div>
+                    <div style={{fontSize:6,color:"#777",marginBottom:1}}>{m.expense>0?shortMoney(m.expense):""}</div>
                     <div style={{width:"100%",height:`${(m.expense/maxV)*100}%`,background:CHART_SOFT_GREY,borderRadius:"2px 2px 0 0",minHeight:m.expense>0?2:0}}></div>
                   </div>
                   <div style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"flex-end",height:"100%"}}>
-                    <div style={{fontSize:7,color:"#b45858",marginBottom:1}}>{m.revenue>0?shortMoney(m.revenue):""}</div>
+                    <div style={{fontSize:6,color:"#b45858",marginBottom:1}}>{m.revenue>0?shortMoney(m.revenue):""}</div>
                     <div style={{width:"100%",height:`${(m.revenue/maxV)*100}%`,background:CHART_SOFT_RED,borderRadius:"2px 2px 0 0",minHeight:m.revenue>0?2:0}}></div>
                   </div>
                 </div>
-                <div style={{fontSize:8,color:"#999",marginTop:3}}>{m.label}</div>
+                <div style={{fontSize:6.5,color:"#999",marginTop:3}}>{m.label}</div>
               </div>)}
             </div>
           })()}
           <div style={{display:"flex",gap:14,justifyContent:"center",marginTop:8}}>
-            <div style={{display:"flex",alignItems:"center",gap:4,fontSize:10,color:"#666"}}><div style={{width:9,height:9,background:CHART_SOFT_GREY,borderRadius:2}}></div>খরচ</div>
-            <div style={{display:"flex",alignItems:"center",gap:4,fontSize:10,color:"#666"}}><div style={{width:9,height:9,background:CHART_SOFT_RED,borderRadius:2}}></div>কালেকশন</div>
+            <div style={{display:"flex",alignItems:"center",gap:4,fontSize:10,color:"#666"}}><div style={{width:9,height:9,background:CHART_SOFT_GREY,borderRadius:2}}></div>ব্যয়</div>
+            <div style={{display:"flex",alignItems:"center",gap:4,fontSize:10,color:"#666"}}><div style={{width:9,height:9,background:CHART_SOFT_RED,borderRadius:2}}></div>সংগ্রহ</div>
           </div>
         </div>
       </div>
@@ -3572,9 +3671,9 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
         </div>}
       </div>}
 
-      {stats.catProfitRanked&&stats.catProfitRanked.length>0&&<div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 14px",marginBottom:14}}>
-        <div style={{fontSize:12,fontWeight:700,color:"#166534",marginBottom:3}}>💰 কোন ফার্নিচারে লাভ বেশি</div>
-        <div style={{fontSize:9,color:"#999",marginBottom:8}}>শুধু ডেলিভারি হওয়া অর্ডার থেকে — বেশি বিক্রি মানেই বেশি লাভ নয়।</div>
+      {stats.catProfitRanked&&stats.catProfitRanked.length>0&&<div onClick={()=>setProfitDetailOpen(true)} style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 14px",marginBottom:14,cursor:"pointer"}}>
+        <div style={{fontSize:12,fontWeight:700,color:"#166534",marginBottom:3,display:"flex",justifyContent:"space-between",alignItems:"center"}}><span>💰 কোন ফার্নিচারে লাভ বেশি</span><span style={{color:"#aaa",fontSize:14}}>›</span></div>
+        <div style={{fontSize:9,color:"#999",marginBottom:8}}>শুধু ডেলিভারি হওয়া অর্ডার থেকে — বেশি বিক্রি মানেই বেশি লাভ নয়। বিস্তারিত দেখতে ট্যাপ করুন।</div>
         {stats.catProfitRanked.slice(0,6).map(c=><div key={c.label} style={{marginBottom:7}}>
           <div style={{display:"flex",justifyContent:"space-between",fontSize:11,marginBottom:2}}>
             <span style={{fontWeight:600}}>{c.label} <span style={{color:"#aaa",fontSize:9}}>({c.count}টি)</span></span>
@@ -3688,7 +3787,7 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
         <div style={{fontSize:10,color:"#991b1b"}}>{stats.emptyWoodModels.slice(0,5).map(m=>`${m.catBn} · ${m.varBn}`).join(" · ")}{stats.emptyWoodModels.length>5?` ...ও আরও ${stats.emptyWoodModels.length-5}টা`:""}</div>
       </div>}
 
-      <div id="z-perf" style={{scrollMarginTop:56,fontSize:11,fontWeight:800,color:"#7c2d12",letterSpacing:"0.3px",margin:"18px 0 8px",paddingBottom:4,borderBottom:"2px solid #7c2d1222"}}>🚧 কর্মক্ষমতা ও খরচ বিশ্লেষণ</div>
+      <div id="z-perf" style={{scrollMarginTop:56,fontSize:11,fontWeight:800,color:"#7c2d12",letterSpacing:"0.3px",margin:"18px 0 8px",paddingBottom:4,borderBottom:"2px solid #7c2d1222"}}>🚧 কর্মদক্ষতা ও উৎপাদন বিশ্লেষণ</div>
       {stats.deptAvg&&<div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 14px",marginBottom:14}}>
         <div style={{fontSize:12,fontWeight:700,color:"#0f766e",marginBottom:3}}>🚧 কোন বিভাগে সময় বেশি লাগছে</div>
         <div style={{fontSize:9,color:"#999",marginBottom:8}}>বিভাগভিত্তিক গড় সময় (সম্পন্ন কাজ থেকে) — যেটাতে সবচেয়ে বেশি সময় লাগছে, সেটাই আসল বাধা।</div>
@@ -3699,6 +3798,39 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
           </div>
           <div style={{background:"#f0f0f0",borderRadius:4,height:6,overflow:"hidden"}}><div style={{width:d.avg!==null?`${(d.avg/stats.deptAvgMax)*100}%`:"0%",height:"100%",background:d.avg===stats.deptAvgMax?RED:"#0f766e"}}></div></div>
         </div>)}
+      </div>}
+
+      {stats.backlogTrend&&stats.bottleneckDeptBn&&<div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 14px",marginBottom:14}}>
+        <div style={{fontSize:12,fontWeight:700,color:"#7c2d12",marginBottom:3}}>📊 ব্যাকলগ বাড়ছে না কমছে ({stats.bottleneckDeptBn})</div>
+        <div style={{fontSize:9,color:"#999",marginBottom:8,lineHeight:1.5}}>আপনার বাধা-বিভাগে প্রতি মাসে কতটা কাজ ঢুকেছে (শুরু হয়েছে) বনাম কতটা বের হয়েছে (শেষ হয়েছে)। ঢোকা যদি বের হওয়ার চেয়ে বেশি হতেই থাকে, ব্যাকলগ বাড়ছে — শুধু বেশি কর্মী/সময় দিয়ে সমাধান হবে না, নতুন অর্ডার নেওয়ার হারও পুনর্বিবেচনা করা দরকার।</div>
+        {(()=>{
+          const maxC=Math.max(...stats.backlogTrend.inCounts,...stats.backlogTrend.outCounts,1);
+          return<div style={{display:"flex",alignItems:"stretch",gap:6,height:110}}>
+            {stats.backlogTrend.labels.map((lbl,i)=>{
+              const inC=stats.backlogTrend.inCounts[i],outC=stats.backlogTrend.outCounts[i];
+              const net=inC-outC;
+              return<div key={i} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",height:"100%"}}>
+                <div style={{flex:1,width:"100%",display:"flex",alignItems:"flex-end",gap:1}}>
+                  <div style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"flex-end",height:"100%"}}>
+                    <div style={{fontSize:7,color:"#b45309",marginBottom:1}}>{inC>0?inC:""}</div>
+                    <div style={{width:"100%",height:`${(inC/maxC)*100}%`,background:"#fcd9a8",borderRadius:"2px 2px 0 0",minHeight:inC>0?2:0}}></div>
+                  </div>
+                  <div style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"flex-end",height:"100%"}}>
+                    <div style={{fontSize:7,color:"#0f766e",marginBottom:1}}>{outC>0?outC:""}</div>
+                    <div style={{width:"100%",height:`${(outC/maxC)*100}%`,background:"#99e6d1",borderRadius:"2px 2px 0 0",minHeight:outC>0?2:0}}></div>
+                  </div>
+                </div>
+                <div style={{fontSize:8,color:"#999",marginTop:3}}>{lbl}</div>
+                <div style={{fontSize:7,fontWeight:700,marginTop:1,color:net>0?RED:net<0?"#166534":"#999"}}>{net>0?`+${net}`:net<0?net:"০"}</div>
+              </div>;
+            })}
+          </div>;
+        })()}
+        <div style={{display:"flex",gap:14,justifyContent:"center",marginTop:8}}>
+          <div style={{display:"flex",alignItems:"center",gap:4,fontSize:10,color:"#666"}}><div style={{width:9,height:9,background:"#fcd9a8",borderRadius:2}}></div>ঢুকেছে</div>
+          <div style={{display:"flex",alignItems:"center",gap:4,fontSize:10,color:"#666"}}><div style={{width:9,height:9,background:"#99e6d1",borderRadius:2}}></div>বের হয়েছে</div>
+        </div>
+        <div style={{fontSize:8.5,color:"#aaa",marginTop:6,textAlign:"center"}}>নিচের সংখ্যা: নিট পরিবর্তন (লাল = ব্যাকলগ বেড়েছে, সবুজ = কমেছে)</div>
       </div>}
 
       {stats.workerRanked&&stats.workerRanked.length>0&&<div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 14px",marginBottom:14}}>
@@ -3861,6 +3993,29 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
         </div>
       </div></>}
     </div>
+    {profitDetailOpen&&<div style={{position:"fixed",inset:0,background:"white",zIndex:200,overflowY:"auto"}}>
+      <div style={{position:"sticky",top:0,background:"#166534",color:"white",padding:"14px 16px",display:"flex",alignItems:"center",gap:10,zIndex:1}}>
+        <button onClick={()=>setProfitDetailOpen(false)} style={{background:"none",border:"none",color:"white",fontSize:20,padding:0}}>←</button>
+        <div style={{fontSize:15,fontWeight:800}}>💰 কোন ফার্নিচারে লাভ বেশি — বিস্তারিত</div>
+      </div>
+      <div style={{padding:16}}>
+        <div style={{fontSize:10,color:"#999",marginBottom:14,lineHeight:1.5}}>শুধু ডেলিভারি হওয়া অর্ডার থেকে হিসাব করা — প্রতিটা ফার্নিচার ক্যাটাগরির মোট আয়, কাঠ ও শ্রম খরচ, আর তা থেকে লাভের হার।</div>
+        {(stats.catProfitRanked||[]).map(c=><div key={c.label} style={{background:"#fafafa",border:"1px solid #eee",borderRadius:10,padding:"12px 14px",marginBottom:10}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+            <span style={{fontWeight:700,fontSize:13}}>{c.label}</span>
+            <span style={{fontWeight:800,fontSize:13,color:c.margin>=0?"#166534":RED}}>{c.margin.toFixed(0)}% লাভ</span>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,fontSize:10.5}}>
+            <div style={{color:"#666"}}>অর্ডার সংখ্যা</div><div style={{textAlign:"right",fontWeight:600}}>{c.count}টি</div>
+            <div style={{color:"#666"}}>মোট আয়</div><div style={{textAlign:"right",fontWeight:600,color:"#166534"}}>{money(c.revenue)}</div>
+            <div style={{color:"#666"}}>কাঠের খরচ</div><div style={{textAlign:"right",fontWeight:600,color:"#92400e"}}>{money(c.woodCost)}</div>
+            <div style={{color:"#666"}}>শ্রম খরচ</div><div style={{textAlign:"right",fontWeight:600,color:"#92400e"}}>{money(c.labourCost)}</div>
+            <div style={{color:"#666",borderTop:"1px dashed #ddd",paddingTop:4}}>মোট খরচ</div><div style={{textAlign:"right",fontWeight:700,borderTop:"1px dashed #ddd",paddingTop:4}}>{money(c.cost)}</div>
+            <div style={{color:"#333",fontWeight:700}}>নিট লাভ</div><div style={{textAlign:"right",fontWeight:800,color:c.profit>=0?"#166534":RED}}>{money(c.profit)}</div>
+          </div>
+        </div>)}
+      </div>
+    </div>}
   </div>
 }
 
