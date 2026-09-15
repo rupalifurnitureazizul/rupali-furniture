@@ -104,7 +104,7 @@ function compressImage(file,maxDim=1200,quality=0.82,maxBytes=110000){
 /* ── FULL-RESOLUTION LOCAL FOLDER STORAGE (desktop Chrome/Edge/Brave only) ──
    Original, uncompressed images are saved as real files in a folder you choose
    on your computer. Only a small compressed thumbnail syncs to the cloud/mobile. */
-const BUILD_TAG="4.87";
+const BUILD_TAG="4.88";
 const FS_SUPPORTED=typeof window!=="undefined"&&"showDirectoryPicker" in window;
 function idbOpen(){
   return new Promise((resolve,reject)=>{
@@ -1205,24 +1205,11 @@ function S5({order,onPrint,woodSettings,rackSplits}){
 }
 
 /* ── SLIP 6: DELIVERY RECEIPT ── */
-function S6({order,onPrint,onUpdateOrder,onSetDelivered,onPhotoChange,onRemovePhoto,allOrders,printLocked,galleries,onAddFromGallery}){
+function S6({order,onPrint,onUpdateOrder,onSetDelivered,onPhotoChange,onRemovePhoto,allOrders,printLocked}){
   const{cust,items,payments,no,deliveryImgs,printLogs}=order;
   const images=deliveryImgs||[];
   const totalPaid=(payments||[]).reduce((s,p)=>s+(parseFloat(p.amount)||0),0);
   const due=Math.max(0,(parseFloat(cust.total)||0)-totalPaid);
-  // ── এই অর্ডারের ফার্নিচার মডেলগুলোর কভার ছবি (থাকলে) — নতুন করে ছবি না তুলে এখান থেকে
-  // সরাসরি ডেলিভারির ছবি হিসেবে বেছে নেওয়া যায় ──
-  const usedSrcs=new Set(images.map(im=>im.src));
-  const modelCoverPics=[];
-  const seenKeys=new Set();
-  (items||[]).forEach(it=>{
-    if(!it.catKey||!it.varKey)return;
-    const key=`${it.catKey}__${it.varKey}`;
-    if(seenKeys.has(key))return;
-    seenKeys.add(key);
-    const cov=galleries&&galleries[key]&&galleries[key].coverImage;
-    if(cov&&!usedSrcs.has(cov))modelCoverPics.push({key,src:cov,name:it.variantBn||""});
-  });
   const captureRef=useRef();
   const photoInput=useRef();
   // ── ডেলিভারি সম্পন্নর তারিখ — ডিফল্টে আজকের তারিখ (আগের মতোই), চাইলে টিক দিয়ে অতীতের
@@ -1276,25 +1263,9 @@ function S6({order,onPrint,onUpdateOrder,onSetDelivered,onPhotoChange,onRemovePh
             </div>
           </div>)}
         </div>
-        {modelCoverPics.length>0&&<div className="no-print" style={{margin:"8px 0"}}>
-          <div style={{fontSize:9.5,color:"#0f766e",fontWeight:600,marginBottom:4}}>মডেলের কভার ছবি থেকে যোগ করুন:</div>
-          <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-            {modelCoverPics.map(m=><button key={m.key} onClick={()=>onAddFromGallery(m.src)} style={{border:"1.5px solid #0f766e",borderRadius:8,padding:2,background:"white"}} title={m.name}>
-              <img src={m.src} style={{width:52,height:52,objectFit:"cover",borderRadius:5,display:"block"}} alt={m.name}/>
-            </button>)}
-          </div>
-        </div>}
         <div className="no-print" style={{textAlign:"center",marginTop:8}}><button onClick={()=>photoInput.current.click()} style={{background:"white",border:"1.5px solid #0f766e",color:"#0f766e",borderRadius:8,padding:"7px 14px",fontSize:11,fontWeight:600}}>📷 আরও ছবি যোগ করুন</button></div>
       </div>}
       {images.length===0&&<div className="no-print" style={{marginBottom:10}}>
-        {modelCoverPics.length>0&&<div style={{marginBottom:8}}>
-          <div style={{fontSize:9.5,color:"#0f766e",fontWeight:600,marginBottom:4}}>মডেলের কভার ছবি থেকে যোগ করুন:</div>
-          <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-            {modelCoverPics.map(m=><button key={m.key} onClick={()=>onAddFromGallery(m.src)} style={{border:"1.5px solid #0f766e",borderRadius:8,padding:2,background:"white"}} title={m.name}>
-              <img src={m.src} style={{width:52,height:52,objectFit:"cover",borderRadius:5,display:"block"}} alt={m.name}/>
-            </button>)}
-          </div>
-        </div>}
         <button onClick={()=>photoInput.current.click()} style={{width:"100%",background:"#f0fdfa",border:"2px dashed #0f766e",borderRadius:9,padding:"12px",fontSize:12,color:"#0f766e",fontWeight:600}}>📷 সম্পন্ন ফার্নিচারের ছবি যোগ করুন (একাধিক)</button>
       </div>}
       <div style={{background:"#f0fdfa",borderRadius:7,padding:"9px",marginBottom:12}}>
@@ -4749,50 +4720,17 @@ function WorkerAvatar({worker,size=36}){
   return<div style={{width:size,height:size,borderRadius:"50%",background:c+"22",border:`2px solid ${c}`,color:c,display:"flex",alignItems:"center",justifyContent:"center",fontSize:size*0.42,fontWeight:800,flexShrink:0}}>{initial}</div>
 }
 function DayWheel({value,onChange,color}){
-  const ref=useRef(null);
-  const ITEM=34;
-  const settleRef=useRef(null);
-  const selfScrollRef=useRef(false);
-
-  useEffect(()=>{
-    const el=ref.current;
-    if(!el)return;
-    const idx=Math.max(0,DAY_OPTIONS.indexOf(parseFloat(value)||0));
-    const target=idx*ITEM;
-    if(Math.abs(el.scrollTop-target)>1){
-      selfScrollRef.current=true;
-      el.scrollTop=target;
-      setTimeout(()=>{selfScrollRef.current=false},60);
-    }
-  },[value]);
-
-  const onScroll=()=>{
-    if(selfScrollRef.current)return;
-    const el=ref.current;
-    if(!el)return;
-    clearTimeout(settleRef.current);
-    settleRef.current=setTimeout(()=>{
-      const idx=Math.round(el.scrollTop/ITEM);
-      const clamped=Math.min(Math.max(idx,0),DAY_OPTIONS.length-1);
-      const v=DAY_OPTIONS[clamped];
-      if(v!==(parseFloat(value)||0))onChange(v);
-      const target=clamped*ITEM;
-      if(Math.abs(el.scrollTop-target)>1){
-        selfScrollRef.current=true;
-        el.scrollTo({top:target,behavior:"smooth"});
-        setTimeout(()=>{selfScrollRef.current=false},320);
-      }
-    },110);
-  };
-
   const cur=parseFloat(value)||0;
-  return<div style={{position:"relative",width:66,height:ITEM*3,flexShrink:0}}>
-    <div style={{position:"absolute",left:0,right:0,top:ITEM,height:ITEM,background:color+"18",borderTop:`1.5px solid ${color}`,borderBottom:`1.5px solid ${color}`,borderRadius:6,pointerEvents:"none",zIndex:2}}></div>
-    <div ref={ref} onScroll={onScroll} style={{height:"100%",overflowY:"scroll",scrollSnapType:"y mandatory",WebkitOverflowScrolling:"touch",scrollbarWidth:"none",msOverflowStyle:"none",position:"relative",zIndex:1}} className="daywheel">
-      <div style={{height:ITEM}}></div>
-      {DAY_OPTIONS.map(v=><div key={v} style={{height:ITEM,scrollSnapAlign:"start",display:"flex",alignItems:"center",justifyContent:"center",fontSize:v===cur?18:15,fontWeight:v===cur?800:500,color:v===cur?color:"#c9c9c9",transition:"font-size .12s,color .12s"}}>{v}</div>)}
-      <div style={{height:ITEM}}></div>
-    </div>
+  const clamp=(v)=>Math.min(10.5,Math.max(0,Math.round(v*2)/2));
+  return<div style={{display:"flex",alignItems:"center",gap:4,flexShrink:0}}>
+    <button onClick={()=>onChange(clamp(cur-0.5))} style={{width:30,height:30,borderRadius:7,border:`1.5px solid ${color}`,background:"white",color,fontSize:17,fontWeight:800,lineHeight:1,flexShrink:0}}>−</button>
+    <input type="number" step="0.5" min="0" max="10.5" value={cur} onChange={e=>{
+      const raw=e.target.value;
+      if(raw==="")return onChange(0);
+      const v=clamp(parseFloat(raw));
+      if(!isNaN(v))onChange(v);
+    }} style={{width:46,textAlign:"center",fontSize:15,fontWeight:800,color,border:`1.5px solid ${color}`,borderRadius:7,padding:"5px 2px",boxSizing:"border-box"}}/>
+    <button onClick={()=>onChange(clamp(cur+0.5))} style={{width:30,height:30,borderRadius:7,border:`1.5px solid ${color}`,background:"white",color,fontSize:17,fontWeight:800,lineHeight:1,flexShrink:0}}>+</button>
   </div>
 }
 /* ── PROFIT & LOSS REPORT (flexible period: month / quarter / half / year / 2y / 3y / 5y) ── */
@@ -5176,7 +5114,7 @@ function PayrollPage({workers,saveWorker,deleteWorker,payrollWeeks,savePayrollWe
 
         <div className="no-print" style={{background:"white",borderRadius:11,padding:14,marginBottom:14,boxShadow:"0 1px 4px rgba(0,0,0,.07)"}}>
           <div style={{fontWeight:700,fontSize:13,marginBottom:4,color:PAY_DARK}}>সাপ্তাহিক হাজিরা (এটেন্ডেন্স ডিভাইস দেখে লিখুন)</div>
-          <div style={{fontSize:10,color:"#888",marginBottom:14}}>প্রতিটি কর্মীর পাশের চাকা উপরে/নিচে টেনে এই সপ্তাহের মোট দিন নির্বাচন করুন — স্বাভাবিক ১ দিন, ওভারটাইম হলে ১.৫ দিন করে ধরে মোট (সর্বোচ্চ ১০.৫)।</div>
+          <div style={{fontSize:10,color:"#888",marginBottom:14}}>প্রতিটি কর্মীর পাশে +/− চেপে বা সরাসরি সংখ্যা লিখে এই সপ্তাহের মোট দিন নির্ধারণ করুন — স্বাভাবিক ১ দিন, ওভারটাইম হলে ১.৫ দিন করে ধরে মোট (০ থেকে সর্বোচ্চ ১০.৫)।</div>
           <div>
             {activeWorkers.length===0?<div style={{textAlign:"center",color:"#aaa",padding:16,fontSize:12}}>কোনো সক্রিয় কর্মী নেই</div>:
             activeWorkers.map((w,i)=>{
@@ -5886,8 +5824,8 @@ function Preview({order,onBack,slip,setSlip,onUpdate,onAddPayment,onSetDelivered
       next.push({src:compressed,fileName:savedFull?relPath:null});
     }
     onUpdate({...order,deliveryImgs:next,deliveryImg:next[0]?.src||null,deliveryImgFileName:next[0]?.fileName||null});
-    // এই ছবিগুলো অর্ডারে থাকা প্রতিটা ফার্নিচার মডেলের গ্যালারিতেও যুক্ত করুন,
-    // যাতে পরবর্তীতে সেই মডেল সিলেক্ট করলে ডেলিভারি দেওয়া আসল পণ্যের ছবি দেখা যায়
+    // ── ডেলিভারির সময় আপলোড করা ছবিই স্বয়ংক্রিয়ভাবে সেই মডেলের কভার ছবি হয়ে যায় —
+    // ডেটাবেসে আলাদাভাবে প্রতিটা মডেলের জন্য কভার ছবি বসানোর দরকার নেই ──
     if(saveGalleryEntry&&order.items&&firstCompressed){
       const seen=new Set();
       order.items.forEach(it=>{
@@ -5896,16 +5834,10 @@ function Preview({order,onBack,slip,setSlip,onUpdate,onAddPayment,onSetDelivered
         if(seen.has(key))return;
         seen.add(key);
         const existing=(galleries&&galleries[key])||{gallery:[],coverImage:null};
-        if((existing.gallery||[]).includes(firstCompressed))return;
-        const updatedGallery=[...(existing.gallery||[]),firstCompressed];
-        saveGalleryEntry(it.catKey,it.varKey,{gallery:updatedGallery,coverImage:existing.coverImage||firstCompressed});
+        const updatedGallery=(existing.gallery||[]).includes(firstCompressed)?(existing.gallery||[]):[...(existing.gallery||[]),firstCompressed];
+        saveGalleryEntry(it.catKey,it.varKey,{gallery:updatedGallery,coverImage:firstCompressed});
       });
     }
-  };
-  const addDeliveryImgFromGallery=(src)=>{
-    if(!src)return;
-    const next=[...deliveryImgs,{src,fileName:null}];
-    onUpdate({...order,deliveryImgs:next,deliveryImg:next[0]?.src||null,deliveryImgFileName:next[0]?.fileName||null});
   };
   const removeDeliveryImg=(idx)=>{
     if(!window.confirm("এই ছবিটি মুছে ফেলতে চান?"))return;
@@ -5984,7 +5916,7 @@ function Preview({order,onBack,slip,setSlip,onUpdate,onAddPayment,onSetDelivered
         {slip===2&&<S3 order={order} onPrint={logPrint} onUpdateOrder={onUpdate} workers={workers}/>}
         {slip===3&&<S4 order={order} onPrint={logPrint} db={db} saveDb={saveDb} onUpdateOrder={onUpdate}/>}
         {slip===4&&<S5 order={order} onPrint={logPrint} woodSettings={woodSettings} rackSplits={rackSplits}/>}
-        {slip===5&&<S6 order={{...order,deliveryImgs}} onPrint={logPrint} onUpdateOrder={onUpdate} onSetDelivered={onSetDelivered} onPhotoChange={handleDeliveryImg} onRemovePhoto={removeDeliveryImg} onAddFromGallery={addDeliveryImgFromGallery} allOrders={allOrders} printLocked={!isFullyPaid} galleries={galleries}/>}
+        {slip===5&&<S6 order={{...order,deliveryImgs}} onPrint={logPrint} onUpdateOrder={onUpdate} onSetDelivered={onSetDelivered} onPhotoChange={handleDeliveryImg} onRemovePhoto={removeDeliveryImg} allOrders={allOrders} printLocked={!isFullyPaid}/>}
       </div>
     </div>
   </div>
