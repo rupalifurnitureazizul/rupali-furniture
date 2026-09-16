@@ -104,7 +104,7 @@ function compressImage(file,maxDim=1200,quality=0.82,maxBytes=110000){
 /* ── FULL-RESOLUTION LOCAL FOLDER STORAGE (desktop Chrome/Edge/Brave only) ──
    Original, uncompressed images are saved as real files in a folder you choose
    on your computer. Only a small compressed thumbnail syncs to the cloud/mobile. */
-const BUILD_TAG="4.100";
+const BUILD_TAG="4.14";
 const FS_SUPPORTED=typeof window!=="undefined"&&"showDirectoryPicker" in window;
 function idbOpen(){
   return new Promise((resolve,reject)=>{
@@ -1590,7 +1590,18 @@ function App({firebaseConfig,onResetConfig}){
         const res=await fetch(window.location.pathname+"?_v="+Date.now(),{cache:"no-store"});
         const html=await res.text();
         const m=html.match(/const BUILD_TAG="([^"]+)"/);
-        if(m&&m[1]&&m[1]!==BUILD_TAG&&pageRef.current==="home"&&tabActiveRef.current)window.location.reload();
+        if(m&&m[1]&&m[1]!==BUILD_TAG&&pageRef.current==="home"&&tabActiveRef.current){
+          // ── নতুন ভার্সন এলেই সাথে সাথে পাতা রিলোড হতো — কিন্তু রিলোড মানেই স্থানীয় অবস্থা
+          // মুছে সার্ভারের (হয়তো তখনও-অসম্পূর্ণ) কপি দিয়ে বদলে যাওয়া। যদি ঠিক তখনই কোনো
+          // লেখা (যেমন ডেলিভারির ছবি/স্ট্যাটাস) সার্ভারে পৌঁছানোর অপেক্ষায় থাকত, রিলোডেই তা
+          // হারিয়ে যেত — এটাই বারবার "ডেটা হারিয়ে যাওয়া"র আসল কারণ ছিল। এখন রিলোডের ঠিক
+          // আগে, বাকি থাকা সব লেখা সার্ভারে পাঠানোর শেষ একটা সুযোগ দেওয়া হয় (বেশিক্ষণ আটকে
+          // থাকবে না এমন সময়সীমাসহ, যাতে আপডেট আটকে না যায়) ──
+          if(autoStuckCheckRef.current){
+            try{await withTimeout(autoStuckCheckRef.current(),8000,"সময়সীমা পার")}catch(e2){}
+          }
+          window.location.reload();
+        }
       }catch(e){/* নেটওয়ার্ক হেঁচকি — পরের চেষ্টায় দেখা যাবে, নীরবে এড়িয়ে যান */}
     };
     checkVersion();
@@ -2311,13 +2322,44 @@ function App({firebaseConfig,onResetConfig}){
           await reconcileCollection("expenses",od.expenses,setExpenses);
           await reconcileCollection("woodlots",od.woodLots,setWoodLots);
           await reconcileCollection("workers",od.workers,setWorkers);
-          // ফার্নিচার ডেটাবেস (একটাই নথি) — সার্ভারেরটাই সবার জন্য এক রাখা হয়
+          // ফার্নিচার ডেটাবেস (একটাই নথি) — স্থানীয়ভাবে থাকা কিন্তু সার্ভারে না থাকা/ফাঁকা
+          // ক্যাটাগরি, মডেল ও কাঠের মাপ যোগ করে দেওয়া হয়। সার্ভারের বিদ্যমান কোনো তথ্য কখনো
+          // মোছা বা প্রতিস্থাপন করা হয় না — শুধু ফাঁকা জায়গা ভরাট করা হয়। এটাই ছিল আসল ফাঁক:
+          // আগে এখানে শুধু পড়া হতো, কিছুই পাঠানো হতো না — তাই কোনো নতুন মডেল/কাঠের মাপ যদি
+          // লেখার সময় সার্ভারে না পৌঁছাত, তা চিরকাল হারিয়েই থাকত ──
           try{
             const dbSnap=await withTimeout(fs2.doc("meta/db").get({source:"server"}),60000,"সময়সীমা পার");
             if(dbSnap.exists&&!(dbSnap.metadata&&dbSnap.metadata.fromCache)){
-              const sv=dbSnap.data();
-              const changed=false; // উপরের একই কারণে — লিসেনারই ডেটাবেস হালনাগাদ করে
-              otherSyncStatus.db=changed?"হালনাগাদ করা হয়েছে":"মিলে আছে";
+              const sv=dbSnap.data()||{};
+              const localDb=dbRef.current||{};
+              const merged=JSON.parse(JSON.stringify(sv));
+              let addedCats=0,addedVars=0,filledWood=0;
+              Object.entries(localDb).forEach(([catKey,localCat])=>{
+                if(!localCat||typeof localCat!=="object")return;
+                if(!merged[catKey]){
+                  merged[catKey]=JSON.parse(JSON.stringify(localCat));
+                  addedCats++;
+                  return;
+                }
+                if(!merged[catKey].variants)merged[catKey].variants={};
+                Object.entries(localCat.variants||{}).forEach(([varKey,localVar])=>{
+                  const serverVar=merged[catKey].variants[varKey];
+                  if(!serverVar){
+                    merged[catKey].variants[varKey]=JSON.parse(JSON.stringify(localVar));
+                    addedVars++;
+                  }else if(isEmptyWood(serverVar)&&!isEmptyWood(localVar)){
+                    merged[catKey].variants[varKey]={...serverVar,sections:localVar.sections,woodOverride:localVar.woodOverride};
+                    filledWood++;
+                  }
+                });
+              });
+              const needsPush=addedCats||addedVars||filledWood;
+              if(needsPush){
+                await withTimeout(fs2.doc("meta/db").set(merged),45000,"সময়সীমা পার");
+                otherSyncStatus.db=`${addedCats+addedVars}টা মডেল, ${filledWood}টা কাঠের মাপ পাঠানো হয়েছে`;
+              }else{
+                otherSyncStatus.db="মিলে আছে";
+              }
             }
           }catch(e3){otherSyncStatus.db="ত্রুটি: "+e3.message}
           // সাপ্তাহিক বেতন (নথির আইডি = সপ্তাহের শেষ তারিখ)
@@ -2381,7 +2423,7 @@ function App({firebaseConfig,onResetConfig}){
       // গুরুত্বপূর্ণ সময়েই মূল ডেটা-লোডের সাথে ব্যান্ডউইথের জন্য প্রতিযোগিতা করত, ফলে পুরো
       // অ্যাপ লোড হতে বেশি সময় লাগত। এখন ৪৫ সেকেন্ড পর শুরু হয়, ততক্ষণে মূল ডেটা ইতিমধ্যে
       // লোড হয়ে যাওয়ার কথা ──
-      const firstStuckCheck=setTimeout(autoStuckCheck,45000);
+      const firstStuckCheck=setTimeout(autoStuckCheck,15000);
       const stuckCheckInterval=setInterval(autoStuckCheck,60000);
 
       return()=>{clearTimeout(timer);clearTimeout(firstStuckCheck);clearInterval(stuckCheckInterval);unsubOrders();unsubExpenses();unsubLots();unsubDb();unsubGalleries();unsubWoodSettings();unsubLaborSettings();unsubAlertSettings();unsubRackSplits();unsubRackBands();unsubCarp();unsubWorkers();unsubPayroll()};
@@ -5637,7 +5679,9 @@ function ManageDB({db,saveDb,galleries,saveGalleryEntry,onBack,navigate,goBack,r
             </div>
           </div>)}
         </div>)}
-        <button onClick={resetDb} style={{width:"100%",background:"white",border:"2px solid #fee2e2",color:RED,borderRadius:10,padding:"11px",fontSize:12,fontWeight:600,marginTop:8}}>⚠️ ডিফল্টে রিসেট করুন</button>
+        {/* ⚠️ "ডিফল্টে রিসেট করুন" বাটন ইচ্ছাকৃতভাবে সরিয়ে দেওয়া হলো — বছরের পর বছর ধরে
+        সংরক্ষিত মডেল ও কাঠের মাপ পুরোপুরি মুছে ফেলার মতো কোনো বাটন লাইভ ব্যবসার অ্যাপে
+        রাখার কোনো যুক্তিসঙ্গত কারণ নেই, নিশ্চিতকরণ যত কঠিনই হোক না কেন ── */}
       </>}
       {tab==="addCat"&&<div style={{background:"white",borderRadius:12,padding:"16px",boxShadow:"0 1px 4px rgba(0,0,0,.08)"}}>
         <div style={{fontWeight:700,fontSize:14,marginBottom:12}}>নতুন ক্যাটাগরি যোগ করুন</div>
