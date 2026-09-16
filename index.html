@@ -104,7 +104,7 @@ function compressImage(file,maxDim=1200,quality=0.82,maxBytes=110000){
 /* ── FULL-RESOLUTION LOCAL FOLDER STORAGE (desktop Chrome/Edge/Brave only) ──
    Original, uncompressed images are saved as real files in a folder you choose
    on your computer. Only a small compressed thumbnail syncs to the cloud/mobile. */
-const BUILD_TAG="4.97";
+const BUILD_TAG="4.100";
 const FS_SUPPORTED=typeof window!=="undefined"&&"showDirectoryPicker" in window;
 function idbOpen(){
   return new Promise((resolve,reject)=>{
@@ -1308,7 +1308,7 @@ function DualBarChart({data,height=150,labelA="গত বছর",labelB="এই 
   const w=100/data.length;
   // ── সংক্ষিপ্ত আকারে টাকার অঙ্ক — বার সরু হওয়ায় পুরো money() ফরম্যাট (৳১২৩,৪৫৬) জায়গায় কুলাবে
   // না, তাই হাজারের উপরে "হা." যোগ করে ছোট করা হয় ──
-  const shortMoney=(v)=>v>=1000?(v/1000).toFixed(v>=10000?0:1)+"হা":Math.round(v).toString();
+  const shortMoney=(v)=>v>=1000?(v/1000).toFixed(v>=10000?0:1):Math.round(v).toString();
   return<div style={{width:"100%"}}>
     <svg viewBox={`0 0 100 ${height}`} style={{width:"100%",height,display:"block"}} preserveAspectRatio="none">
       {data.map((d,i)=>{
@@ -1664,6 +1664,8 @@ function App({firebaseConfig,onResetConfig}){
   const[workers,setWorkers]=useState([]);
   const[payrollWeeks,setPayrollWeeks]=useState({});
   const[db,setDb]=useState(null);
+  const dbRef=useRef(null);
+  dbRef.current=db;
   otherDataRef.current={expenses,woodLots,workers,payrollWeeks,db};
   const[carpenters,setCarpenters]=useState([]);
   const[draft,setDraft]=useState(null);
@@ -2064,11 +2066,16 @@ function App({firebaseConfig,onResetConfig}){
     try{
       if(!firebase.apps.length)firebase.initializeApp(firebaseConfig);
       const firestore=firebase.firestore();
-      // ── অফলাইন-ক্যাশ ইচ্ছাকৃতভাবে বন্ধ রাখা হলো। এই পুরো কথোপকথনে যত সিঙ্ক-সমস্যা ধরা
-      // পড়েছে (আটকে থাকা অর্ডার, ক্যাটাগরি সেভ না হওয়া, পে-রোলের হাজিরা, ডেলিভারির পেমেন্ট/ছবি)
-      // — প্রতিটারই মূল কারণ ছিল এই স্থানীয় লেখা-সারি, যেটা মাঝে মাঝে চুপচাপ আটকে যেত আর
-      // কোনো ত্রুটিও দেখাত না। ক্যাশ ছাড়া প্রতিটা লেখা এখন হয় সত্যিই সফল হবে, নয়তো সাথে
-      // সাথেই দৃশ্যমান ত্রুটি দেখাবে — নিরবে হারিয়ে যাওয়ার আর সুযোগ নেই।
+      // ── অফলাইন-ক্যাশ আবার চালু (কিন্তু synchronizeTabs ছাড়া) ──
+      // আগে এটা একেবারে বন্ধ করে দিয়েছিলাম, যাতে লেখা চুপচাপ আটকে না যায়। কিন্তু তার
+      // পার্শ্বপ্রতিক্রিয়া ছিল মারাত্মক: নেট একটু দুর্বল হলেই দেখানোর মতো কোনো তথ্য থাকত না,
+      // তাই পুরো অ্যাপ খালি দেখাত। এখন দুটোই একসাথে সামলানো হচ্ছে —
+      //   পড়া: ক্যাশ থেকে শেষ জানা তথ্য সবসময় দেখাবে, অ্যাপ আর কখনো খালি হবে না
+      //   লেখা: প্রতিটা লেখায় সময়সীমা বসানো আছে, তাই আটকে গেলে সাথে সাথে ত্রুটি দেখাবে,
+      //         আর "সার্ভারে পৌঁছায়নি এমন কিছু থাকলে আবার পাঠানো" জালটাও চালু আছে
+      // synchronizeTabs ইচ্ছাকৃতভাবে বাদ — একাধিক ট্যাবের ওই ব্যবস্থাটাই আগের অনেক
+      // লেখা-আটকে-যাওয়ার সমস্যার সাথে জড়িত ছিল।
+      try{firestore.enablePersistence().catch(()=>{})}catch(e){}
       fsRef.current=firestore;
       migrateLegacyPermanentFailures();
 
@@ -2127,11 +2134,22 @@ function App({firebaseConfig,onResetConfig}){
           });
           setDb(slim);
           if(hadLegacyImages){
-            firestore.doc("meta/db").set(slim).catch(()=>{});
+            firestore.doc("meta/db").set(slim).catch(err=>alert("⚠️ ডেটাবেস পরিষ্কার করতে সমস্যা হয়েছে: "+err.message));
           }
         }
-        else{const seed=JSON.parse(JSON.stringify(DEFAULT_DB));firestore.doc("meta/db").set(seed).catch(()=>{});setDb(seed)}
-      },err=>{clearTimeout(timer);setConnError(err.message)});
+        else{
+          // ── এই শাখাটা আগে বিপজ্জনক ছিল: নথি "নেই" মনে হলেই ডিফল্ট ডেটাবেস দিয়ে
+          // সার্ভারে লিখে দিত। কিন্তু দুর্বল সংযোগে ক্যাশ থেকে আসা ফলাফলও ক্ষণিকের জন্য
+          // "নেই" বলতে পারে — তখন আপনার সব আসল মডেল ডিফল্ট দিয়ে মুছে যেত। এখন শুধুমাত্র
+          // সার্ভার-নিশ্চিত ফলাফলে, আর স্থানীয়ভাবেও কিছু লোড না থাকলেই নতুন করে বসানো হয় ──
+          const fromCacheDb=snap.metadata&&snap.metadata.fromCache;
+          if(fromCacheDb)return; // ক্যাশের "নেই" বিশ্বাসযোগ্য নয় — কিছুই করা হবে না
+          if(dbRef.current&&Object.keys(dbRef.current).length>0)return; // স্থানীয়ভাবে ডেটাবেস আছে — মুছে ফেলা হবে না
+          const seed=JSON.parse(JSON.stringify(DEFAULT_DB));
+          firestore.doc("meta/db").set(seed).catch(err=>alert("⚠️ ডেটাবেস তৈরি করতে সমস্যা হয়েছে: "+err.message));
+          setDb(seed);
+        }
+      },err=>{clearTimeout(timer);setConnError(err.message);alert("⚠️ ফার্নিচার ডেটাবেস লোড করতে সমস্যা হয়েছে: "+err.message)});
 
       const unsubGalleries=firestore.collection("galleries").onSnapshot(snap=>{
         const map={};
@@ -2308,11 +2326,32 @@ function App({firebaseConfig,onResetConfig}){
             if(!(pw.metadata&&pw.metadata.fromCache)){
               const map={};pw.docs.forEach(d=>{map[d.id]=d.data()});
               if(!(pw.docs.length===0&&Object.keys(od.payrollWeeks||{}).length>0)){
-                const changed=false; // উপরের একই কারণে — লিসেনারই বেতন হালনাগাদ করে
+                let pushedCount=0;
                 for(const[wk,val]of Object.entries(od.payrollWeeks||{})){
-                  if(!map[wk]){try{await withTimeout(fs2.collection("payrollWeeks").doc(wk).set(val),45000,"সময়সীমা পার")}catch(e4){}}
+                  if(!map[wk]){
+                    // পুরো সপ্তাহের নথিই সার্ভারে নেই — পুরোটা পাঠানো
+                    try{await withTimeout(fs2.collection("payrollWeeks").doc(wk).set(val),45000,"সময়সীমা পার");pushedCount++}catch(e4){}
+                  }else{
+                    // ── নথি আছে, কিন্তু এই ডিভাইসে যোগ করা কিছু অগ্রিম/হাজিরা এখনো সার্ভারে
+                    // পৌঁছায়নি এমন হতে পারে (আগে এটা এখানে ধরা পড়ত না — ঠিক এই কারণেই কিছু
+                    // অগ্রিম "হারিয়ে" যাচ্ছিল)। প্রতিটা অগ্রিম এন্ট্রি আলাদাভাবে মিলিয়ে দেখা হয় ──
+                    const serverAdvIds=new Set(((map[wk].advances)||[]).map(a=>a.id));
+                    const missingAdvances=((val.advances)||[]).filter(a=>a.id&&!serverAdvIds.has(a.id));
+                    for(const adv of missingAdvances){
+                      try{await withTimeout(fs2.collection("payrollWeeks").doc(wk).set({advances:firebase.firestore.FieldValue.arrayUnion(adv)},{merge:true}),45000,"সময়সীমা পার");pushedCount++}catch(e4){}
+                    }
+                    // হাজিরার তথ্যও একইভাবে — স্থানীয়ভাবে থাকা কিন্তু সার্ভারে না থাকা এন্ট্রি পাঠানো
+                    const serverAtt=map[wk].attendance||{};
+                    const missingAtt={};
+                    Object.entries(val.attendance||{}).forEach(([wid,days])=>{
+                      if(serverAtt[wid]===undefined)missingAtt[`attendance.${wid}`]=days;
+                    });
+                    if(Object.keys(missingAtt).length){
+                      try{await withTimeout(fs2.collection("payrollWeeks").doc(wk).set(missingAtt,{merge:true}),45000,"সময়সীমা পার");pushedCount++}catch(e4){}
+                    }
+                  }
                 }
-                otherSyncStatus.payrollWeeks=changed?"হালনাগাদ করা হয়েছে":"মিলে আছে";
+                otherSyncStatus.payrollWeeks=pushedCount?`${pushedCount}টি পাঠানো হয়েছে`:"মিলে আছে";
               }
             }
           }catch(e3){otherSyncStatus.payrollWeeks="ত্রুটি: "+e3.message}
@@ -2337,7 +2376,12 @@ function App({firebaseConfig,onResetConfig}){
         }
       };
       autoStuckCheckRef.current=autoStuckCheck;
-      const firstStuckCheck=setTimeout(autoStuckCheck,10000);
+      // ── এই ব্যাকগ্রাউন্ড যাচাই আগে ১০ সেকেন্ড পরই শুরু হতো — কিন্তু এটা প্রতিটা কালেকশন
+      // (অর্ডার+খরচ+কাঠ+কর্মী+ডেটাবেস+বেতন) আবার নতুন করে টেনে আনে, যা ঠিক লোডিং-এর সবচেয়ে
+      // গুরুত্বপূর্ণ সময়েই মূল ডেটা-লোডের সাথে ব্যান্ডউইথের জন্য প্রতিযোগিতা করত, ফলে পুরো
+      // অ্যাপ লোড হতে বেশি সময় লাগত। এখন ৪৫ সেকেন্ড পর শুরু হয়, ততক্ষণে মূল ডেটা ইতিমধ্যে
+      // লোড হয়ে যাওয়ার কথা ──
+      const firstStuckCheck=setTimeout(autoStuckCheck,45000);
       const stuckCheckInterval=setInterval(autoStuckCheck,60000);
 
       return()=>{clearTimeout(timer);clearTimeout(firstStuckCheck);clearInterval(stuckCheckInterval);unsubOrders();unsubExpenses();unsubLots();unsubDb();unsubGalleries();unsubWoodSettings();unsubLaborSettings();unsubAlertSettings();unsubRackSplits();unsubRackBands();unsubCarp();unsubWorkers();unsubPayroll()};
@@ -3214,6 +3258,33 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
     });
     return{data};
   },[orders]);
+  // ── বাকি টাকার বয়স-ভিত্তিক বিশ্লেষণ (Receivables Aging) — ব্যবসার হিসাবে এটা একটা
+  // প্রতিষ্ঠিত পদ্ধতি: মোট বাকির মধ্যে কতটা সাম্প্রতিক (স্বাস্থ্যকর) আর কতটা অনেক পুরনো
+  // (আদায় না হওয়ার ঝুঁকিতে) তা আলাদা করে দেখায়। আপনার ১২ লাখ+ পাওনার একটা বড় অংশ কতটা
+  // ঝুঁকিপূর্ণ তা এখান থেকেই বোঝা যাবে — শুধু মোট সংখ্যা দেখে বোঝা যায় না ──
+  const receivablesAgingData=useMemo(()=>{
+    const now=new Date();
+    const activeOrders=(orders||[]).filter(o=>!o.cancelled&&o.cust.date);
+    const buckets=[
+      {label:"০-৩০ দিন",min:0,max:30,total:0,count:0,color:"#16a34a"},
+      {label:"৩১-৬০ দিন",min:31,max:60,total:0,count:0,color:"#84cc16"},
+      {label:"৬১-৯০ দিন",min:61,max:90,total:0,count:0,color:"#f59e0b"},
+      {label:"৯০-১৮০ দিন",min:91,max:180,total:0,count:0,color:"#f97316"},
+      {label:"১৮০+ দিন",min:181,max:Infinity,total:0,count:0,color:RED},
+    ];
+    activeOrders.forEach(o=>{
+      const total=parseFloat(o.cust.total)||0;
+      const paid=(o.payments||[]).reduce((s,p)=>s+(parseFloat(p.amount)||0),0);
+      const due=total-paid;
+      if(due<=0)return;
+      const ageDays=Math.round((now-parseISO(o.cust.date))/86400000);
+      const bucket=buckets.find(b=>ageDays>=b.min&&ageDays<=b.max)||buckets[buckets.length-1];
+      bucket.total+=due;
+      bucket.count+=1;
+    });
+    const totalDue=buckets.reduce((s,b)=>s+b.total,0);
+    return{buckets,totalDue};
+  },[orders]);
   // ── মৌসুমি প্রবণতা — এখন নির্দিষ্ট সাল একাধিক বেছে নেওয়া যায় (গত ৬ বছর, চলতি বছরসহ),
   // আর মাসভিত্তিক মোট মূল্যের উপর ভিত্তি করে (আগে অর্ডার সংখ্যার গড় ছিল) ──
   const seasonYearOptions=useMemo(()=>{
@@ -3223,17 +3294,25 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
     return arr;
   },[]);
   const[seasonYearsSelect,setSeasonYearsSelect]=useState(()=>new Set([new Date().getFullYear()]));
-  const[popularYearSelect,setPopularYearSelect]=useState(()=>new Date().getFullYear());
   const[profitDetailOpen,setProfitDetailOpen]=useState(false);
+  const[popularYearsSelect,setPopularYearsSelect]=useState(()=>new Set([new Date().getFullYear()]));
   const popularFurnitureData=useMemo(()=>{
     const activeOrders2=(orders||[]).filter(o=>!o.cancelled);
-    const catAllCount={};
-    activeOrders2.filter(o=>o.cust.date&&new Date(o.cust.date).getFullYear()===popularYearSelect).forEach(o=>(o.items||[]).forEach(it=>{
+    const selected=popularYearsSelect.size?popularYearsSelect:new Set([new Date().getFullYear()]);
+    const catAgg={};
+    activeOrders2.filter(o=>o.cust.date&&selected.has(parseISO(o.cust.date).getUTCFullYear())).forEach(o=>(o.items||[]).forEach(it=>{
       const catLabel=(db&&it.catKey&&db[it.catKey])?db[it.catKey].bn:(it.variantBn.split(" ")[0]||it.code);
-      catAllCount[catLabel]=(catAllCount[catLabel]||0)+1;
+      // ── আগে এখানে সরাসরি নামের ভিত্তিতে গোনা হতো — কোনো পুরনো অর্ডারে catKey ডেটাবেসে না
+      // পেলে সেই একই ক্যাটাগরি ভিন্ন নামে (ফলব্যাক থেকে) আলাদা এন্ট্রি হয়ে যেত, ফলে একই
+      // ক্যাটাগরি দুইভাবে ভাগ হয়ে ভুল র‍্যাংকিং দেখাত। এখন পাই চার্টের মতোই স্থিতিশীল catKey
+      // দিয়ে গোনা হয়, নাম শুধু দেখানোর জন্য ──
+      const key=it.catKey||catLabel;
+      if(!catAgg[key])catAgg[key]={label:catLabel,count:0,value:0};
+      catAgg[key].count+=1;
+      catAgg[key].value+=(parseFloat(it.price)||0)*(parseFloat(it.qty)||1);
     }));
-    return Object.entries(catAllCount).sort((a,b)=>b[1]-a[1]).map(([label,count])=>({label,count}));
-  },[orders,db,popularYearSelect]);
+    return Object.values(catAgg).sort((a,b)=>b.count-a.count);
+  },[orders,db,popularYearsSelect]);
   const[monthNavOffset,setMonthNavOffset]=useState(0); // 0=বর্তমান মাস, + মানে পরের মাস, - মানে আগের মাস
   const monthTrendData=useMemo(()=>{
     const now2=new Date();
@@ -3479,13 +3558,23 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
 
       <div style={{marginBottom:18}}>
         <div style={{fontSize:12,fontWeight:700,color:"#92400e",marginBottom:6}}>🏆 জনপ্রিয় ফার্নিচার</div>
-        <div style={{display:"flex",gap:5,marginBottom:8,overflowX:"auto"}}>
-          {financeYearOptions.map(y=><button key={y} onClick={()=>setPopularYearSelect(y)} style={{flexShrink:0,padding:"6px 12px",borderRadius:20,border:popularYearSelect===y?"none":"1px solid #ddd",background:popularYearSelect===y?"#92400e":"white",color:popularYearSelect===y?"white":"#666",fontSize:10,fontWeight:600}}>{y}</button>)}
+        <div style={{fontSize:9,color:"#999",marginBottom:6}}>একাধিক সাল বেছে নিলে সেই সালগুলোর সম্মিলিত তথ্য দেখাবে:</div>
+        <div style={{display:"flex",gap:5,marginBottom:8,overflowX:"auto",flexWrap:"wrap"}}>
+          {financeYearOptions.map(y=><button key={y} onClick={()=>{
+            setPopularYearsSelect(prev=>{
+              const next=new Set(prev);
+              if(next.has(y))next.delete(y);else next.add(y);
+              return next.size?next:new Set([y]);
+            });
+          }} style={{flexShrink:0,padding:"6px 12px",borderRadius:20,border:popularYearsSelect.has(y)?"none":"1px solid #ddd",background:popularYearsSelect.has(y)?"#92400e":"white",color:popularYearsSelect.has(y)?"white":"#666",fontSize:10,fontWeight:600}}>{y}</button>)}
         </div>
         {popularFurnitureData.length>0?<div style={{background:"#fffbeb",border:"1px solid #fde68a",borderRadius:10,padding:"12px 14px"}}>
           {popularFurnitureData.slice(0,6).map((c,i)=><div key={c.label} style={{display:"flex",alignItems:"center",gap:8,marginBottom:i<Math.min(6,popularFurnitureData.length)-1?6:0}}>
             <div style={{width:20,height:20,borderRadius:"50%",background:i===0?"#f59e0b":i===1?"#94a3b8":i===2?"#b45309":"#e5e7eb",color:i<3?"white":"#666",display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,fontWeight:800,flexShrink:0}}>{i+1}</div>
-            <span style={{flex:1,fontSize:12,color:"#333",fontWeight:600}}>{c.label}</span>
+            <div style={{flex:1}}>
+              <div style={{fontSize:12,color:"#333",fontWeight:600}}>{c.label}</div>
+              <div style={{fontSize:9,color:"#bbb"}}>{money(c.value)}</div>
+            </div>
             <span style={{fontSize:11,color:"#92400e",fontWeight:700}}>{c.count} অর্ডার</span>
           </div>)}
         </div>:<div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"14px",textAlign:"center",fontSize:11,color:"#999"}}>এই সালে কোনো অর্ডার নেই</div>}
@@ -3526,12 +3615,12 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
             });
           }} style={{flexShrink:0,padding:"6px 12px",borderRadius:20,border:seasonYearsSelect.has(y)?"none":"1px solid #ddd",background:seasonYearsSelect.has(y)?"#b45309":"white",color:seasonYearsSelect.has(y)?"white":"#666",fontSize:10,fontWeight:600}}>{y}</button>)}
         </div>
-        {seasonData.seasonalMax>0?<div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 8px",overflowX:"auto"}}>
+        {seasonData.seasonalMax>0?<div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 6px"}}>
           {(()=>{
-            const shortMoney=(v)=>v>=1000?(v/1000).toFixed(v>=10000?0:1)+"হা":Math.round(v).toString();
+            const shortMoney=(v)=>v>=1000?(v/1000).toFixed(v>=10000?0:1):Math.round(v).toString();
             return<>
-          <div style={{fontSize:9,color:"#999",marginBottom:8,paddingLeft:6}}>{seasonData.selectedCount>1?`${seasonData.selectedCount}টা সালের সম্মিলিত মোট মূল্য`:"মোট মূল্যের ভিত্তিতে"} — আগে থেকে কাঠ ও কর্মী পরিকল্পনায় কাজে লাগবে।</div>
-          <div style={{display:"flex",alignItems:"stretch",gap:3,height:120,minWidth:520}}>
+          <div style={{fontSize:9,color:"#999",marginBottom:8,paddingLeft:6}}>{seasonData.selectedCount>1?`${seasonData.selectedCount}টা সালের সম্মিলিত মোট মূল্য`:"মোট মূল্যের ভিত্তিতে"} (সংখ্যা হাজার টাকায়) — আগে থেকে কাঠ ও কর্মী পরিকল্পনায় কাজে লাগবে।</div>
+          <div style={{display:"flex",alignItems:"stretch",gap:2,height:120}}>
             {seasonData.seasonal.map(s=><div key={s.month} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",height:"100%"}}>
               <div style={{fontSize:7,color:"#b45309",fontWeight:700,marginBottom:1}}>{s.value>0?shortMoney(s.value):""}</div>
               <div style={{fontSize:6.5,color:"#bbb",marginBottom:2}}>{s.count>0?`${s.count}টি`:""}</div>
@@ -3564,45 +3653,53 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
         </div>
       </div>}
 
-      {/* পেমেন্ট সংগ্রহের গতি — গত ৬ মাসের অর্ডার গড়ে কত দিনে পুরো টাকা উঠছে */}
+      {/* বাকি টাকার বয়স-ভিত্তিক বিশ্লেষণ — মোট পাওনার কতটা স্বাস্থ্যকর, কতটা ঝুঁকিতে */}
       <div style={{marginBottom:16}}>
-        <div style={{fontWeight:700,fontSize:13,color:"#222",marginBottom:4}}>⏱️ পেমেন্ট সংগ্রহের গতি (গত ৬ মাস)</div>
-        <div style={{fontSize:9,color:"#999",marginBottom:8}}>যে মাসে অর্ডার হয়েছে, সেই অর্ডারগুলোর টাকা পুরোপুরি উঠতে গড়ে কত দিন লেগেছে — শুধু যেসব অর্ডারের টাকা এখনো পুরো উঠে গেছে তা দিয়ে হিসাব করা।</div>
-        <div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 8px"}}>
-          {(()=>{const maxD=Math.max(...paymentSpeedData.data.map(d=>d.avgDays||0),1);return<div style={{display:"flex",alignItems:"stretch",gap:6,height:120}}>
-            {paymentSpeedData.data.map((d,i)=><div key={i} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",height:"100%"}}>
-              <div style={{fontSize:9,color:"#1d4ed8",fontWeight:700,marginBottom:2}}>{d.avgDays!==null?`${Math.round(d.avgDays)} দিন`:"—"}</div>
-              <div style={{fontSize:7,color:"#bbb",marginBottom:2}}>{d.paidCount}/{d.totalCount}টি</div>
-              <div style={{flex:1,width:"100%",display:"flex",alignItems:"flex-end"}}>
-                <div style={{width:"100%",height:d.avgDays!==null?`${(d.avgDays/maxD)*100}%`:"0%",background:CHART_SOFT_BLUE,borderRadius:"3px 3px 0 0",minHeight:d.avgDays!==null?4:0}}></div>
-              </div>
-              <div style={{fontSize:9,color:"#999",marginTop:3}}>{d.label}</div>
-            </div>)}
-          </div>})()}
-          <div style={{fontSize:8.5,color:"#aaa",marginTop:8,textAlign:"center"}}>বার-এর নিচের সংখ্যা: কতটা অর্ডারের পুরো টাকা উঠেছে / সেই মাসে মোট অর্ডার</div>
-        </div>
+        <div style={{fontWeight:700,fontSize:13,color:"#222",marginBottom:4}}>⏳ বাকি টাকার বয়স-ভিত্তিক বিশ্লেষণ</div>
+        <div style={{fontSize:9,color:"#999",marginBottom:8}}>মোট {money(receivablesAgingData.totalDue)} পাওনার মধ্যে কতটা কত পুরনো — যত পুরনো, আদায় না হওয়ার ঝুঁকি তত বেশি।</div>
+        {receivablesAgingData.totalDue>0?<div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 14px"}}>
+          <div style={{display:"flex",width:"100%",height:22,borderRadius:6,overflow:"hidden",marginBottom:12}}>
+            {receivablesAgingData.buckets.filter(b=>b.total>0).map(b=><div key={b.label} style={{width:`${(b.total/receivablesAgingData.totalDue)*100}%`,background:b.color}}></div>)}
+          </div>
+          {receivablesAgingData.buckets.map(b=><div key={b.label} style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}>
+            <div style={{width:9,height:9,borderRadius:2,background:b.color,flexShrink:0}}></div>
+            <span style={{fontSize:11,flex:1,color:"#444"}}>{b.label}</span>
+            <span style={{fontSize:11,fontWeight:700,color:"#222"}}>{money(b.total)}</span>
+            <span style={{fontSize:9,color:"#aaa",width:36,textAlign:"right"}}>{b.count}টি</span>
+          </div>)}
+        </div>:<div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"14px",textAlign:"center",fontSize:11,color:"#999"}}>এই মুহূর্তে কোনো বাকি নেই</div>}
       </div>
 
-      {/* মাসিক আয় — প্রতি মাসে সংগ্রহ বাদ ব্যয়, যা হাতে থাকার কথা */}
+      {/* মাসিক তারল্য — প্রতি মাসে সংগ্রহ বাদ ব্যয়, যা হাতে থাকার কথা */}
       <div style={{marginBottom:16}}>
-        <div style={{fontWeight:700,fontSize:13,color:"#222",marginBottom:6}}>💵 মাসিক আয় ({monthlyIncomeData.year})</div>
-        <div style={{fontSize:9,color:"#999",marginBottom:8}}>সেই মাসের সংগ্রহ থেকে ব্যয় (কাঠ+বেতন+খরচ) বাদ দিলে যা হাতে থাকার কথা।</div>
+        <div style={{fontWeight:700,fontSize:13,color:"#222",marginBottom:6}}>💵 মাসিক তারল্য ({monthlyIncomeData.year})</div>
+        <div style={{fontSize:9,color:"#999",marginBottom:8}}>সেই মাসের সংগ্রহ থেকে ব্যয় (কাঠ+বেতন+খরচ) বাদ দিলে যা হাতে থাকার কথা (সংখ্যা হাজার টাকায়)।</div>
         <div style={{display:"flex",gap:5,marginBottom:8,overflowX:"auto"}}>
           {financeYearOptions.map(y=><button key={y} onClick={()=>setMonthlyIncomeYearSelect(y)} style={{flexShrink:0,padding:"6px 12px",borderRadius:20,border:monthlyIncomeYearSelect===y?"none":"1px solid #ddd",background:monthlyIncomeYearSelect===y?"#166534":"white",color:monthlyIncomeYearSelect===y?"white":"#666",fontSize:10,fontWeight:600}}>{y}</button>)}
         </div>
-        <div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 8px"}}>
+        <div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 6px"}}>
           {(()=>{
-            const shortMoney=(v)=>(v<0?"-":"")+(Math.abs(v)>=1000?(Math.abs(v)/1000).toFixed(Math.abs(v)>=10000?0:1)+"হা":Math.round(Math.abs(v)).toString());
+            const shortMoney=(v)=>(v<0?"-":"")+(Math.abs(v)>=1000?(Math.abs(v)/1000).toFixed(Math.abs(v)>=10000?0:1):Math.round(Math.abs(v)).toString());
             const nets=monthlyIncomeData.monthly.map(m=>m.revenue-m.expense);
-            const maxAbs=Math.max(...nets.map(n=>Math.abs(n)),1);
-            return<div style={{display:"flex",alignItems:"stretch",gap:4,height:150}}>
+            // ── সব মাস মিলিয়ে একটাই শূন্য-রেখা — আগে প্রতিটা কলাম নিজের পুরো উচ্চতাকেই
+            // ভিত্তি ধরত, তাই ঋণাত্মক বার একটা সাধারণ শূন্য-রেখা ছাড়াই উপরে "ভাসত"। এখন
+            // ধনাত্মক ও ঋণাত্মক অংশের জায়গা সর্বোচ্চ মান অনুপাতে ভাগ করা হয়, শূন্য-রেখা
+            // সবগুলো কলামে একই জায়গায় থাকে ──
+            const maxPos=Math.max(...nets.filter(n=>n>0),0);
+            const maxNeg=Math.max(...nets.filter(n=>n<0).map(n=>-n),0);
+            const totalSpan=maxPos+maxNeg||1;
+            const posPct=(maxPos/totalSpan)*100;
+            const negPct=(maxNeg/totalSpan)*100;
+            return<div style={{display:"flex",alignItems:"stretch",gap:3,height:150}}>
               {monthlyIncomeData.monthly.map((m,i)=>{
                 const net=nets[i];
                 return<div key={i} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",height:"100%"}}>
-                  <div style={{flex:1,width:"100%",display:"flex",flexDirection:"column",justifyContent:net>=0?"flex-end":"flex-start"}}>
-                    {net>=0&&<div style={{fontSize:7,color:"#166534",marginBottom:1,textAlign:"center"}}>{shortMoney(net)}</div>}
-                    <div style={{width:"100%",height:`${(Math.abs(net)/maxAbs)*100}%`,background:net>=0?CHART_SOFT_GREEN:CHART_SOFT_RED,borderRadius:net>=0?"2px 2px 0 0":"0 0 2px 2px",minHeight:2}}></div>
-                    {net<0&&<div style={{fontSize:7,color:RED,marginTop:1,textAlign:"center"}}>{shortMoney(net)}</div>}
+                  <div style={{height:`${posPct}%`,width:"100%",display:"flex",flexDirection:"column",justifyContent:"flex-end",alignItems:"center"}}>
+                    {net>0&&<><div style={{fontSize:6.5,color:"#166534",marginBottom:1}}>{shortMoney(net)}</div><div style={{width:"100%",height:`${maxPos>0?(net/maxPos)*100:0}%`,background:CHART_SOFT_GREEN,borderRadius:"2px 2px 0 0",minHeight:2}}></div></>}
+                  </div>
+                  <div style={{width:"100%",height:1,background:"#ccc",flexShrink:0}}></div>
+                  <div style={{height:`${negPct}%`,width:"100%",display:"flex",flexDirection:"column",justifyContent:"flex-start",alignItems:"center"}}>
+                    {net<0&&<><div style={{width:"100%",height:`${maxNeg>0?(-net/maxNeg)*100:0}%`,background:CHART_SOFT_RED,borderRadius:"0 0 2px 2px",minHeight:2}}></div><div style={{fontSize:6.5,color:RED,marginTop:1}}>{shortMoney(net)}</div></>}
                   </div>
                   <div style={{fontSize:8,color:"#999",marginTop:3}}>{m.label}</div>
                 </div>;
@@ -3622,7 +3719,7 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
         <div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 6px"}}>
           {(()=>{
             const maxV=Math.max(...svExpData.monthly.map(m=>Math.max(m.revenue,m.expense)),1);
-            const shortMoney=(v)=>v>=1000?(v/1000).toFixed(v>=10000?0:1)+"হা":Math.round(v).toString();
+            const shortMoney=(v)=>v>=1000?(v/1000).toFixed(v>=10000?0:1):Math.round(v).toString();
             return<div style={{display:"flex",alignItems:"stretch",gap:2,height:150}}>
               {svExpData.monthly.map((m,i)=><div key={i} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",height:"100%"}}>
                 <div style={{flex:1,width:"100%",display:"flex",alignItems:"flex-end",gap:1}}>
@@ -3788,18 +3885,6 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
       </div>}
 
       <div id="z-perf" style={{scrollMarginTop:56,fontSize:11,fontWeight:800,color:"#7c2d12",letterSpacing:"0.3px",margin:"18px 0 8px",paddingBottom:4,borderBottom:"2px solid #7c2d1222"}}>🚧 কর্মদক্ষতা ও উৎপাদন বিশ্লেষণ</div>
-      {stats.deptAvg&&<div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 14px",marginBottom:14}}>
-        <div style={{fontSize:12,fontWeight:700,color:"#0f766e",marginBottom:3}}>🚧 কোন বিভাগে সময় বেশি লাগছে</div>
-        <div style={{fontSize:9,color:"#999",marginBottom:8}}>বিভাগভিত্তিক গড় সময় (সম্পন্ন কাজ থেকে) — যেটাতে সবচেয়ে বেশি সময় লাগছে, সেটাই আসল বাধা।</div>
-        {stats.deptAvg.map(d=><div key={d.id} style={{marginBottom:7}}>
-          <div style={{display:"flex",justifyContent:"space-between",fontSize:11,marginBottom:2}}>
-            <span style={{fontWeight:600}}>{d.bn}</span>
-            <span style={{fontWeight:700,color:d.avg!==null?"#0f766e":"#bbb"}}>{d.avg!==null?<>{d.avg.toFixed(1)} দিন <span style={{color:"#aaa",fontWeight:400,fontSize:9}}>({d.count}টি)</span></>:"তথ্য নেই"}</span>
-          </div>
-          <div style={{background:"#f0f0f0",borderRadius:4,height:6,overflow:"hidden"}}><div style={{width:d.avg!==null?`${(d.avg/stats.deptAvgMax)*100}%`:"0%",height:"100%",background:d.avg===stats.deptAvgMax?RED:"#0f766e"}}></div></div>
-        </div>)}
-      </div>}
-
       {stats.backlogTrend&&stats.bottleneckDeptBn&&<div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 14px",marginBottom:14}}>
         <div style={{fontSize:12,fontWeight:700,color:"#7c2d12",marginBottom:3}}>📊 ব্যাকলগ বাড়ছে না কমছে ({stats.bottleneckDeptBn})</div>
         <div style={{fontSize:9,color:"#999",marginBottom:8,lineHeight:1.5}}>আপনার বাধা-বিভাগে প্রতি মাসে কতটা কাজ ঢুকেছে (শুরু হয়েছে) বনাম কতটা বের হয়েছে (শেষ হয়েছে)। ঢোকা যদি বের হওয়ার চেয়ে বেশি হতেই থাকে, ব্যাকলগ বাড়ছে — শুধু বেশি কর্মী/সময় দিয়ে সমাধান হবে না, নতুন অর্ডার নেওয়ার হারও পুনর্বিবেচনা করা দরকার।</div>
@@ -3831,6 +3916,18 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
           <div style={{display:"flex",alignItems:"center",gap:4,fontSize:10,color:"#666"}}><div style={{width:9,height:9,background:"#99e6d1",borderRadius:2}}></div>বের হয়েছে</div>
         </div>
         <div style={{fontSize:8.5,color:"#aaa",marginTop:6,textAlign:"center"}}>নিচের সংখ্যা: নিট পরিবর্তন (লাল = ব্যাকলগ বেড়েছে, সবুজ = কমেছে)</div>
+      </div>}
+
+      {stats.deptAvg&&<div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 14px",marginBottom:14}}>
+        <div style={{fontSize:12,fontWeight:700,color:"#0f766e",marginBottom:3}}>🚧 কোন বিভাগে সময় বেশি লাগছে</div>
+        <div style={{fontSize:9,color:"#999",marginBottom:8}}>বিভাগভিত্তিক গড় সময় (সম্পন্ন কাজ থেকে) — যেটাতে সবচেয়ে বেশি সময় লাগছে, সেটাই আসল বাধা।</div>
+        {stats.deptAvg.map(d=><div key={d.id} style={{marginBottom:7}}>
+          <div style={{display:"flex",justifyContent:"space-between",fontSize:11,marginBottom:2}}>
+            <span style={{fontWeight:600}}>{d.bn}</span>
+            <span style={{fontWeight:700,color:d.avg!==null?"#0f766e":"#bbb"}}>{d.avg!==null?<>{d.avg.toFixed(1)} দিন <span style={{color:"#aaa",fontWeight:400,fontSize:9}}>({d.count}টি)</span></>:"তথ্য নেই"}</span>
+          </div>
+          <div style={{background:"#f0f0f0",borderRadius:4,height:6,overflow:"hidden"}}><div style={{width:d.avg!==null?`${(d.avg/stats.deptAvgMax)*100}%`:"0%",height:"100%",background:d.avg===stats.deptAvgMax?RED:"#0f766e"}}></div></div>
+        </div>)}
       </div>}
 
       {stats.workerRanked&&stats.workerRanked.length>0&&<div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 14px",marginBottom:14}}>
@@ -5531,7 +5628,7 @@ function ManageDB({db,saveDb,galleries,saveGalleryEntry,onBack,navigate,goBack,r
               <button onClick={()=>saveRenameVar(catK,vK)} style={{background:"#6d28d9",color:"white",border:"none",borderRadius:6,padding:"5px 9px",fontSize:11,fontWeight:700}}>✓</button>
               <button onClick={()=>setRenamingVar(null)} style={{background:"#f3f4f6",border:"none",borderRadius:6,padding:"5px 9px",fontSize:11}}>✕</button>
             </>:<>
-              {galleries&&galleries[`${catK}__${vK}`]&&galleries[`${catK}__${vK}`].coverImage&&<img src={galleries[`${catK}__${vK}`].coverImage} style={{width:32,height:32,objectFit:"cover",borderRadius:6,border:"1px solid #eee",flexShrink:0}} alt=""/>}
+              {galleries&&galleries[`${catK}__${vK}`]&&galleries[`${catK}__${vK}`].coverImage&&<img src={galleries[`${catK}__${vK}`].coverImage} onClick={e=>{e.stopPropagation();openLightbox(galleries[`${catK}__${vK}`].coverImage)}} style={{width:32,height:32,objectFit:"cover",borderRadius:6,border:"1px solid #eee",flexShrink:0,cursor:"pointer"}} alt=""/>}
               <div style={{flex:1}}><div style={{fontSize:12,fontWeight:600}}>{isEmptyWood(v)?"⚠️ ":""}{v.bn}</div><div style={{fontSize:10,color:"#888",fontFamily:"monospace"}}>Code: {v.code}{isEmptyWood(v)?" — কাঠের মাপ ফাঁকা":""}{galleries&&galleries[`${catK}__${vK}`]&&galleries[`${catK}__${vK}`].gallery&&galleries[`${catK}__${vK}`].gallery.length?` · ${galleries[`${catK}__${vK}`].gallery.length} ছবি`:""}</div></div>
               <button onClick={()=>startRenameVar(catK,vK)} style={{background:"#f5f3ff",border:"none",borderRadius:6,padding:"5px 8px",color:"#6d28d9",fontSize:10,fontWeight:600}}>✏️ নাম</button>
               <button onClick={()=>openGallery(catK,vK)} style={{background:"#fef3c7",border:"none",borderRadius:6,padding:"5px 8px",color:"#92400e",fontSize:10,fontWeight:600}}>🖼️ ছবি</button>
@@ -6050,8 +6147,9 @@ function Preview({order,onBack,slip,setSlip,onUpdate,onAddPayment,onSetDelivered
       next.push({src:compressed,fileName:savedFull?relPath:null});
     }
     onUpdate({...order,deliveryImgs:next,deliveryImg:next[0]?.src||null,deliveryImgFileName:next[0]?.fileName||null});
-    // ── ডেলিভারির সময় আপলোড করা ছবিই স্বয়ংক্রিয়ভাবে সেই মডেলের কভার ছবি হয়ে যায় —
-    // ডেটাবেসে আলাদাভাবে প্রতিটা মডেলের জন্য কভার ছবি বসানোর দরকার নেই ──
+    // ── প্রথমবার যে ছবি একটা মডেলের জন্য পাওয়া যায়, সেটাই স্থায়ীভাবে কভার ছবি হয়ে থাকে —
+    // পরের অর্ডারের ডেলিভারি ছবি দিয়ে আর বদলানো/যোগ করা হয় না, তাই ডেটাবেস প্রতি অর্ডারে
+    // ভারী হতে থাকে না ──
     if(saveGalleryEntry&&order.items&&firstCompressed){
       const seen=new Set();
       order.items.forEach(it=>{
@@ -6060,8 +6158,8 @@ function Preview({order,onBack,slip,setSlip,onUpdate,onAddPayment,onSetDelivered
         if(seen.has(key))return;
         seen.add(key);
         const existing=(galleries&&galleries[key])||{gallery:[],coverImage:null};
-        const updatedGallery=(existing.gallery||[]).includes(firstCompressed)?(existing.gallery||[]):[...(existing.gallery||[]),firstCompressed];
-        saveGalleryEntry(it.catKey,it.varKey,{gallery:updatedGallery,coverImage:firstCompressed});
+        if(existing.coverImage)return; // ইতিমধ্যে একটা কভার ছবি আছে — বদলানো হবে না
+        saveGalleryEntry(it.catKey,it.varKey,{gallery:existing.gallery||[],coverImage:firstCompressed});
       });
     }
   };
