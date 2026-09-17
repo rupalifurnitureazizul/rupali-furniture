@@ -104,7 +104,7 @@ function compressImage(file,maxDim=1200,quality=0.82,maxBytes=110000){
 /* ── FULL-RESOLUTION LOCAL FOLDER STORAGE (desktop Chrome/Edge/Brave only) ──
    Original, uncompressed images are saved as real files in a folder you choose
    on your computer. Only a small compressed thumbnail syncs to the cloud/mobile. */
-const BUILD_TAG="4.32";
+const BUILD_TAG="4.38";
 const FS_SUPPORTED=typeof window!=="undefined"&&"showDirectoryPicker" in window;
 function idbOpen(){
   return new Promise((resolve,reject)=>{
@@ -1672,8 +1672,12 @@ function App({firebaseConfig,onResetConfig}){
   const serverTruthSeenRef=useRef(false);
   const[expenses,setExpenses]=useState([]);
   const[woodLots,setWoodLots]=useState([]);
+  const woodLotsRef=useRef([]);
+  woodLotsRef.current=woodLots;
   const[workers,setWorkers]=useState([]);
   const[payrollWeeks,setPayrollWeeks]=useState({});
+  const payrollWeeksRef=useRef({});
+  payrollWeeksRef.current=payrollWeeks;
   const[db,setDb]=useState(null);
   const dbRef=useRef(null);
   dbRef.current=db;
@@ -2449,6 +2453,17 @@ function App({firebaseConfig,onResetConfig}){
               if(filledWood)gapParts.push(`${filledWood}টা কাঠের মাপ পাঠানো হয়েছে`);
               if(missingFromDb.length)gapParts.push(`${missingFromDb.length}টা মডেল অর্ডারে আছে কিন্তু ডেটাবেসে নেই`);
               if(fixedOrderLinks)gapParts.push(`${fixedOrderLinks}টা অর্ডারের ক্যাটাগরি-সংযোগ ঠিক করা হয়েছে`);
+              // ── সার্ভারে আসলে কতটা ক্যাটাগরি ও মডেল আছে তা সরাসরি গুনে দেখানো হয়। দুই
+              // ডিভাইসে এই সংখ্যাটা মিলিয়ে দেখলেই পরিষ্কার বোঝা যাবে — সংখ্যা এক হলে দুজনেই
+              // একই সার্ভার পড়ছে (সমস্যা স্থানীয়), আলাদা হলে তারা ভিন্ন জায়গায় কথা বলছে ──
+              let svCatCount=0,svVarCount=0,svEmptyWood=0;
+              Object.entries(sv).forEach(([ck,c])=>{
+                if(ck==="__deleted__"||!c||!c.variants)return;
+                svCatCount++;
+                Object.values(c.variants).forEach(v=>{svVarCount++;if(isEmptyWood(v))svEmptyWood++});
+              });
+              const localVarCount=Object.entries(localDb).reduce((s,[ck,c])=>ck==="__deleted__"?s:s+Object.keys((c&&c.variants)||{}).length,0);
+              otherSyncStatus.dbCounts=`সার্ভারে: ${svCatCount}টা ক্যাটাগরি, ${svVarCount}টা মডেল (${svEmptyWood}টায় কাঠের মাপ নেই) · এই ডিভাইসে: ${localVarCount}টা মডেল`;
               otherSyncStatus.db=gapParts.length?gapParts.join(", "):"মিলে আছে";
             }
           }catch(e3){otherSyncStatus.db="ত্রুটি: "+e3.message}
@@ -2623,52 +2638,82 @@ function App({firebaseConfig,onResetConfig}){
   // কপির উপর বসানো হয়। আগে পুরো নথি লেখা হতো, ফলে যে ডিভাইসের কপি কোনো কারণে অসম্পূর্ণ
   // (যেমন কম্পিউটারে ১০-১২টা মডেল, অথচ মোবাইলে ১০০+) সেখান থেকে একটা ছোট সম্পাদনা করলেই
   // বাকি ডিভাইসের সব মডেল মুছে যেত। এখন সেটা অসম্ভব — শুধু আপনার করা পরিবর্তনটাই যায় ──
-  const saveDb=async(newDb)=>{
+  const saveDb=(newDb)=>{
     const oldDb=dbRef.current||{};
     setDb(newDb);
     const fs=fsRef.current;
     if(!fs)return;
-    try{
-      const snap=await withTimeout(fs.doc("meta/db").get({source:"server"}),20000,"সময়সীমা পার");
-      const server=(snap.exists&&snap.data())||{};
-      const out=JSON.parse(JSON.stringify(server));
-      const tombstones={...(out.__deleted__||{})};
-      delete out.__deleted__;
-      // ১) আপনি যে ক্যাটাগরি/মডেল যোগ বা বদলেছেন — সেগুলো সার্ভারের কপিতে বসানো
-      Object.entries(newDb).forEach(([ck,cat])=>{
-        const oldCat=oldDb[ck];
-        if(!out[ck]){out[ck]=JSON.parse(JSON.stringify(cat));return}
-        if(JSON.stringify(oldCat&&oldCat.bn)!==JSON.stringify(cat.bn))out[ck].bn=cat.bn;
-        if(JSON.stringify(oldCat&&oldCat.en)!==JSON.stringify(cat.en))out[ck].en=cat.en;
-        if(!out[ck].variants)out[ck].variants={};
-        Object.entries(cat.variants||{}).forEach(([vk,v])=>{
-          const oldV=oldCat&&oldCat.variants&&oldCat.variants[vk];
-          // শুধু সেই মডেলই লেখা হয় যেটা নতুন, বা যেটায় আপনি সত্যিই পরিবর্তন করেছেন
-          if(!oldV||JSON.stringify(oldV)!==JSON.stringify(v))out[ck].variants[vk]=JSON.parse(JSON.stringify(v));
-        });
-        // ২) আপনি যে মডেল ইচ্ছাকৃতভাবে মুছেছেন/সরিয়েছেন — শুধু সেটাই মোছা হয়
-        Object.keys((oldCat&&oldCat.variants)||{}).forEach(vk=>{
-          if(!(cat.variants||{})[vk]&&out[ck].variants){
-            delete out[ck].variants[vk];
-            // সরানো/মেশানোর ফলে মডেলটা অন্য ক্যাটাগরিতে চলে গেছে কিনা দেখা হয় — গেলে
-            // এটা মুছে ফেলা নয়, তাই কোনো রেকর্ড রাখা হবে না
-            const movedElsewhere=Object.entries(newDb).some(([ck2,c2])=>ck2!==ck&&(c2.variants||{})[vk]);
-            if(!movedElsewhere)tombstones[vk]=Date.now();
-          }
-        });
+    // ── এখানে আগে সার্ভার থেকে পড়ে, তারপর লেখা হতো। দুর্বল সংযোগে সেই পড়াটা শেষ হওয়ার
+    // আগেই লিসেনার সার্ভারের পুরনো কপি এনে আপনার সদ্য করা পরিবর্তন মুছে দিত — এই কারণেই
+    // নাম বদলানো বা কাঠের মাপ বসানো যাচ্ছিল না, টাইপ করলেও হারিয়ে যাচ্ছিল।
+    // এখন সার্ভার থেকে পড়ার দরকারই নেই: এই ডিভাইসেই আগের-পরের তুলনা করে শুধু যা বদলেছে
+    // সেটুকুই merge করে পাঠানো হয় — সাথে সাথে, অপেক্ষা ছাড়া। merge হওয়ায় অন্য ডিভাইসের
+    // কোনো মডেল এতে স্পর্শও হয় না ──
+    const payload={};      // যা যোগ/বদল হয়েছে (নেস্টেড merge)
+    const deletePaths=[];  // যা ইচ্ছাকৃতভাবে মুছতে হবে (ডট-পাথ)
+    const tombstones={...(deletedRecordRef.current||{})};
+    let changeCount=0;
+    Object.entries(newDb).forEach(([ck,cat])=>{
+      if(ck==="__deleted__")return;
+      const oldCat=oldDb[ck];
+      if(!oldCat){payload[ck]=JSON.parse(JSON.stringify(cat));changeCount++;return}
+      const catPatch={};
+      if(oldCat.bn!==cat.bn){catPatch.bn=cat.bn;changeCount++}
+      if(oldCat.en!==cat.en){catPatch.en=cat.en;changeCount++}
+      const varPatch={};
+      Object.entries(cat.variants||{}).forEach(([vk,v])=>{
+        const oldV=(oldCat.variants||{})[vk];
+        if(!oldV||JSON.stringify(oldV)!==JSON.stringify(v)){varPatch[vk]=JSON.parse(JSON.stringify(v));changeCount++}
       });
-      // ৩) আপনি যে ক্যাটাগরি ইচ্ছাকৃতভাবে মুছেছেন — শুধু সেটাই মোছা হয়
-      Object.keys(oldDb).forEach(ck=>{
-        if(!newDb[ck]){
-          delete out[ck];
-          tombstones["cat:"+ck]=Date.now();
+      if(Object.keys(varPatch).length)catPatch.variants=varPatch;
+      if(Object.keys(catPatch).length)payload[ck]=catPatch;
+    });
+    // মুছে ফেলা শনাক্ত করা
+    const pendingVarDeletes=[],pendingCatDeletes=[];
+    Object.entries(oldDb).forEach(([ck,oldCat])=>{
+      if(ck==="__deleted__")return;
+      if(!newDb[ck]){pendingCatDeletes.push(ck);return}
+      Object.keys(oldCat.variants||{}).forEach(vk=>{
+        if(!((newDb[ck].variants)||{})[vk]){
+          const movedElsewhere=Object.entries(newDb).some(([ck2,c2])=>ck2!==ck&&(c2.variants||{})[vk]);
+          pendingVarDeletes.push({ck,vk,movedElsewhere});
         }
       });
-      await withTimeout(fs.doc("meta/db").set({...out,__deleted__:tombstones}),45000,"সময়সীমা পার");
-      deletedRecordRef.current=tombstones;
-    }catch(err){
-      alert("⚠️ ক্লাউডে সেভ করতে সমস্যা হয়েছে: "+err.message+"\n\nপরিবর্তনটা এই ডিভাইসে আছে — ইন্টারনেট ঠিক হলে আবার চেষ্টা করুন।");
+    });
+    // ── ভর-মুছে-ফেলার রক্ষাকবচ: একবারে ৩টার বেশি মুছে যাওয়ার কথা এলে মোছার অংশটা
+    // বাতিল হয় (যোগ/সম্পাদনা ঠিকই সেভ হয়) ──
+    const realDeletes=pendingVarDeletes.filter(d=>!d.movedElsewhere).length+pendingCatDeletes.length;
+    if(realDeletes>3){
+      alert(`🛡️ নিরাপত্তা: এই সেভে ${realDeletes}টা মডেল/ক্যাটাগরি মুছে যেত।\n\nএকবারে এতগুলো মোছা স্বাভাবিক নয় — সম্ভবত এই ডিভাইসের কপি পুরনো ছিল। মোছার অংশটা বাতিল করা হলো।\n\nআপনার যোগ/নাম-বদল/কাঠের মাপ ঠিকই সেভ হয়েছে।`);
+    }else{
+      pendingVarDeletes.forEach(({ck,vk,movedElsewhere})=>{
+        deletePaths.push(`${ck}.variants.${vk}`);
+        if(!movedElsewhere)tombstones[vk]=Date.now();
+      });
+      pendingCatDeletes.forEach(ck=>{
+        deletePaths.push(ck);
+        tombstones["cat:"+ck]=Date.now();
+      });
     }
+    deletedRecordRef.current=tombstones;
+    const run=async()=>{
+      try{
+        if(Object.keys(payload).length){
+          await withTimeout(fs.doc("meta/db").set(payload,{merge:true}),45000,"সময়সীমা পার");
+        }
+        if(deletePaths.length){
+          const del={};
+          deletePaths.forEach(p=>{del[p]=firebase.firestore.FieldValue.delete()});
+          del.__deleted__=tombstones;
+          await withTimeout(fs.doc("meta/db").update(del),45000,"সময়সীমা পার");
+        }else if(Object.keys(payload).length){
+          await withTimeout(fs.doc("meta/db").set({__deleted__:tombstones},{merge:true}),45000,"সময়সীমা পার");
+        }
+      }catch(err){
+        alert("⚠️ ক্লাউডে সেভ করতে সমস্যা হয়েছে: "+err.message+"\n\nপরিবর্তনটা এই ডিভাইসে আছে — অ্যাপ খোলা রাখলে স্বয়ংক্রিয়ভাবে আবার চেষ্টা হবে।");
+      }
+    };
+    run();
   };
   // ── মডেলের নাম বদলালে, সেই মডেল ব্যবহার করা প্রতিটা অর্ডারেও নামটা সাথে সাথে বদলে দেওয়া হয়।
   // প্রতিটা অর্ডার আইটেমে মডেলের নামের একটা কপি (variantBn) সংরক্ষিত থাকে — প্রিন্ট শীট,
@@ -2884,8 +2929,22 @@ function App({firebaseConfig,onResetConfig}){
     setWoodLots(newList);
     if(!fsRef.current)return;
     const newIds=new Set(newList.map(l=>l.id));
-    newList.forEach(lot=>fsRef.current.collection("woodlots").doc(lot.id).set(lot).catch(err=>alert("⚠️ কাঠের স্টক সিঙ্ক করতে সমস্যা হয়েছে: "+err.message)));
-    woodLots.forEach(lot=>{if(!newIds.has(lot.id))fsRef.current.collection("woodlots").doc(lot.id).delete().catch(()=>{})});
+    const oldList=woodLotsRef.current||woodLots||[];
+    // পরিবর্তিত/নতুন লটগুলোই লেখা হয়
+    newList.forEach(lot=>{
+      const old=oldList.find(l=>l.id===lot.id);
+      if(!old||JSON.stringify(old)!==JSON.stringify(lot)){
+        fsRef.current.collection("woodlots").doc(lot.id).set(lot).catch(err=>alert("⚠️ কাঠের স্টক সিঙ্ক করতে সমস্যা হয়েছে: "+err.message));
+      }
+    });
+    // ── মুছে ফেলার রক্ষাকবচ: একবারে ৩টার বেশি লট মুছে যাওয়ার কথা এলে বাতিল, কারণ এই
+    // ডিভাইসের তালিকা পুরনো হলে অন্য ডিভাইসে যোগ করা লট মুছে যেত ──
+    const toDelete=oldList.filter(l=>!newIds.has(l.id));
+    if(toDelete.length>3){
+      alert(`🛡️ নিরাপত্তা: এই সেভে ${toDelete.length}টা কাঠের লট মুছে যেত — একবারে এতগুলো মোছা স্বাভাবিক নয়, তাই বাতিল করা হলো। একটা একটা করে মুছুন।`);
+      return;
+    }
+    toDelete.forEach(lot=>fsRef.current.collection("woodlots").doc(lot.id).delete().catch(()=>{}));
   };
   // সাপ্লায়ারকে দেওয়া পেমেন্টও টাকার হিসাব — একই কারণে atomic (arrayUnion) লেখা হয়
   const addLotPayment=(lotId,payment)=>{
@@ -2903,9 +2962,40 @@ function App({firebaseConfig,onResetConfig}){
     setWorkers(prev=>prev.filter(w=>w.id!==id));
     if(fsRef.current)fsRef.current.collection("workers").doc(id).delete().catch(()=>{});
   };
+  // ── সাপ্তাহিক পে-রোল সেভ — আগে পুরো সপ্তাহের নথি চাপিয়ে দিত, তাই এই ডিভাইসের কপি পুরনো
+  // হলে অন্য ডিভাইসে বসানো অগ্রিম বা হাজিরা মুছে যেতে পারত (সরাসরি টাকার ভুল)। এখন আগের-পরের
+  // তুলনা করে শুধু যা বদলেছে সেটুকুই merge করে সাথে সাথে পাঠানো হয় ──
   const savePayrollWeek=(weekEnd,data)=>{
+    const oldWeek=(payrollWeeksRef.current||{})[weekEnd]||{};
     setPayrollWeeks(prev=>({...prev,[weekEnd]:data}));
-    if(fsRef.current)fsRef.current.collection("payrollWeeks").doc(weekEnd).set(data).catch(err=>alert("⚠️ পে-রোল সিঙ্ক করতে সমস্যা হয়েছে: "+err.message));
+    if(!fsRef.current)return;
+    const patch={};
+    // হাজিরা — শুধু বদলে যাওয়া কর্মীর ঘরটাই
+    const attPatch={};
+    Object.entries(data.attendance||{}).forEach(([wid,days])=>{
+      if((oldWeek.attendance||{})[wid]!==days)attPatch[wid]=days;
+    });
+    if(Object.keys(attPatch).length)patch.attendance=attPatch;
+    // অগ্রিম — নতুন যোগ হওয়া এন্ট্রিগুলো atomic ভাবে (arrayUnion), যাতে কারো এন্ট্রি না মোছে
+    const oldAdvIds=new Set((oldWeek.advances||[]).map(a=>a.id));
+    const newAdvs=(data.advances||[]).filter(a=>a.id&&!oldAdvIds.has(a.id));
+    // অগ্রিম মুছে ফেলা হলে সেটা আলাদাভাবে সামলানো হয় (removeAdvanceEntry), এখানে না
+    Object.entries(data).forEach(([k,v])=>{
+      if(k==="attendance"||k==="advances")return;
+      if(JSON.stringify(oldWeek[k])!==JSON.stringify(v))patch[k]=v;
+    });
+    const run=async()=>{
+      try{
+        if(Object.keys(patch).length){
+          await fsRef.current.collection("payrollWeeks").doc(weekEnd).set(patch,{merge:true});
+        }
+        if(newAdvs.length){
+          await fsRef.current.collection("payrollWeeks").doc(weekEnd)
+            .set({advances:firebase.firestore.FieldValue.arrayUnion(...newAdvs)},{merge:true});
+        }
+      }catch(err){alert("⚠️ পে-রোল সিঙ্ক করতে সমস্যা হয়েছে: "+err.message)}
+    };
+    run();
   };
   // ── নিচের তিনটা atomic (পরমাণু-সদৃশ) — একাধিক ডিভাইস থেকে একই সপ্তাহে একসাথে এন্ট্রি দিলেও
   // একজনের লেখা আরেকজনের লেখা মুছে ফেলবে না। উপরের savePayrollWeek পুরো ডকুমেন্ট বদলে দেয় বলে
@@ -3485,6 +3575,29 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
       const label=cat?cat.bn:e.category;
       expByCat[label]=(expByCat[label]||0)+(parseFloat(e.total)||0);
     });
+    // ── পে-রোলের টাকাও এখন খরচের ভাগে দেখায়। হিসাবটা এভাবে: প্রতি সপ্তাহের মোট প্রাপ্য
+    // (হাজিরা × দৈনিক হার) হলো আসল বেতন-খরচ; সেই সপ্তাহে যে অগ্রিম দেওয়া হয়েছে তা ওই
+    // প্রাপ্যেরই একটা অংশ, তাই দুটো আলাদা করে যোগ করা হয় না (করলে দুইবার গোনা হয়ে যেত)।
+    // অগ্রিম তার নিজের তারিখে ধরা হয়, আর বাকিটা সপ্তাহ শেষের তারিখে ──
+    let payrollAdvanceTotal=0,payrollBalanceTotal=0;
+    Object.entries(payrollWeeks||{}).forEach(([weekEnd,wd])=>{
+      let weekDue=0;
+      Object.entries(wd.attendance||{}).forEach(([wid,days])=>{
+        const w=(workers||[]).find(x=>x.id===wid);
+        if(w)weekDue+=(parseFloat(days)||0)*(parseFloat(w.dailyRate)||0);
+      });
+      let advInRange=0,advTotal=0;
+      (wd.advances||[]).forEach(a=>{
+        const amt=parseFloat(a.amount)||0;
+        advTotal+=amt;
+        if(a.date&&new Date(a.date)>=rangeStart)advInRange+=amt;
+      });
+      payrollAdvanceTotal+=advInRange;
+      const balance=Math.max(weekDue-advTotal,0);
+      if(new Date(weekEnd)>=rangeStart)payrollBalanceTotal+=balance;
+    });
+    if(payrollAdvanceTotal>0)expByCat["কর্মীর অগ্রিম"]=(expByCat["কর্মীর অগ্রিম"]||0)+payrollAdvanceTotal;
+    if(payrollBalanceTotal>0)expByCat["সাপ্তাহিক বেতন (অগ্রিম বাদে)"]=(expByCat["সাপ্তাহিক বেতন (অগ্রিম বাদে)"]||0)+payrollBalanceTotal;
     const EXP_PIE_COLORS=[CHART_SOFT_TEAL,CHART_SOFT_BLUE,CHART_SOFT_ORANGE,CHART_SOFT_PURPLE,CHART_SOFT_PINK,CHART_SOFT_GREY,"#d4b26a",CHART_SOFT_GREEN];
     const expensePie=Object.entries(expByCat).sort((a,b)=>b[1]-a[1]).map(([label,value],i)=>({label,value,color:EXP_PIE_COLORS[i%EXP_PIE_COLORS.length]}));
 
@@ -3529,7 +3642,7 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
     }).sort((a,b)=>b.total-a.total);
 
     return{expensePie,expCatDetail};
-  },[expenses,expRangeSelect]);
+  },[expenses,expRangeSelect,payrollWeeks,workers]);
 
   // ── পেমেন্ট সংগ্রহের গতি — অর্ডার করার পর গড়ে কত দিনে পুরো টাকা পাওয়া যাচ্ছে, মাস অনুযায়ী।
   // "বছর অনুযায়ী তুলনা"-র বদলে এটা রাখা হলো, কারণ ব্যবসার নগদ প্রবাহের জন্য এটা সরাসরি
@@ -4359,6 +4472,10 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
               {autoStuckStatus.otherSyncStatus&&<div style={{marginTop:4,paddingTop:4,borderTop:"1px dashed #ddd"}}>
                 <div style={{fontWeight:700,marginBottom:2}}>অন্যান্য তথ্য:</div>
                 {Object.entries({expenses:"খরচ",woodlots:"কাঠের স্টক",workers:"কর্মী",db:"ফার্নিচার ডেটাবেস",payrollWeeks:"সাপ্তাহিক বেতন"}).map(([k,l])=>autoStuckStatus.otherSyncStatus[k]&&<div key={k}>• {l}: {autoStuckStatus.otherSyncStatus[k]}</div>)}
+                {autoStuckStatus.otherSyncStatus.dbCounts&&<div style={{marginTop:6,background:"#eff6ff",border:"1px solid #bfdbfe",borderRadius:6,padding:"6px 8px",fontSize:10,color:"#1e40af",lineHeight:1.5}}>
+                  <div style={{fontWeight:700,marginBottom:2}}>📊 মডেল গণনা (দুই ডিভাইসে এই সংখ্যা মিলিয়ে দেখুন):</div>
+                  {autoStuckStatus.otherSyncStatus.dbCounts}
+                </div>}
               </div>}
             </div>}
             {syncCheck.stillPendingHere&&syncCheck.stillPendingHere.length>0?
