@@ -104,7 +104,7 @@ function compressImage(file,maxDim=1200,quality=0.82,maxBytes=110000){
 /* ── FULL-RESOLUTION LOCAL FOLDER STORAGE (desktop Chrome/Edge/Brave only) ──
    Original, uncompressed images are saved as real files in a folder you choose
    on your computer. Only a small compressed thumbnail syncs to the cloud/mobile. */
-const BUILD_TAG="4.26";
+const BUILD_TAG="4.32";
 const FS_SUPPORTED=typeof window!=="undefined"&&"showDirectoryPicker" in window;
 function idbOpen(){
   return new Promise((resolve,reject)=>{
@@ -1677,6 +1677,9 @@ function App({firebaseConfig,onResetConfig}){
   const[db,setDb]=useState(null);
   const dbRef=useRef(null);
   dbRef.current=db;
+  // ── ইচ্ছাকৃতভাবে মুছে ফেলা মডেল/ক্যাটাগরির রেকর্ড — যাতে অন্য ডিভাইস সেগুলো আবার
+  // স্বয়ংক্রিয়ভাবে ফিরিয়ে না আনে ──
+  const deletedRecordRef=useRef({});
   otherDataRef.current={expenses,woodLots,workers,payrollWeeks,db};
   const[carpenters,setCarpenters]=useState([]);
   const[draft,setDraft]=useState(null);
@@ -1806,6 +1809,8 @@ function App({firebaseConfig,onResetConfig}){
   const savePermanentSyncFailures=(list)=>{try{localStorage.setItem("rf_permanent_sync_failures",JSON.stringify(list))}catch(e){}};
   const[permanentSyncFailures,setPermanentSyncFailures]=useState(loadPermanentSyncFailures);
   const[autoStuckStatus,setAutoStuckStatus]=useState(null); // {lastRunAt, lastError, foundCount, resolvedCount, running}
+  // ── ডেটাবেসের ফাঁকফোকরের রিপোর্ট (শুধু জানানো, নিজে থেকে কিছু লেখা হয় না) ──
+  const[dbGaps,setDbGaps]=useState(null);
   const markPermanentSyncFailure=(orderNo,reason)=>{
     const list=loadPermanentSyncFailures().filter(f=>f.no!==orderNo);
     list.push({no:orderNo,reason,at:new Date().toISOString()});
@@ -2133,6 +2138,11 @@ function App({firebaseConfig,onResetConfig}){
           // "galleries" collection instead.
           let hadLegacyImages=false;
           const slim=JSON.parse(JSON.stringify(data));
+          // ── মুছে-ফেলার রেকর্ড (tombstone) আলাদা করে রাখা হয় — এটা ক্যাটাগরির তালিকার অংশ
+          // নয়, তাই ডেটাবেস পাতায় কখনো দেখাবে না। স্বয়ংক্রিয় সিঙ্ক এটা দেখে বোঝে কোন মডেল
+          // আপনি ইচ্ছাকৃতভাবে মুছেছেন, যাতে অন্য ডিভাইস সেটা আবার ফিরিয়ে না আনে ──
+          deletedRecordRef.current=slim.__deleted__||{};
+          delete slim.__deleted__;
           Object.entries(slim).forEach(([catKey,cat])=>{
             if(!cat.variants)return;
             Object.entries(cat.variants).forEach(([varKey,v])=>{
@@ -2145,7 +2155,7 @@ function App({firebaseConfig,onResetConfig}){
           });
           setDb(slim);
           if(hadLegacyImages){
-            firestore.doc("meta/db").set(slim).catch(err=>alert("⚠️ ডেটাবেস পরিষ্কার করতে সমস্যা হয়েছে: "+err.message));
+            firestore.doc("meta/db").set({...slim,__deleted__:deletedRecordRef.current}).catch(err=>alert("⚠️ ডেটাবেস পরিষ্কার করতে সমস্যা হয়েছে: "+err.message));
           }
         }
         else{
@@ -2331,46 +2341,71 @@ function App({firebaseConfig,onResetConfig}){
             const dbSnap=await withTimeout(fs2.doc("meta/db").get({source:"server"}),60000,"সময়সীমা পার");
             if(dbSnap.exists&&!(dbSnap.metadata&&dbSnap.metadata.fromCache)){
               const sv=dbSnap.data()||{};
+              const tombstones=sv.__deleted__||{};
               const localDb=dbRef.current||{};
               const merged=JSON.parse(JSON.stringify(sv));
+              delete merged.__deleted__;
               let addedCats=0,addedVars=0,filledWood=0;
               Object.entries(localDb).forEach(([catKey,localCat])=>{
                 if(!localCat||typeof localCat!=="object")return;
+                if(catKey==="__deleted__")return;
+                // আপনি এই ক্যাটাগরি ইচ্ছাকৃতভাবে মুছেছেন — ফিরিয়ে আনা হবে না
+                if(tombstones["cat:"+catKey])return;
                 if(!merged[catKey]){
-                  merged[catKey]=JSON.parse(JSON.stringify(localCat));
+                  const cloned=JSON.parse(JSON.stringify(localCat));
+                  // মুছে ফেলা মডেলগুলো বাদ দিয়ে ক্যাটাগরিটা যোগ করা হয়
+                  Object.keys(cloned.variants||{}).forEach(vk=>{if(tombstones[vk])delete cloned.variants[vk]});
+                  merged[catKey]=cloned;
                   addedCats++;
                   return;
                 }
                 if(!merged[catKey].variants)merged[catKey].variants={};
                 Object.entries(localCat.variants||{}).forEach(([varKey,localVar])=>{
+                  if(tombstones[varKey])return; // ইচ্ছাকৃতভাবে মুছে ফেলা — ফেরানো হবে না
                   const serverVar=merged[catKey].variants[varKey];
                   if(!serverVar){
                     merged[catKey].variants[varKey]=JSON.parse(JSON.stringify(localVar));
                     addedVars++;
                   }else if(isEmptyWood(serverVar)&&!isEmptyWood(localVar)){
-                    merged[catKey].variants[varKey]={...serverVar,sections:localVar.sections,woodOverride:localVar.woodOverride};
-                    filledWood++;
+                    // ── এখানে আগে বিপজ্জনক কাজ হতো: সার্ভারে কাঠের মাপ ফাঁকা দেখলেই এই
+                    // ডিভাইসের কপি বসিয়ে দিত। কিন্তু আপনি যদি ইচ্ছাকৃতভাবে কোনো মডেলের কাঠ
+                    // মুছে থাকেন, তাহলে অন্য ডিভাইসের পুরনো কপি সেটা আবার ফিরিয়ে আনত — ফলে
+                    // পরিবহন শীটে মুছে-ফেলা কাঠ দেখাত, আর ভুল কাঠ আনা হতো। এখন কাঠ বসানো হয়
+                    // শুধু তখনই, যখন এই ডিভাইসের কাঠ-সম্পাদনার সময় সার্ভারের শেষ কাঠ-পরিবর্তনের
+                    // চেয়ে নতুন — অর্থাৎ ইচ্ছাকৃত মুছে ফেলা আর কখনো ফিরে আসবে না ──
+                    const localTs=(localVar.woodUpdatedAt||0);
+                    const serverTs=(serverVar.woodUpdatedAt||0);
+                    if(localTs>serverTs){
+                      merged[catKey].variants[varKey]={...serverVar,sections:localVar.sections,woodOverride:localVar.woodOverride,woodUpdatedAt:localTs};
+                      filledWood++;
+                    }
                   }
                 });
               });
               const needsPush=addedCats||addedVars||filledWood;
-              // ── অর্ডারের catKey যদি ডেটাবেসে মডেলটা এখন যেখানে আছে তার সাথে না মেলে (মডেল
-              // সরানো/মেশানোর পর অর্ডারে নতুন ক্যাটাগরি পাঠানোর লেখাটা ব্যর্থ/সময়সীমা-পার হলে
-              // ঠিক এটাই ঘটে) — সেই অর্ডারকে সঠিক ক্যাটাগরিতে ঠিক করে দেওয়া হয়। varKey সরানোর
-              // পরও একই থাকে বলে এভাবে সঠিক জায়গা খুঁজে বের করা যায় ──
+              // ── অর্ডারের catKey ঠিক করা — এখন শুধুমাত্র সার্ভারের ডেটাবেস ধরে (স্থানীয় কপি
+              // ধরে নয়)। কারণ এই ডিভাইসের কপি পুরনো বা দূষিত হলে সেটা ধরে ঠিক করতে গেলে
+              // অর্ডারগুলো ভুল ক্যাটাগরিতে চলে যেতে পারত। সার্ভারই একমাত্র সত্য ──
               const varKeyLocation={};
-              Object.entries(merged).forEach(([ck,c])=>{
+              Object.entries(sv).forEach(([ck,c])=>{
                 if(!c||!c.variants)return;
                 Object.keys(c.variants).forEach(vk=>{varKeyLocation[vk]=ck});
               });
               let fixedOrderLinks=0;
               const ordersNeedingFix=[];
+              const missingFromDb=[];
               (ordersRef.current||[]).forEach(o=>{
                 let needsFix=false;
                 const newItems=(o.items||[]).map(it=>{
                   if(!it.catKey||!it.varKey)return it;
                   const correctCat=varKeyLocation[it.varKey];
-                  if(correctCat&&correctCat!==it.catKey){needsFix=true;return{...it,catKey:correctCat}}
+                  if(!correctCat){
+                    // সার্ভারের ডেটাবেসে এই মডেল একেবারেই নেই — শুধু তালিকাভুক্ত করা হয়,
+                    // নিজে থেকে কিছু তৈরি বা লেখা হয় না
+                    if(!missingFromDb.some(m=>m.varKey===it.varKey))missingFromDb.push({varKey:it.varKey,name:it.variantBn||it.varKey,code:it.code||"",orderNo:o.no});
+                    return it;
+                  }
+                  if(correctCat!==it.catKey){needsFix=true;return{...it,catKey:correctCat}}
                   return it;
                 });
                 if(needsFix){ordersNeedingFix.push({no:o.no,items:newItems});fixedOrderLinks++}
@@ -2390,43 +2425,31 @@ function App({firebaseConfig,onResetConfig}){
                   }catch(e5){}
                 }
               }
-              // ── অর্ডারে ব্যবহৃত কিন্তু ডেটাবেসে (সার্ভার+স্থানীয় মিলিয়েও) একেবারেই নেই
-              // এমন মডেল — এটা সবচেয়ে গুরুতর অবস্থা, কারণ এই মডেল হারিয়ে গেলে কাঠের হিসাব,
-              // স্টক, লাভ-ক্ষতি, কার্পেন্টার/পরিবহন শীট সবকিছু ভেঙে যায়। অর্ডারে সংরক্ষিত
-              // নাম দিয়ে একটা এন্ট্রি ফিরিয়ে আনা হয় (কাঠের মাপ ফাঁকা থাকবে, "⚠️" চিহ্ন দেখিয়ে
-              // হাতে বসানোর জন্য চিহ্নিত হবে) — অন্তত মডেলটা আবার দৃশ্যমান হয়, হিসাব ভাঙে না ──
-              let restoredCats=0,restoredVars=0;
-              // ── সব পুনরুদ্ধার করা মডেল একটাই ক্যাটাগরিতে জমা হয় (আগে প্রতিটা হারানো
-              // ক্যাটাগরির জন্য আলাদা আলাদা "পুনরুদ্ধার করা ফার্নিচার" তৈরি হয়ে যাচ্ছিল, ফলে
-              // একই নামের অনেকগুলো ক্যাটাগরি দেখাত)। এখান থেকে মডেলগুলো নিজের পছন্দমতো
-              // ক্যাটাগরিতে সরিয়ে নেওয়া যাবে ──
-              const RECOVERY_CAT="__recovered__";
-              (ordersRef.current||[]).forEach(o=>{
-                (o.items||[]).forEach(it=>{
-                  if(!it.catKey||!it.varKey)return;
-                  // মডেলটা কোনো ক্যাটাগরিতে ইতিমধ্যে আছে কিনা — থাকলে কিছুই করা হবে না
-                  const existsAnywhere=Object.values(merged).some(c=>c&&c.variants&&c.variants[it.varKey]);
-                  if(existsAnywhere)return;
-                  if(!merged[RECOVERY_CAT]){
-                    merged[RECOVERY_CAT]={bn:"⚠️ সাজানো বাকি (অর্ডার থেকে ফিরে পাওয়া)",en:"",variants:{}};
-                    restoredCats++;
-                  }
-                  merged[RECOVERY_CAT].variants[it.varKey]={bn:it.variantBn||it.varKey,code:it.code||"",sections:[]};
-                  restoredVars++;
-                });
-              });
-              const needsPush2=needsPush||restoredCats||restoredVars;
-              if(needsPush2||fixedOrderLinks){
-                if(needsPush2)await withTimeout(fs2.doc("meta/db").set(merged),45000,"সময়সীমা পার");
-                const parts=[];
-                if(addedCats+addedVars)parts.push(`${addedCats+addedVars}টা মডেল পাঠানো`);
-                if(filledWood)parts.push(`${filledWood}টা কাঠের মাপ পাঠানো`);
-                if(restoredCats+restoredVars)parts.push(`${restoredCats+restoredVars}টা মডেল অর্ডার থেকে পুনরুদ্ধার`);
-                if(fixedOrderLinks)parts.push(`${fixedOrderLinks}টা অর্ডারের ক্যাটাগরি-সংযোগ ঠিক করা`);
-                otherSyncStatus.db=parts.join(", ")+" হয়েছে";
-              }else{
-                otherSyncStatus.db="মিলে আছে";
+              setDbGaps({missingFromDb,localOnlyCats:addedCats,localOnlyVars:addedVars,localOnlyWood:filledWood,merged});
+              // ── ⚠️ স্বয়ংক্রিয়ভাবে পুরো ডেটাবেস নথি লেখা বন্ধ করা হলো ──
+              // আগে এখানে প্রতিটা ডিভাইস নিজের স্থানীয় কপি + সার্ভারের কপি মিলিয়ে একটা
+              // "merged" নথি বানিয়ে পুরোটা সার্ভারে লিখে দিত। দুটো ডিভাইস পালা করে এটা করলে
+              // একজন অন্যজনের সংস্করণ মুছে দেয় — আর প্রতিবার অর্ডার থেকে নতুন করে ফাঁকা
+              // "পুনরুদ্ধার" মডেলও যোগ হতো। ঠিক এ কারণেই এক ডিভাইসে ৯০টা ফাঁকা-মাপের মডেল আর
+              // অন্যটায় ১টা দেখাচ্ছিল, আর একই অর্ডারের ক্যাটাগরির নামও দুই ডিভাইসে আলাদা
+              // দেখাচ্ছিল। এখন ডেটাবেস শুধু আপনার নিজের কাজেই (ক্যাটাগরি/মডেল যোগ, কাঠের মাপ
+              // সম্পাদনা) লেখা হয়, আর রিয়েল-টাইম লিসেনারই সব ডিভাইস এক রাখে — যেটা তার কাজ।
+              // অনুপস্থিত কিছু থাকলে শুধু জানানো হয়, নিজে থেকে লেখা হয় না ──
+              // ── এখন স্বয়ংক্রিয়ভাবেই পাঠানো হয় — কোনো বাটন চাপার দরকার নেই। এটা এখন
+              // নিরাপদ, কারণ: (১) এই মিলকরণ শুধু যোগ করে, কখনো কিছু মোছে না; (২) আপনি
+              // ইচ্ছাকৃতভাবে যা মুছেছেন তার রেকর্ড রাখা হয়, তাই অন্য ডিভাইস সেগুলো আবার
+              // ফিরিয়ে আনে না। ফলে যে ডিভাইসেই কাজ করুন, সব ডিভাইসে একই তথ্য থাকবে ──
+              if(needsPush){
+                try{
+                  await withTimeout(fs2.doc("meta/db").set({...merged,__deleted__:tombstones}),45000,"সময়সীমা পার");
+                }catch(e6){}
               }
+              const gapParts=[];
+              if(addedCats+addedVars)gapParts.push(`${addedCats+addedVars}টা মডেল পাঠানো হয়েছে`);
+              if(filledWood)gapParts.push(`${filledWood}টা কাঠের মাপ পাঠানো হয়েছে`);
+              if(missingFromDb.length)gapParts.push(`${missingFromDb.length}টা মডেল অর্ডারে আছে কিন্তু ডেটাবেসে নেই`);
+              if(fixedOrderLinks)gapParts.push(`${fixedOrderLinks}টা অর্ডারের ক্যাটাগরি-সংযোগ ঠিক করা হয়েছে`);
+              otherSyncStatus.db=gapParts.length?gapParts.join(", "):"মিলে আছে";
             }
           }catch(e3){otherSyncStatus.db="ত্রুটি: "+e3.message}
           // সাপ্তাহিক বেতন (নথির আইডি = সপ্তাহের শেষ তারিখ)
@@ -2450,13 +2473,14 @@ function App({firebaseConfig,onResetConfig}){
                       try{await withTimeout(fs2.collection("payrollWeeks").doc(wk).set({advances:firebase.firestore.FieldValue.arrayUnion(adv)},{merge:true}),45000,"সময়সীমা পার");pushedCount++}catch(e4){}
                     }
                     // হাজিরার তথ্যও একইভাবে — স্থানীয়ভাবে থাকা কিন্তু সার্ভারে না থাকা এন্ট্রি পাঠানো
+                    // (এখানেও আগে ডট-যুক্ত নামে লেখা হচ্ছিল, যা নেস্টেড ম্যাপে বসত না — ঠিক করা হলো)
                     const serverAtt=map[wk].attendance||{};
                     const missingAtt={};
                     Object.entries(val.attendance||{}).forEach(([wid,days])=>{
-                      if(serverAtt[wid]===undefined)missingAtt[`attendance.${wid}`]=days;
+                      if(serverAtt[wid]===undefined)missingAtt[wid]=days;
                     });
                     if(Object.keys(missingAtt).length){
-                      try{await withTimeout(fs2.collection("payrollWeeks").doc(wk).set(missingAtt,{merge:true}),45000,"সময়সীমা পার");pushedCount++}catch(e4){}
+                      try{await withTimeout(fs2.collection("payrollWeeks").doc(wk).set({attendance:missingAtt},{merge:true}),45000,"সময়সীমা পার");pushedCount++}catch(e4){}
                     }
                   }
                 }
@@ -2595,9 +2619,56 @@ function App({firebaseConfig,onResetConfig}){
     return()=>{clearTimeout(firstReconcile);document.removeEventListener("visibilitychange",onWake);window.removeEventListener("focus",onWake);window.removeEventListener("online",onWake)};
   },[]);
 
-  const saveDb=(newDb)=>{
+  // ── ডেটাবেস সেভ — এখন পুরো নথি চাপিয়ে না দিয়ে, শুধু আপনি যা বদলেছেন সেটুকুই সার্ভারের
+  // কপির উপর বসানো হয়। আগে পুরো নথি লেখা হতো, ফলে যে ডিভাইসের কপি কোনো কারণে অসম্পূর্ণ
+  // (যেমন কম্পিউটারে ১০-১২টা মডেল, অথচ মোবাইলে ১০০+) সেখান থেকে একটা ছোট সম্পাদনা করলেই
+  // বাকি ডিভাইসের সব মডেল মুছে যেত। এখন সেটা অসম্ভব — শুধু আপনার করা পরিবর্তনটাই যায় ──
+  const saveDb=async(newDb)=>{
+    const oldDb=dbRef.current||{};
     setDb(newDb);
-    if(fsRef.current)fsRef.current.doc("meta/db").set(newDb).catch(err=>alert("⚠️ ক্লাউডে সেভ করতে সমস্যা হয়েছে: "+err.message));
+    const fs=fsRef.current;
+    if(!fs)return;
+    try{
+      const snap=await withTimeout(fs.doc("meta/db").get({source:"server"}),20000,"সময়সীমা পার");
+      const server=(snap.exists&&snap.data())||{};
+      const out=JSON.parse(JSON.stringify(server));
+      const tombstones={...(out.__deleted__||{})};
+      delete out.__deleted__;
+      // ১) আপনি যে ক্যাটাগরি/মডেল যোগ বা বদলেছেন — সেগুলো সার্ভারের কপিতে বসানো
+      Object.entries(newDb).forEach(([ck,cat])=>{
+        const oldCat=oldDb[ck];
+        if(!out[ck]){out[ck]=JSON.parse(JSON.stringify(cat));return}
+        if(JSON.stringify(oldCat&&oldCat.bn)!==JSON.stringify(cat.bn))out[ck].bn=cat.bn;
+        if(JSON.stringify(oldCat&&oldCat.en)!==JSON.stringify(cat.en))out[ck].en=cat.en;
+        if(!out[ck].variants)out[ck].variants={};
+        Object.entries(cat.variants||{}).forEach(([vk,v])=>{
+          const oldV=oldCat&&oldCat.variants&&oldCat.variants[vk];
+          // শুধু সেই মডেলই লেখা হয় যেটা নতুন, বা যেটায় আপনি সত্যিই পরিবর্তন করেছেন
+          if(!oldV||JSON.stringify(oldV)!==JSON.stringify(v))out[ck].variants[vk]=JSON.parse(JSON.stringify(v));
+        });
+        // ২) আপনি যে মডেল ইচ্ছাকৃতভাবে মুছেছেন/সরিয়েছেন — শুধু সেটাই মোছা হয়
+        Object.keys((oldCat&&oldCat.variants)||{}).forEach(vk=>{
+          if(!(cat.variants||{})[vk]&&out[ck].variants){
+            delete out[ck].variants[vk];
+            // সরানো/মেশানোর ফলে মডেলটা অন্য ক্যাটাগরিতে চলে গেছে কিনা দেখা হয় — গেলে
+            // এটা মুছে ফেলা নয়, তাই কোনো রেকর্ড রাখা হবে না
+            const movedElsewhere=Object.entries(newDb).some(([ck2,c2])=>ck2!==ck&&(c2.variants||{})[vk]);
+            if(!movedElsewhere)tombstones[vk]=Date.now();
+          }
+        });
+      });
+      // ৩) আপনি যে ক্যাটাগরি ইচ্ছাকৃতভাবে মুছেছেন — শুধু সেটাই মোছা হয়
+      Object.keys(oldDb).forEach(ck=>{
+        if(!newDb[ck]){
+          delete out[ck];
+          tombstones["cat:"+ck]=Date.now();
+        }
+      });
+      await withTimeout(fs.doc("meta/db").set({...out,__deleted__:tombstones}),45000,"সময়সীমা পার");
+      deletedRecordRef.current=tombstones;
+    }catch(err){
+      alert("⚠️ ক্লাউডে সেভ করতে সমস্যা হয়েছে: "+err.message+"\n\nপরিবর্তনটা এই ডিভাইসে আছে — ইন্টারনেট ঠিক হলে আবার চেষ্টা করুন।");
+    }
   };
   // ── মডেলের নাম বদলালে, সেই মডেল ব্যবহার করা প্রতিটা অর্ডারেও নামটা সাথে সাথে বদলে দেওয়া হয়।
   // প্রতিটা অর্ডার আইটেমে মডেলের নামের একটা কপি (variantBn) সংরক্ষিত থাকে — প্রিন্ট শীট,
@@ -2844,7 +2915,16 @@ function App({firebaseConfig,onResetConfig}){
       const wd=prev[weekEnd]||{attendance:{},advances:[]};
       return{...prev,[weekEnd]:{...wd,attendance:{...(wd.attendance||{}),[workerId]:days}}};
     });
-    if(fsRef.current)fsRef.current.collection("payrollWeeks").doc(weekEnd).set({[`attendance.${workerId}`]:days},{merge:true}).catch(err=>alert("⚠️ হাজিরা সিঙ্ক করতে সমস্যা হয়েছে: "+err.message));
+    // ── আগে এখানে {"attendance.<id>": days} এভাবে set() করা হতো — কিন্তু set()-এ সাধারণ
+    // অবজেক্টের ভেতরে ডট-যুক্ত নাম দিলে Firestore সেটাকে নেস্টেড ম্যাপ হিসেবে না নিয়ে
+    // আক্ষরিক "attendance.<id>" নামের একটা আলাদা ফিল্ড বানায়। ফলে আসল attendance ম্যাপ
+    // ফাঁকাই থাকত, আর লিসেনার ফিরে এসে দিনসংখ্যা ০-তেই বসিয়ে দিত — এই কারণেই +/− চেপে
+    // দিন বসানো যাচ্ছিল না। নেস্টেড ম্যাপে লিখতে হলে আলাদা করে ম্যাপ পাঠাতে হয় ──
+    if(fsRef.current){
+      fsRef.current.collection("payrollWeeks").doc(weekEnd)
+        .set({attendance:{[workerId]:days}},{merge:true})
+        .catch(err=>alert("⚠️ হাজিরা সিঙ্ক করতে সমস্যা হয়েছে: "+err.message));
+    }
   };
   const addAdvanceEntry=(weekEnd,adv)=>{
     setPayrollWeeks(prev=>{
@@ -2905,11 +2985,11 @@ function App({firebaseConfig,onResetConfig}){
   if(page==="expense")return<ExpensePage expenses={expenses} onSave={saveExpense} onBack={goBack}/>;
   if(page==="payroll")return<PayrollPage workers={workers} saveWorker={saveWorker} deleteWorker={deleteWorker} payrollWeeks={payrollWeeks} savePayrollWeek={savePayrollWeek} updateAttendance={updateAttendance} addAdvanceEntry={addAdvanceEntry} removeAdvanceEntry={removeAdvanceEntry} onBack={goBack}/>;
   if(page==="plreport")return<PLReportPage orders={orders} expenses={expenses} workers={workers} payrollWeeks={payrollWeeks} woodLots={woodLots} woodSettings={woodSettings} laborSettings={laborSettings} onBack={goBack}/>;
-  return<Home orders={orders} expenses={expenses} woodLots={woodLots} db={db} woodSettings={woodSettings} laborSettings={laborSettings} workers={workers} payrollWeeks={payrollWeeks} alertSettings={alertSettings} saveAlertSettings={saveAlertSettings} backupFailed={backupFailed} lastSyncAt={lastSyncAt} onManualRefresh={manualRefresh} pendingWrites={pendingWrites} onCheckServerSync={checkServerSync} onAcceptServerVersion={acceptServerVersion} onUpdateOrder={updateOrder} onNew={()=>navigate({page:"form"})} onHist={()=>navigate({page:"history"})} onManage={()=>navigate({page:"manage"})} onExpense={()=>navigate({page:"expense"})} onWoodStock={()=>navigate({page:"woodstock",view:"list"})} onPayroll={()=>navigate({page:"payroll"})} onPLReport={()=>navigate({page:"plreport"})} onView={o=>navigate({page:"preview",orderNo:o.no,slip:0})} onViewDelivery={o=>navigate({page:"preview",orderNo:o.no,slip:5})} online={online} connError={connError} onResetConfig={onResetConfig} folderStatus={folderStatus} connectFolder={connectFolder} highlightNo={highlightNo} onBackupData={backupData} projectId={firebaseConfig?.projectId||""} appId={firebaseConfig?.appId||""} permanentSyncFailures={permanentSyncFailures} autoStuckStatus={autoStuckStatus}/>;
+  return<Home orders={orders} expenses={expenses} woodLots={woodLots} db={db} woodSettings={woodSettings} laborSettings={laborSettings} workers={workers} payrollWeeks={payrollWeeks} alertSettings={alertSettings} saveAlertSettings={saveAlertSettings} backupFailed={backupFailed} lastSyncAt={lastSyncAt} onManualRefresh={manualRefresh} pendingWrites={pendingWrites} onCheckServerSync={checkServerSync} onAcceptServerVersion={acceptServerVersion} onUpdateOrder={updateOrder} onNew={()=>navigate({page:"form"})} onHist={()=>navigate({page:"history"})} onManage={()=>navigate({page:"manage"})} onExpense={()=>navigate({page:"expense"})} onWoodStock={()=>navigate({page:"woodstock",view:"list"})} onPayroll={()=>navigate({page:"payroll"})} onPLReport={()=>navigate({page:"plreport"})} onView={o=>navigate({page:"preview",orderNo:o.no,slip:0})} onViewDelivery={o=>navigate({page:"preview",orderNo:o.no,slip:5})} online={online} connError={connError} onResetConfig={onResetConfig} folderStatus={folderStatus} connectFolder={connectFolder} highlightNo={highlightNo} onBackupData={backupData} projectId={firebaseConfig?.projectId||""} appId={firebaseConfig?.appId||""} permanentSyncFailures={permanentSyncFailures} autoStuckStatus={autoStuckStatus} dbGaps={dbGaps} setDbGaps={setDbGaps} fsRef={fsRef}/>;
 }
 
 /* ── HOME / DASHBOARD ── */
-function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,payrollWeeks,alertSettings,saveAlertSettings,backupFailed,lastSyncAt,onManualRefresh,pendingWrites,onCheckServerSync,onAcceptServerVersion,onUpdateOrder,onNew,onHist,onManage,onExpense,onWoodStock,onPayroll,onPLReport,onView,onViewDelivery,online,connError,onResetConfig,folderStatus,connectFolder,highlightNo,onBackupData,projectId,appId,permanentSyncFailures,autoStuckStatus}){
+function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,payrollWeeks,alertSettings,saveAlertSettings,backupFailed,lastSyncAt,onManualRefresh,pendingWrites,onCheckServerSync,onAcceptServerVersion,onUpdateOrder,onNew,onHist,onManage,onExpense,onWoodStock,onPayroll,onPLReport,onView,onViewDelivery,online,connError,onResetConfig,folderStatus,connectFolder,highlightNo,onBackupData,projectId,appId,permanentSyncFailures,autoStuckStatus,dbGaps,setDbGaps,fsRef}){
   const now=new Date();
   const[showAllRunning,setShowAllRunning]=useState(false);
   const[showSystemZone,setShowSystemZone]=useState(false);
@@ -4188,6 +4268,18 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
         <span style={{fontSize:14}}>{showSystemZone?"▲":"▼"}</span>
       </div>
       {showSystemZone&&<>
+      {dbGaps&&dbGaps.missingFromDb.length>0&&<div style={{marginTop:16,background:"#fffbeb",border:"1.5px solid #fde68a",borderRadius:10,padding:"12px 14px"}}>
+        <div style={{fontSize:12,fontWeight:700,color:"#92400e",marginBottom:6}}>⚠️ {dbGaps.missingFromDb.length}টা মডেল অর্ডারে ব্যবহৃত, কিন্তু ডেটাবেসে নেই</div>
+        <div style={{fontSize:9.5,color:"#78350f",marginBottom:8,lineHeight:1.5}}>মডেল ও কাঠের মাপ সব ডিভাইসে নিজে থেকেই মিলে যায় — কিছু চাপার দরকার নেই। কিন্তু নিচের এই মডেলগুলো কোনো ডিভাইসেই ডেটাবেসে নেই, তাই ⚙️ ডেটাবেসে গিয়ে নিজে যোগ করে কাঠের মাপ বসাতে হবে।</div>
+        <div style={{background:"white",borderRadius:7,padding:"8px 10px",fontSize:10.5}}>
+          <div style={{maxHeight:180,overflowY:"auto"}}>
+            {dbGaps.missingFromDb.map(m=><div key={m.varKey} style={{borderBottom:"1px solid #f5f5f5",padding:"3px 0"}}>
+              <div style={{fontWeight:600}}>{m.name}</div>
+              <div style={{fontSize:9,color:"#999",fontFamily:"monospace"}}>{m.code} · অর্ডার {m.orderNo}</div>
+            </div>)}
+          </div>
+        </div>
+      </div>}
       {permanentSyncFailures&&permanentSyncFailures.length>0&&<div style={{marginTop:16,background:"#fef2f2",border:"1.5px solid #fca5a5",borderRadius:10,padding:"12px 14px"}}>
         <div style={{fontSize:12,fontWeight:700,color:"#991b1b",marginBottom:6}}>🔴 {permanentSyncFailures.length}টা অর্ডার সার্ভারে পাঠাতে সমস্যা হচ্ছে</div>
         <div style={{fontSize:9.5,color:"#7f1d1d",marginBottom:8,lineHeight:1.5}}>চিন্তা নেই — অর্ডারগুলো এই ডিভাইসে নিরাপদে আছে, শুধু আসল সার্ভারে এখনো নিশ্চিতভাবে পৌঁছায়নি। অ্যাপ নিজে থেকেই বারবার চেষ্টা করে যাচ্ছে। যতক্ষণ না ঠিক হচ্ছে, ততক্ষণ এই ডিভাইসটা বন্ধ করবেন না বা ডেটা মুছবেন না।</div>
@@ -5769,7 +5861,7 @@ function ManageDB({db,saveDb,galleries,saveGalleryEntry,onBack,navigate,goBack,r
     saveDb(nd);setNewVar({catKey:"",key:"",bn:"",code:""});goBack();
   };
   const openEdit=(catK,varK)=>{navigate({page:"manage",tab:"edit",selCat:catK,selVar:varK})};
-  const saveEdit=()=>{const nd=JSON.parse(JSON.stringify(db));nd[selCat].variants[selVar].sections=editSections;saveDb(nd);if(onWoodChange)onWoodChange(selCat,selVar,editSections);goBack()};
+  const saveEdit=()=>{const nd=JSON.parse(JSON.stringify(db));nd[selCat].variants[selVar].sections=editSections;nd[selCat].variants[selVar].woodUpdatedAt=Date.now();saveDb(nd);if(onWoodChange)onWoodChange(selCat,selVar,editSections);goBack()};
   const addSection=()=>setEditSections(prev=>[...prev,{name:"নতুন সেকশন",pieces:[]}]);
   const addPiece=()=>{const ns=JSON.parse(JSON.stringify(editSections));ns[newPiece.sectionIdx].pieces.push({bn:newPiece.bn,pc:parseInt(newPiece.pc)||1,h:parseFloat(newPiece.h)||72,l:parseFloat(newPiece.l)||24,w:parseFloat(newPiece.w)||1});setEditSections(ns);setNewPiece({...newPiece,bn:""})};
   const removePiece=(si,pi)=>{const ns=JSON.parse(JSON.stringify(editSections));ns[si].pieces.splice(pi,1);setEditSections(ns)};
