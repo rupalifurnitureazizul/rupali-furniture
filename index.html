@@ -104,7 +104,7 @@ function compressImage(file,maxDim=1200,quality=0.82,maxBytes=110000){
 /* ── FULL-RESOLUTION LOCAL FOLDER STORAGE (desktop Chrome/Edge/Brave only) ──
    Original, uncompressed images are saved as real files in a folder you choose
    on your computer. Only a small compressed thumbnail syncs to the cloud/mobile. */
-const BUILD_TAG="4.17";
+const BUILD_TAG="4.23";
 const FS_SUPPORTED=typeof window!=="undefined"&&"showDirectoryPicker" in window;
 function idbOpen(){
   return new Promise((resolve,reject)=>{
@@ -2360,18 +2360,23 @@ function App({firebaseConfig,onResetConfig}){
               // নাম দিয়ে একটা এন্ট্রি ফিরিয়ে আনা হয় (কাঠের মাপ ফাঁকা থাকবে, "⚠️" চিহ্ন দেখিয়ে
               // হাতে বসানোর জন্য চিহ্নিত হবে) — অন্তত মডেলটা আবার দৃশ্যমান হয়, হিসাব ভাঙে না ──
               let restoredCats=0,restoredVars=0;
+              // ── সব পুনরুদ্ধার করা মডেল একটাই ক্যাটাগরিতে জমা হয় (আগে প্রতিটা হারানো
+              // ক্যাটাগরির জন্য আলাদা আলাদা "পুনরুদ্ধার করা ফার্নিচার" তৈরি হয়ে যাচ্ছিল, ফলে
+              // একই নামের অনেকগুলো ক্যাটাগরি দেখাত)। এখান থেকে মডেলগুলো নিজের পছন্দমতো
+              // ক্যাটাগরিতে সরিয়ে নেওয়া যাবে ──
+              const RECOVERY_CAT="__recovered__";
               (ordersRef.current||[]).forEach(o=>{
                 (o.items||[]).forEach(it=>{
                   if(!it.catKey||!it.varKey)return;
-                  if(!merged[it.catKey]){
-                    merged[it.catKey]={bn:"পুনরুদ্ধার করা ফার্নিচার",variants:{}};
+                  // মডেলটা কোনো ক্যাটাগরিতে ইতিমধ্যে আছে কিনা — থাকলে কিছুই করা হবে না
+                  const existsAnywhere=Object.values(merged).some(c=>c&&c.variants&&c.variants[it.varKey]);
+                  if(existsAnywhere)return;
+                  if(!merged[RECOVERY_CAT]){
+                    merged[RECOVERY_CAT]={bn:"⚠️ সাজানো বাকি (অর্ডার থেকে ফিরে পাওয়া)",en:"",variants:{}};
                     restoredCats++;
                   }
-                  if(!merged[it.catKey].variants)merged[it.catKey].variants={};
-                  if(!merged[it.catKey].variants[it.varKey]){
-                    merged[it.catKey].variants[it.varKey]={bn:it.variantBn||it.varKey,code:it.code||"",sections:[]};
-                    restoredVars++;
-                  }
+                  merged[RECOVERY_CAT].variants[it.varKey]={bn:it.variantBn||it.varKey,code:it.code||"",sections:[]};
+                  restoredVars++;
                 });
               });
               const needsPush2=needsPush||restoredCats||restoredVars;
@@ -2561,6 +2566,80 @@ function App({firebaseConfig,onResetConfig}){
   // প্রতিটা অর্ডার আইটেমে মডেলের নামের একটা কপি (variantBn) সংরক্ষিত থাকে — প্রিন্ট শীট,
   // রিসিপ্ট, ইতিহাস সবখানে এই কপিটাই দেখানো হয়, ডেটাবেস থেকে সরাসরি না। তাই শুধু ডেটাবেসে
   // নাম বদলালে পুরনো অর্ডারে পুরনো নামই থেকে যেত — এখন প্রতিটা কপিও একসাথে আপডেট হয় ──
+  // ── মডেল অন্য ক্যাটাগরিতে সরালে, সেই মডেল ব্যবহার করা প্রতিটা অর্ডারের ক্যাটাগরি-সংযোগও
+  // (catKey) আপডেট করতে হয় — না হলে অর্ডার আর ডেটাবেসের সংযোগ ছিঁড়ে যাবে ──
+  // ── ডেটাবেসে কাঠের মাপ বদলালে, সেই মডেলের এখনো-অসম্পূর্ণ অর্ডারগুলোতেও মাপ আপডেট হয়।
+  // ডেলিভারি হয়ে যাওয়া অর্ডার ইচ্ছাকৃতভাবে বাদ — ওগুলো তখনকার মাপেই বানানো হয়েছে, বদলে
+  // দিলে লাভ-ক্ষতির ইতিহাস মিথ্যা হয়ে যাবে ──
+  const propagateWoodChange=async(catKey,varKey,newSections)=>{
+    const fs=fsRef.current;
+    const affected=(ordersRef.current||[]).filter(o=>!o.delivered&&!o.cancelled&&(o.items||[]).some(it=>it.catKey===catKey&&it.varKey===varKey));
+    if(!affected.length)return;
+    const applyTo=(items)=>(items||[]).map(it=>it.catKey===catKey&&it.varKey===varKey?{...it,sections:JSON.parse(JSON.stringify(newSections))}:it);
+    setOrders(prev=>prev.map(o=>{
+      if(o.delivered||o.cancelled)return o;
+      if(!(o.items||[]).some(it=>it.catKey===catKey&&it.varKey===varKey))return o;
+      return{...o,items:applyTo(o.items)};
+    }));
+    if(!fs)return;
+    const chunks=[];
+    for(let i=0;i<affected.length;i+=400)chunks.push(affected.slice(i,i+400));
+    for(const chunk of chunks){
+      try{
+        const batch=fs.batch();
+        chunk.forEach(o=>batch.set(fs.collection("orders").doc(o.no),{items:applyTo(o.items)},{merge:true}));
+        await withTimeout(batch.commit(),45000,"সময়সীমা পার");
+      }catch(e){alert(`⚠️ কিছু অর্ডারে নতুন কাঠের মাপ পাঠাতে সমস্যা হয়েছে (${e.message}) — অ্যাপ খোলা রাখলে আবার চেষ্টা হবে।`)}
+    }
+    if(affected.length)alert(`✅ ${affected.length}টা অসম্পূর্ণ অর্ডারে নতুন কাঠের মাপ বসানো হয়েছে। ডেলিভারি হয়ে যাওয়া অর্ডার অপরিবর্তিত আছে (ইতিহাস ঠিক রাখতে)।`);
+  };
+  // ── দুটো মডেল একত্র (merge) করা: সব অর্ডারে পুরনো মডেলের সংযোগ নতুন মডেলে বদলে দেওয়া হয়,
+  // সাথে নাম ও কোডও। ডেলিভারড অর্ডারের কাঠের মাপ অপরিবর্তিত থাকে (ইতিহাস), অসম্পূর্ণ
+  // অর্ডারে রাখা-মডেলের মাপ বসে যায় ──
+  const mergeVariantsAcrossOrders=async(fromCat,fromVar,toCat,toVar,keptVariant)=>{
+    const fs=fsRef.current;
+    const affected=(ordersRef.current||[]).filter(o=>(o.items||[]).some(it=>it.catKey===fromCat&&it.varKey===fromVar));
+    const remap=(o)=>(o.items||[]).map(it=>{
+      if(!(it.catKey===fromCat&&it.varKey===fromVar))return it;
+      const base={...it,catKey:toCat,varKey:toVar,variantBn:keptVariant.bn,code:keptVariant.code||it.code};
+      if(!o.delivered&&!o.cancelled&&keptVariant.sections&&keptVariant.sections.length)base.sections=JSON.parse(JSON.stringify(keptVariant.sections));
+      return base;
+    });
+    setOrders(prev=>prev.map(o=>(o.items||[]).some(it=>it.catKey===fromCat&&it.varKey===fromVar)?{...o,items:remap(o)}:o));
+    if(fs&&affected.length){
+      const chunks=[];
+      for(let i=0;i<affected.length;i+=400)chunks.push(affected.slice(i,i+400));
+      for(const chunk of chunks){
+        try{
+          const batch=fs.batch();
+          chunk.forEach(o=>batch.set(fs.collection("orders").doc(o.no),{items:remap(o)},{merge:true}));
+          await withTimeout(batch.commit(),45000,"সময়সীমা পার");
+        }catch(e){alert(`⚠️ কিছু অর্ডার একত্র করতে সমস্যা হয়েছে (${e.message}) — অ্যাপ খোলা রাখলে আবার চেষ্টা হবে।`)}
+      }
+    }
+    alert(`✅ একত্র করা সম্পন্ন। ${affected.length}টা অর্ডার নতুন মডেলের সাথে যুক্ত হয়েছে।`);
+  };
+  const propagateVariantMove=async(fromCat,toCat,varKey)=>{
+    const fs=fsRef.current;
+    const affected=(ordersRef.current||[]).filter(o=>(o.items||[]).some(it=>it.catKey===fromCat&&it.varKey===varKey));
+    setOrders(prev=>prev.map(o=>{
+      if(!(o.items||[]).some(it=>it.catKey===fromCat&&it.varKey===varKey))return o;
+      return{...o,items:o.items.map(it=>it.catKey===fromCat&&it.varKey===varKey?{...it,catKey:toCat}:it)};
+    }));
+    if(!fs||!affected.length)return;
+    const chunks=[];
+    for(let i=0;i<affected.length;i+=400)chunks.push(affected.slice(i,i+400));
+    for(const chunk of chunks){
+      try{
+        const batch=fs.batch();
+        chunk.forEach(o=>{
+          const newItems=(o.items||[]).map(it=>it.catKey===fromCat&&it.varKey===varKey?{...it,catKey:toCat}:it);
+          batch.set(fs.collection("orders").doc(o.no),{items:newItems},{merge:true});
+        });
+        await withTimeout(batch.commit(),45000,"সময়সীমা পার");
+      }catch(e){alert(`⚠️ কিছু অর্ডারে নতুন ক্যাটাগরি পাঠাতে সমস্যা হয়েছে (${e.message}) — অ্যাপ খোলা রাখলে স্বয়ংক্রিয়ভাবে আবার চেষ্টা হবে।`)}
+    }
+  };
   const propagateVariantRename=async(catKey,varKey,newVariantBn)=>{
     const fs=fsRef.current;
     const affected=(ordersRef.current||[]).filter(o=>(o.items||[]).some(it=>it.catKey===catKey&&it.varKey===varKey));
@@ -2784,7 +2863,7 @@ function App({firebaseConfig,onResetConfig}){
   if(page==="preview")return<Preview order={viewed||draft} onBack={goBack} slip={slip} setSlip={setSlip} onUpdate={updateOrder} onAddPayment={addOrderPayment} onSetDelivered={setOrderDelivered} onDelete={deleteOrderPermanently} db={db} saveDb={saveDb} carpenters={carpenters} saveCarpenters={saveCarpenters} galleries={galleries} saveGalleryEntry={saveGalleryEntry} woodSettings={woodSettingsWithBands} laborSettings={laborSettings} workers={workers} allOrders={orders} rackSplits={rackSplits}/>;
   if(page==="form")return<Form onSave={saveOrder} onBack={goBack} db={db} saveDb={saveDb} galleries={galleries} woodSettings={woodSettings} laborSettings={laborSettings} orders={orders} getNextOrderNumber={getNextOrderNumber}/>;
   if(page==="history")return<Hist orders={orders} db={db} onBack={goBack} onView={o=>navigate({page:"preview",orderNo:o.no,slip:0})} highlightNo={highlightNo} q={curScreen.q||""} setQ={q=>replaceTop({...curScreen,q})} statusFilter={curScreen.statusFilter||"all"} setStatusFilter={statusFilter=>replaceTop({...curScreen,statusFilter})} catFilter={curScreen.catFilter||"all"} setCatFilter={catFilter=>replaceTop({...curScreen,catFilter})} sortMode={curScreen.sortMode||"recent"} setSortMode={sortMode=>replaceTop({...curScreen,sortMode})}/>;
-  if(page==="manage")return<ManageDB db={db} saveDb={saveDb} galleries={galleries} saveGalleryEntry={saveGalleryEntry} onBack={goBack} navigate={navigate} goBack={goBack} replaceTop={replaceTop} curScreen={curScreen} highlightNo={highlightNo} onRenameVariant={propagateVariantRename}/>;
+  if(page==="manage")return<ManageDB db={db} saveDb={saveDb} galleries={galleries} saveGalleryEntry={saveGalleryEntry} onBack={goBack} navigate={navigate} goBack={goBack} replaceTop={replaceTop} curScreen={curScreen} highlightNo={highlightNo} onRenameVariant={propagateVariantRename} onMoveVariant={propagateVariantMove} onWoodChange={propagateWoodChange} onMergeVariants={mergeVariantsAcrossOrders}/>;
   if(page==="woodstock")return<WoodStockPage woodLots={woodLots} saveWoodLots={saveWoodLots} addLotPayment={addLotPayment} woodSettings={woodSettingsWithBands} saveWoodSettings={saveWoodSettings} laborSettings={laborSettings} saveLaborSettings={saveLaborSettings} rackSplits={rackSplits} addRackSplit={addRackSplit} rackBands={rackBands} addRackBand={addRackBand} removeRackBand={removeRackBand} payrollWeeks={payrollWeeks} workers={workers} orders={orders} expenses={expenses} onBack={goBack} view={curScreen.view||"list"} lotId={curScreen.lotId||null} onOpenList={()=>navigate({page:"woodstock",view:"list"})} onOpenDetail={lotId=>navigate({page:"woodstock",view:"detail",lotId})} onOpenNew={()=>navigate({page:"woodstock",view:"new"})} onOpenRates={()=>navigate({page:"woodstock",view:"rates"})} onOpenUsage={()=>navigate({page:"woodstock",view:"usage"})} highlightNo={highlightNo}/>;
   if(page==="expense")return<ExpensePage expenses={expenses} onSave={saveExpense} onBack={goBack}/>;
   if(page==="payroll")return<PayrollPage workers={workers} saveWorker={saveWorker} deleteWorker={deleteWorker} payrollWeeks={payrollWeeks} savePayrollWeek={savePayrollWeek} updateAttendance={updateAttendance} addAdvanceEntry={addAdvanceEntry} removeAdvanceEntry={removeAdvanceEntry} onBack={goBack}/>;
@@ -5612,7 +5691,7 @@ function PayrollPage({workers,saveWorker,deleteWorker,payrollWeeks,savePayrollWe
 }
 
 /* ── MANAGE DB ── */
-function ManageDB({db,saveDb,galleries,saveGalleryEntry,onBack,navigate,goBack,replaceTop,curScreen,highlightNo,onRenameVariant}){
+function ManageDB({db,saveDb,galleries,saveGalleryEntry,onBack,navigate,goBack,replaceTop,curScreen,highlightNo,onRenameVariant,onMoveVariant,onWoodChange,onMergeVariants}){
   // ── এই পেজের ভেতরের নেভিগেশন (তালিকা ↔ + ক্যাটাগরি ↔ + ভেরিয়েন্ট ↔ কাঠ সম্পাদনা ↔ ছবি) এখন
   // নিজের সাময়িক মেমোরিতে না — অ্যাপের মূল নেভিগেশন-স্ট্যাকে থাকে (Hist-এর ফিল্টারের মতোই),
   // যাতে ফোনের ব্যাক বাটন এক ধাপ করেই পেছাতে পারে, সরাসরি ড্যাশবোর্ডে চলে না যায় ──
@@ -5653,7 +5732,7 @@ function ManageDB({db,saveDb,galleries,saveGalleryEntry,onBack,navigate,goBack,r
     saveDb(nd);setNewVar({catKey:"",key:"",bn:"",code:""});goBack();
   };
   const openEdit=(catK,varK)=>{navigate({page:"manage",tab:"edit",selCat:catK,selVar:varK})};
-  const saveEdit=()=>{const nd=JSON.parse(JSON.stringify(db));nd[selCat].variants[selVar].sections=editSections;saveDb(nd);goBack()};
+  const saveEdit=()=>{const nd=JSON.parse(JSON.stringify(db));nd[selCat].variants[selVar].sections=editSections;saveDb(nd);if(onWoodChange)onWoodChange(selCat,selVar,editSections);goBack()};
   const addSection=()=>setEditSections(prev=>[...prev,{name:"নতুন সেকশন",pieces:[]}]);
   const addPiece=()=>{const ns=JSON.parse(JSON.stringify(editSections));ns[newPiece.sectionIdx].pieces.push({bn:newPiece.bn,pc:parseInt(newPiece.pc)||1,h:parseFloat(newPiece.h)||72,l:parseFloat(newPiece.l)||24,w:parseFloat(newPiece.w)||1});setEditSections(ns);setNewPiece({...newPiece,bn:""})};
   const removePiece=(si,pi)=>{const ns=JSON.parse(JSON.stringify(editSections));ns[si].pieces.splice(pi,1);setEditSections(ns)};
@@ -5706,10 +5785,67 @@ function ManageDB({db,saveDb,galleries,saveGalleryEntry,onBack,navigate,goBack,r
   const[renamingCat,setRenamingCat]=useState(null);
   const[renameVal,setRenameVal]=useState("");
   const startRenameCat=(catK)=>{setRenamingCat(catK);setRenameVal(db[catK].bn)};
-  const saveRenameCat=(catK)=>{const nd=JSON.parse(JSON.stringify(db));nd[catK].bn=renameVal.trim()||nd[catK].bn;saveDb(nd);setRenamingCat(null)};
+  const saveRenameCat=(catK)=>{const nd=JSON.parse(JSON.stringify(db));const newName=renameVal.trim()||nd[catK].bn;nd[catK].bn=newName;nd[catK].en="";saveDb(nd);setRenamingCat(null)};
   const[renamingVar,setRenamingVar]=useState(null);
   const[renameVarVal,setRenameVarVal]=useState("");
+  const[mergeSelectFirst,setMergeSelectFirst]=useState(null); // "catK|varK" — প্রথম যেটাতে 🔗 চাপা হয়েছে
+  // ── একই মডেল দুই নামে সেভ হয়ে গেলে একত্র করা। কোন মডেলের কাঠের মাপ রাখা হবে তা প্রতিবার
+  // জিজ্ঞেস করা হয় (দুটোতেই মাপ থাকলে), কারণ ভুল মাপ রেখে দিলে সব হিসাব ভুল হয়ে যাবে ──
+  const doMergeVariants=async(fromCat,fromVar,toKey)=>{
+    const [toCat,toVar]=toKey.split("|");
+    if(!toCat||!toVar||!db[toCat]||!db[toCat].variants[toVar]){setMergeSelectFirst(null);return}
+    if(fromCat===toCat&&fromVar===toVar){setMergeSelectFirst(null);return}
+    const src=db[fromCat].variants[fromVar],dst=db[toCat].variants[toVar];
+    const srcHasWood=!isEmptyWood(src),dstHasWood=!isEmptyWood(dst);
+    let keptSections=dst.sections||[];
+    if(srcHasWood&&dstHasWood){
+      const keepSource=confirm(`দুটো মডেলেই কাঠের মাপ বসানো আছে — কোনটা রাখবেন?\n\nOK চাপলে: "${src.bn}"-এর মাপ রাখা হবে\nCancel চাপলে: "${dst.bn}"-এর মাপ রাখা হবে`);
+      keptSections=keepSource?(src.sections||[]):(dst.sections||[]);
+    }else if(srcHasWood&&!dstHasWood){
+      keptSections=src.sections||[];
+    }
+    if(!confirm(`"${src.bn}" মডেলটি "${dst.bn}"-এর সাথে একত্র করা হবে।\n\n• "${src.bn}" ব্যবহার করা সব অর্ডার "${dst.bn}"-এ যুক্ত হবে\n• ডেলিভারি হওয়া অর্ডারের কাঠের মাপ অপরিবর্তিত থাকবে\n• "${src.bn}" মডেলটি ডেটাবেস থেকে সরে যাবে\n\nএটা ফিরিয়ে আনা যাবে না। চালিয়ে যাবেন?`)){setMergeSelectFirst(null);return}
+    const nd=JSON.parse(JSON.stringify(db));
+    nd[toCat].variants[toVar].sections=keptSections;
+    delete nd[fromCat].variants[fromVar];
+    if(fromCat==="__recovered__"&&Object.keys(nd[fromCat].variants).length===0)delete nd[fromCat];
+    saveDb(nd);
+    // ছবি একত্র — রাখা-মডেলে কভার না থাকলে সরানো-মডেলের কভার বসে যায়
+    const srcG=galleries&&galleries[`${fromCat}__${fromVar}`];
+    const dstG=galleries&&galleries[`${toCat}__${toVar}`];
+    if(srcG&&saveGalleryEntry){
+      const mergedGallery=[...((dstG&&dstG.gallery)||[]),...((srcG.gallery)||[])].filter((v,i,a)=>a.indexOf(v)===i);
+      saveGalleryEntry(toCat,toVar,{gallery:mergedGallery,coverImage:(dstG&&dstG.coverImage)||srcG.coverImage||null});
+    }
+    if(onMergeVariants)await onMergeVariants(fromCat,fromVar,toCat,toVar,{bn:nd[toCat].variants[toVar].bn,code:nd[toCat].variants[toVar].code,sections:keptSections});
+    setMergeSelectFirst(null);
+  };
   const startRenameVar=(catK,varK)=>{setRenamingVar(catK+"|"+varK);setRenameVarVal(db[catK].variants[varK].bn)};
+  // ── মডেল সরানো: একটা মডেলকে অন্য ক্যাটাগরিতে নিয়ে যাওয়া। কাঠের মাপ ও ছবি সব সাথে যায়,
+  // আর এই মডেল ব্যবহার করা প্রতিটা অর্ডারের সংযোগও (catKey) আপডেট হয়, যাতে কিছু ছিঁড়ে না যায় ──
+  const[movingVar,setMovingVar]=useState(null); // "catK|varK"
+  const moveVariant=(fromCat,varK,toCat)=>{
+    if(!fromCat||!toCat||fromCat===toCat||!db[fromCat]||!db[toCat]){setMovingVar(null);return}
+    const nd=JSON.parse(JSON.stringify(db));
+    const theVar=nd[fromCat].variants[varK];
+    if(!theVar){setMovingVar(null);return}
+    if(nd[toCat].variants&&nd[toCat].variants[varK]){
+      alert("⚠️ এই ক্যাটাগরিতে একই কোডের মডেল আগেই আছে — সরানো হলো না।");
+      setMovingVar(null);return;
+    }
+    if(!nd[toCat].variants)nd[toCat].variants={};
+    nd[toCat].variants[varK]=theVar;
+    delete nd[fromCat].variants[varK];
+    // পুনরুদ্ধার-ক্যাটাগরি ফাঁকা হয়ে গেলে সেটাও সরিয়ে দেওয়া হয়
+    if(fromCat==="__recovered__"&&Object.keys(nd[fromCat].variants).length===0)delete nd[fromCat];
+    saveDb(nd);
+    // ছবি সরানো — গ্যালারির চাবি ক্যাটাগরি ধরে বানানো, তাই নতুন চাবিতে কপি করতে হয়
+    const oldKey=`${fromCat}__${varK}`,newKey=`${toCat}__${varK}`;
+    const g=galleries&&galleries[oldKey];
+    if(g&&saveGalleryEntry)saveGalleryEntry(toCat,varK,{gallery:g.gallery||[],coverImage:g.coverImage||null});
+    if(onMoveVariant)onMoveVariant(fromCat,toCat,varK);
+    setMovingVar(null);
+  };
   const saveRenameVar=(catK,varK)=>{const nd=JSON.parse(JSON.stringify(db));const newName=renameVarVal.trim()||nd[catK].variants[varK].bn;nd[catK].variants[varK].bn=newName;saveDb(nd);if(onRenameVariant)onRenameVariant(catK,varK,newName);setRenamingVar(null)};
 
   const inp={width:"100%",border:"1.5px solid #e0e0e0",borderRadius:8,padding:"9px 11px",fontSize:12,outline:"none"};
@@ -5723,6 +5859,10 @@ function ManageDB({db,saveDb,galleries,saveGalleryEntry,onBack,navigate,goBack,r
     </div>
     <div style={{padding:"14px",maxWidth:540,margin:"0 auto"}}>
       {tab==="list"&&<>
+        {mergeSelectFirst&&(()=>{const[fc,fv]=mergeSelectFirst.split("|");const fName=db[fc]&&db[fc].variants[fv]&&db[fc].variants[fv].bn;return<div style={{position:"sticky",top:0,zIndex:5,background:"#b91c1c",color:"white",borderRadius:10,padding:"10px 14px",marginBottom:12,display:"flex",alignItems:"center",gap:8,boxShadow:"0 2px 8px rgba(0,0,0,.15)"}}>
+          <span style={{flex:1,fontSize:12,fontWeight:600}}>🔗 "{fName}" নির্বাচিত — যে মডেলের সাথে মেশাবেন সেটাতে চাপুন</span>
+          <button onClick={()=>setMergeSelectFirst(null)} style={{background:"rgba(255,255,255,.2)",border:"none",color:"white",borderRadius:6,padding:"5px 10px",fontSize:11,fontWeight:700,flexShrink:0}}>বাতিল</button>
+        </div>;})()}
         {Object.entries(db).map(([catK,cat])=><div key={catK} style={{background:"white",borderRadius:10,marginBottom:12,overflow:"hidden",boxShadow:"0 1px 4px rgba(0,0,0,.07)"}}>
           <div style={{background:"#6d28d9",color:"white",padding:"8px 12px",display:"flex",justifyContent:"space-between",alignItems:"center",gap:8}}>
             {renamingCat===catK?<>
@@ -5730,25 +5870,41 @@ function ManageDB({db,saveDb,galleries,saveGalleryEntry,onBack,navigate,goBack,r
               <button onClick={()=>saveRenameCat(catK)} style={{background:"white",color:"#6d28d9",border:"none",borderRadius:6,padding:"5px 9px",fontSize:11,fontWeight:700}}>✓</button>
               <button onClick={()=>setRenamingCat(null)} style={{background:"rgba(255,255,255,.2)",color:"white",border:"none",borderRadius:6,padding:"5px 9px",fontSize:11}}>✕</button>
             </>:<>
-              <span style={{fontWeight:700,fontSize:13,flex:1}}>{cat.bn} ({cat.en})</span>
+              <span style={{fontWeight:700,fontSize:13,flex:1}}>{cat.bn}{cat.en&&cat.en!==cat.bn&&!(cat.bn||"").includes(cat.en)?` (${cat.en})`:""}</span>
               <button onClick={()=>startRenameCat(catK)} style={{background:"rgba(255,255,255,.2)",border:"none",color:"white",borderRadius:6,padding:"4px 9px",fontSize:11}}>✏️ নাম বদলান</button>
             </>}
           </div>
-          {Object.entries(cat.variants).sort((a,b)=>(a[1].bn||"").localeCompare(b[1].bn||"","bn")).map(([vK,v])=><div key={vK} style={{padding:"8px 12px",borderBottom:"1px solid #f0f0f0",background:highlightNo===("variant:"+catK+"__"+vK)?"#e0f2fe":"transparent",transition:"background .4s"}}>
+          {Object.entries(cat.variants).sort((a,b)=>(a[1].bn||"").localeCompare(b[1].bn||"","bn")).map(([vK,v])=>{
+            const thisKey=catK+"|"+vK;
+            const isSelectedForMerge=mergeSelectFirst===thisKey;
+            return<div key={vK} style={{padding:"8px 12px",borderBottom:"1px solid #f0f0f0",background:isSelectedForMerge?"#fef2f2":highlightNo===("variant:"+catK+"__"+vK)?"#e0f2fe":"transparent",border:isSelectedForMerge?"2px solid #fca5a5":"none",borderRadius:isSelectedForMerge?8:0,transition:"background .4s"}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:6}}>
-            {renamingVar===catK+"|"+vK?<>
+            {movingVar===thisKey?<>
+              <div style={{flex:1,fontSize:11,fontWeight:600,color:"#6d28d9"}}>কোন ক্যাটাগরিতে সরাবেন?</div>
+              <select onChange={e=>{if(e.target.value)moveVariant(catK,vK,e.target.value)}} defaultValue="" style={{flex:1,border:"1px solid #ddd",borderRadius:6,padding:"5px 6px",fontSize:11}} autoFocus>
+                <option value="">-- বাছুন --</option>
+                {Object.entries(db).filter(([k])=>k!==catK).map(([k,c])=><option key={k} value={k}>{c.bn}</option>)}
+              </select>
+              <button onClick={()=>setMovingVar(null)} style={{background:"#f3f4f6",border:"none",borderRadius:6,padding:"5px 9px",fontSize:11}}>✕</button>
+            </>:renamingVar===thisKey?<>
               <input value={renameVarVal} onChange={e=>setRenameVarVal(e.target.value)} style={{flex:1,border:"1px solid #ddd",borderRadius:6,padding:"5px 8px",fontSize:12,outline:"none"}} autoFocus/>
               <button onClick={()=>saveRenameVar(catK,vK)} style={{background:"#6d28d9",color:"white",border:"none",borderRadius:6,padding:"5px 9px",fontSize:11,fontWeight:700}}>✓</button>
               <button onClick={()=>setRenamingVar(null)} style={{background:"#f3f4f6",border:"none",borderRadius:6,padding:"5px 9px",fontSize:11}}>✕</button>
             </>:<>
               {galleries&&galleries[`${catK}__${vK}`]&&galleries[`${catK}__${vK}`].coverImage&&<img src={galleries[`${catK}__${vK}`].coverImage} onClick={e=>{e.stopPropagation();openLightbox(galleries[`${catK}__${vK}`].coverImage)}} style={{width:32,height:32,objectFit:"cover",borderRadius:6,border:"1px solid #eee",flexShrink:0,cursor:"pointer"}} alt=""/>}
               <div style={{flex:1}}><div style={{fontSize:12,fontWeight:600}}>{isEmptyWood(v)?"⚠️ ":""}{v.bn}</div><div style={{fontSize:10,color:"#888",fontFamily:"monospace"}}>Code: {v.code}{isEmptyWood(v)?" — কাঠের মাপ ফাঁকা":""}{galleries&&galleries[`${catK}__${vK}`]&&galleries[`${catK}__${vK}`].gallery&&galleries[`${catK}__${vK}`].gallery.length?` · ${galleries[`${catK}__${vK}`].gallery.length} ছবি`:""}</div></div>
+              <button onClick={()=>{
+                if(!mergeSelectFirst)setMergeSelectFirst(thisKey);
+                else if(mergeSelectFirst===thisKey)setMergeSelectFirst(null);
+                else{const[fc,fv]=mergeSelectFirst.split("|");doMergeVariants(fc,fv,thisKey)}
+              }} style={{background:isSelectedForMerge?"#b91c1c":"#fef2f2",border:"none",borderRadius:6,padding:"5px 8px",color:isSelectedForMerge?"white":"#b91c1c",fontSize:10,fontWeight:600}}>{isSelectedForMerge?"✓ নির্বাচিত":mergeSelectFirst?"🔗 এটার সাথে মেশান":"🔗 মেশান"}</button>
+              <button onClick={()=>setMovingVar(thisKey)} style={{background:"#ecfdf5",border:"none",borderRadius:6,padding:"5px 8px",color:"#047857",fontSize:10,fontWeight:600}}>📁 সরান</button>
               <button onClick={()=>startRenameVar(catK,vK)} style={{background:"#f5f3ff",border:"none",borderRadius:6,padding:"5px 8px",color:"#6d28d9",fontSize:10,fontWeight:600}}>✏️ নাম</button>
               <button onClick={()=>openGallery(catK,vK)} style={{background:"#fef3c7",border:"none",borderRadius:6,padding:"5px 8px",color:"#92400e",fontSize:10,fontWeight:600}}>🖼️ ছবি</button>
               <button onClick={()=>openEdit(catK,vK)} style={{background:"#f5f3ff",border:"none",borderRadius:6,padding:"5px 10px",color:"#6d28d9",fontSize:11,fontWeight:600}}>কাঠ</button>
             </>}
             </div>
-          </div>)}
+          </div>;})}
         </div>)}
         {/* ⚠️ "ডিফল্টে রিসেট করুন" বাটন ইচ্ছাকৃতভাবে সরিয়ে দেওয়া হলো — বছরের পর বছর ধরে
         সংরক্ষিত মডেল ও কাঠের মাপ পুরোপুরি মুছে ফেলার মতো কোনো বাটন লাইভ ব্যবসার অ্যাপে
