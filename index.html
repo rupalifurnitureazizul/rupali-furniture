@@ -104,7 +104,7 @@ function compressImage(file,maxDim=1200,quality=0.82,maxBytes=110000){
 /* ── FULL-RESOLUTION LOCAL FOLDER STORAGE (desktop Chrome/Edge/Brave only) ──
    Original, uncompressed images are saved as real files in a folder you choose
    on your computer. Only a small compressed thumbnail syncs to the cloud/mobile. */
-const BUILD_TAG="4.14";
+const BUILD_TAG="4.17";
 const FS_SUPPORTED=typeof window!=="undefined"&&"showDirectoryPicker" in window;
 function idbOpen(){
   return new Promise((resolve,reject)=>{
@@ -2354,9 +2354,34 @@ function App({firebaseConfig,onResetConfig}){
                 });
               });
               const needsPush=addedCats||addedVars||filledWood;
-              if(needsPush){
+              // ── অর্ডারে ব্যবহৃত কিন্তু ডেটাবেসে (সার্ভার+স্থানীয় মিলিয়েও) একেবারেই নেই
+              // এমন মডেল — এটা সবচেয়ে গুরুতর অবস্থা, কারণ এই মডেল হারিয়ে গেলে কাঠের হিসাব,
+              // স্টক, লাভ-ক্ষতি, কার্পেন্টার/পরিবহন শীট সবকিছু ভেঙে যায়। অর্ডারে সংরক্ষিত
+              // নাম দিয়ে একটা এন্ট্রি ফিরিয়ে আনা হয় (কাঠের মাপ ফাঁকা থাকবে, "⚠️" চিহ্ন দেখিয়ে
+              // হাতে বসানোর জন্য চিহ্নিত হবে) — অন্তত মডেলটা আবার দৃশ্যমান হয়, হিসাব ভাঙে না ──
+              let restoredCats=0,restoredVars=0;
+              (ordersRef.current||[]).forEach(o=>{
+                (o.items||[]).forEach(it=>{
+                  if(!it.catKey||!it.varKey)return;
+                  if(!merged[it.catKey]){
+                    merged[it.catKey]={bn:"পুনরুদ্ধার করা ফার্নিচার",variants:{}};
+                    restoredCats++;
+                  }
+                  if(!merged[it.catKey].variants)merged[it.catKey].variants={};
+                  if(!merged[it.catKey].variants[it.varKey]){
+                    merged[it.catKey].variants[it.varKey]={bn:it.variantBn||it.varKey,code:it.code||"",sections:[]};
+                    restoredVars++;
+                  }
+                });
+              });
+              const needsPush2=needsPush||restoredCats||restoredVars;
+              if(needsPush2){
                 await withTimeout(fs2.doc("meta/db").set(merged),45000,"সময়সীমা পার");
-                otherSyncStatus.db=`${addedCats+addedVars}টা মডেল, ${filledWood}টা কাঠের মাপ পাঠানো হয়েছে`;
+                const parts=[];
+                if(addedCats+addedVars)parts.push(`${addedCats+addedVars}টা মডেল পাঠানো`);
+                if(filledWood)parts.push(`${filledWood}টা কাঠের মাপ পাঠানো`);
+                if(restoredCats+restoredVars)parts.push(`${restoredCats+restoredVars}টা মডেল অর্ডার থেকে পুনরুদ্ধার`);
+                otherSyncStatus.db=parts.join(", ")+" হয়েছে";
               }else{
                 otherSyncStatus.db="মিলে আছে";
               }
@@ -2531,6 +2556,34 @@ function App({firebaseConfig,onResetConfig}){
   const saveDb=(newDb)=>{
     setDb(newDb);
     if(fsRef.current)fsRef.current.doc("meta/db").set(newDb).catch(err=>alert("⚠️ ক্লাউডে সেভ করতে সমস্যা হয়েছে: "+err.message));
+  };
+  // ── মডেলের নাম বদলালে, সেই মডেল ব্যবহার করা প্রতিটা অর্ডারেও নামটা সাথে সাথে বদলে দেওয়া হয়।
+  // প্রতিটা অর্ডার আইটেমে মডেলের নামের একটা কপি (variantBn) সংরক্ষিত থাকে — প্রিন্ট শীট,
+  // রিসিপ্ট, ইতিহাস সবখানে এই কপিটাই দেখানো হয়, ডেটাবেস থেকে সরাসরি না। তাই শুধু ডেটাবেসে
+  // নাম বদলালে পুরনো অর্ডারে পুরনো নামই থেকে যেত — এখন প্রতিটা কপিও একসাথে আপডেট হয় ──
+  const propagateVariantRename=async(catKey,varKey,newVariantBn)=>{
+    const fs=fsRef.current;
+    const affected=(ordersRef.current||[]).filter(o=>(o.items||[]).some(it=>it.catKey===catKey&&it.varKey===varKey));
+    if(!affected.length)return;
+    // স্থানীয় অবস্থা সাথে সাথে আপডেট — অপেক্ষা না করেই সব ডিভাইসে যেন দেখা যায়
+    setOrders(prev=>prev.map(o=>{
+      if(!(o.items||[]).some(it=>it.catKey===catKey&&it.varKey===varKey))return o;
+      return{...o,items:o.items.map(it=>it.catKey===catKey&&it.varKey===varKey?{...it,variantBn:newVariantBn}:it)};
+    }));
+    if(!fs)return;
+    // Firestore ব্যাচ-লেখায় সর্বোচ্চ ৫০০টা — নিরাপদ থাকতে ৪০০ করে ভাগ করা
+    const chunks=[];
+    for(let i=0;i<affected.length;i+=400)chunks.push(affected.slice(i,i+400));
+    for(const chunk of chunks){
+      try{
+        const batch=fs.batch();
+        chunk.forEach(o=>{
+          const newItems=(o.items||[]).map(it=>it.catKey===catKey&&it.varKey===varKey?{...it,variantBn:newVariantBn}:it);
+          batch.set(fs.collection("orders").doc(o.no),{items:newItems},{merge:true});
+        });
+        await withTimeout(batch.commit(),45000,"সময়সীমা পার");
+      }catch(e){alert(`⚠️ কিছু অর্ডারে নতুন নাম পাঠাতে সমস্যা হয়েছে (${e.message}) — অ্যাপ খোলা রাখলে স্বয়ংক্রিয়ভাবে আবার চেষ্টা হবে।`)}
+    }
   };
   // ── ক্রমিক অর্ডার নম্বর — Firestore transaction দিয়ে, যাতে দুইটা ডিভাইস একই সময়ে
   // নতুন অর্ডার শুরু করলেও কখনো একই নম্বর না পায়। ফরম্যাট আগের মতোই RF-YYYYMMDD-ক্রমিক,
@@ -2731,7 +2784,7 @@ function App({firebaseConfig,onResetConfig}){
   if(page==="preview")return<Preview order={viewed||draft} onBack={goBack} slip={slip} setSlip={setSlip} onUpdate={updateOrder} onAddPayment={addOrderPayment} onSetDelivered={setOrderDelivered} onDelete={deleteOrderPermanently} db={db} saveDb={saveDb} carpenters={carpenters} saveCarpenters={saveCarpenters} galleries={galleries} saveGalleryEntry={saveGalleryEntry} woodSettings={woodSettingsWithBands} laborSettings={laborSettings} workers={workers} allOrders={orders} rackSplits={rackSplits}/>;
   if(page==="form")return<Form onSave={saveOrder} onBack={goBack} db={db} saveDb={saveDb} galleries={galleries} woodSettings={woodSettings} laborSettings={laborSettings} orders={orders} getNextOrderNumber={getNextOrderNumber}/>;
   if(page==="history")return<Hist orders={orders} db={db} onBack={goBack} onView={o=>navigate({page:"preview",orderNo:o.no,slip:0})} highlightNo={highlightNo} q={curScreen.q||""} setQ={q=>replaceTop({...curScreen,q})} statusFilter={curScreen.statusFilter||"all"} setStatusFilter={statusFilter=>replaceTop({...curScreen,statusFilter})} catFilter={curScreen.catFilter||"all"} setCatFilter={catFilter=>replaceTop({...curScreen,catFilter})} sortMode={curScreen.sortMode||"recent"} setSortMode={sortMode=>replaceTop({...curScreen,sortMode})}/>;
-  if(page==="manage")return<ManageDB db={db} saveDb={saveDb} galleries={galleries} saveGalleryEntry={saveGalleryEntry} onBack={goBack} navigate={navigate} goBack={goBack} replaceTop={replaceTop} curScreen={curScreen} highlightNo={highlightNo}/>;
+  if(page==="manage")return<ManageDB db={db} saveDb={saveDb} galleries={galleries} saveGalleryEntry={saveGalleryEntry} onBack={goBack} navigate={navigate} goBack={goBack} replaceTop={replaceTop} curScreen={curScreen} highlightNo={highlightNo} onRenameVariant={propagateVariantRename}/>;
   if(page==="woodstock")return<WoodStockPage woodLots={woodLots} saveWoodLots={saveWoodLots} addLotPayment={addLotPayment} woodSettings={woodSettingsWithBands} saveWoodSettings={saveWoodSettings} laborSettings={laborSettings} saveLaborSettings={saveLaborSettings} rackSplits={rackSplits} addRackSplit={addRackSplit} rackBands={rackBands} addRackBand={addRackBand} removeRackBand={removeRackBand} payrollWeeks={payrollWeeks} workers={workers} orders={orders} expenses={expenses} onBack={goBack} view={curScreen.view||"list"} lotId={curScreen.lotId||null} onOpenList={()=>navigate({page:"woodstock",view:"list"})} onOpenDetail={lotId=>navigate({page:"woodstock",view:"detail",lotId})} onOpenNew={()=>navigate({page:"woodstock",view:"new"})} onOpenRates={()=>navigate({page:"woodstock",view:"rates"})} onOpenUsage={()=>navigate({page:"woodstock",view:"usage"})} highlightNo={highlightNo}/>;
   if(page==="expense")return<ExpensePage expenses={expenses} onSave={saveExpense} onBack={goBack}/>;
   if(page==="payroll")return<PayrollPage workers={workers} saveWorker={saveWorker} deleteWorker={deleteWorker} payrollWeeks={payrollWeeks} savePayrollWeek={savePayrollWeek} updateAttendance={updateAttendance} addAdvanceEntry={addAdvanceEntry} removeAdvanceEntry={removeAdvanceEntry} onBack={goBack}/>;
@@ -2932,6 +2985,24 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
       const l=bnDur[d.id];
       if(l.length>=2){const av=l.reduce((s,v)=>s+v,0)/l.length;if(av>bnBest){bnBest=av;bottleneckDeptId=d.id;bottleneckDeptBn=d.bn}}
     });
+    // ── যদি কোনো বিভাগেই যথেষ্ট সম্পন্ন কাজের নমুনা না থাকে (গড়-সময় হিসাব করা না যায়) —
+    // এটা ঠিক তখনই ঘটে যখন ব্যাকলগ এত বেশি যে বেশিরভাগ কাজ কোনো বিভাগেই শেষই হচ্ছে না।
+    // এই অবস্থায় "কোন বিভাগে এই মুহূর্তে সবচেয়ে বেশি কাজ আটকে আছে" দিয়ে বাধা-বিভাগ ধরা
+    // হয় — এর জন্য কোনো "সম্পন্ন" কাজের দরকার নেই, তাই ব্যাকলগ যত বেশিই হোক, এই চার্ট
+    // কখনো অদৃশ্য হবে না ──
+    if(!bottleneckDeptId){
+      const deptStuckCount={};
+      DEPTS.forEach(d=>deptStuckCount[d.id]=0);
+      activeOrders.forEach(o=>{
+        const ipx=effectiveItemProgress(o);
+        Object.values(ipx).forEach(itp=>DEPTS.forEach(d=>{
+          const cur=itp&&itp[d.id];
+          if(cur&&cur.start&&!cur.end)deptStuckCount[d.id]++;
+        }));
+      });
+      let stuckBest=0;
+      DEPTS.forEach(d=>{if(deptStuckCount[d.id]>stuckBest){stuckBest=deptStuckCount[d.id];bottleneckDeptId=d.id;bottleneckDeptBn=d.bn}});
+    }
     // ── ব্যাকলগ প্রবণতা: বাধা-বিভাগে প্রতি মাসে কতটা কাজ ঢুকছে (শুরু হয়েছে) বনাম কতটা বের
     // হচ্ছে (শেষ হয়েছে), গত ৬ মাস। ঢোকা যদি বের হওয়ার চেয়ে বেশি হতে থাকে, ব্যাকলগ বাড়ছে —
     // শুধু কর্মী/সময় বাড়িয়ে সমাধান হবে না, অর্ডার নেওয়ার হারও পুনর্বিবেচনা করতে হবে ──
@@ -5541,7 +5612,7 @@ function PayrollPage({workers,saveWorker,deleteWorker,payrollWeeks,savePayrollWe
 }
 
 /* ── MANAGE DB ── */
-function ManageDB({db,saveDb,galleries,saveGalleryEntry,onBack,navigate,goBack,replaceTop,curScreen,highlightNo}){
+function ManageDB({db,saveDb,galleries,saveGalleryEntry,onBack,navigate,goBack,replaceTop,curScreen,highlightNo,onRenameVariant}){
   // ── এই পেজের ভেতরের নেভিগেশন (তালিকা ↔ + ক্যাটাগরি ↔ + ভেরিয়েন্ট ↔ কাঠ সম্পাদনা ↔ ছবি) এখন
   // নিজের সাময়িক মেমোরিতে না — অ্যাপের মূল নেভিগেশন-স্ট্যাকে থাকে (Hist-এর ফিল্টারের মতোই),
   // যাতে ফোনের ব্যাক বাটন এক ধাপ করেই পেছাতে পারে, সরাসরি ড্যাশবোর্ডে চলে না যায় ──
@@ -5639,7 +5710,7 @@ function ManageDB({db,saveDb,galleries,saveGalleryEntry,onBack,navigate,goBack,r
   const[renamingVar,setRenamingVar]=useState(null);
   const[renameVarVal,setRenameVarVal]=useState("");
   const startRenameVar=(catK,varK)=>{setRenamingVar(catK+"|"+varK);setRenameVarVal(db[catK].variants[varK].bn)};
-  const saveRenameVar=(catK,varK)=>{const nd=JSON.parse(JSON.stringify(db));nd[catK].variants[varK].bn=renameVarVal.trim()||nd[catK].variants[varK].bn;saveDb(nd);setRenamingVar(null)};
+  const saveRenameVar=(catK,varK)=>{const nd=JSON.parse(JSON.stringify(db));const newName=renameVarVal.trim()||nd[catK].variants[varK].bn;nd[catK].variants[varK].bn=newName;saveDb(nd);if(onRenameVariant)onRenameVariant(catK,varK,newName);setRenamingVar(null)};
 
   const inp={width:"100%",border:"1.5px solid #e0e0e0",borderRadius:8,padding:"9px 11px",fontSize:12,outline:"none"};
   return<div style={{minHeight:"100vh",background:"#f8f8f8"}}>
