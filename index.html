@@ -104,7 +104,7 @@ function compressImage(file,maxDim=1200,quality=0.82,maxBytes=110000){
 /* ── FULL-RESOLUTION LOCAL FOLDER STORAGE (desktop Chrome/Edge/Brave only) ──
    Original, uncompressed images are saved as real files in a folder you choose
    on your computer. Only a small compressed thumbnail syncs to the cloud/mobile. */
-const BUILD_TAG="4.24";
+const BUILD_TAG="4.26";
 const FS_SUPPORTED=typeof window!=="undefined"&&"showDirectoryPicker" in window;
 function idbOpen(){
   return new Promise((resolve,reject)=>{
@@ -2354,6 +2354,42 @@ function App({firebaseConfig,onResetConfig}){
                 });
               });
               const needsPush=addedCats||addedVars||filledWood;
+              // ── অর্ডারের catKey যদি ডেটাবেসে মডেলটা এখন যেখানে আছে তার সাথে না মেলে (মডেল
+              // সরানো/মেশানোর পর অর্ডারে নতুন ক্যাটাগরি পাঠানোর লেখাটা ব্যর্থ/সময়সীমা-পার হলে
+              // ঠিক এটাই ঘটে) — সেই অর্ডারকে সঠিক ক্যাটাগরিতে ঠিক করে দেওয়া হয়। varKey সরানোর
+              // পরও একই থাকে বলে এভাবে সঠিক জায়গা খুঁজে বের করা যায় ──
+              const varKeyLocation={};
+              Object.entries(merged).forEach(([ck,c])=>{
+                if(!c||!c.variants)return;
+                Object.keys(c.variants).forEach(vk=>{varKeyLocation[vk]=ck});
+              });
+              let fixedOrderLinks=0;
+              const ordersNeedingFix=[];
+              (ordersRef.current||[]).forEach(o=>{
+                let needsFix=false;
+                const newItems=(o.items||[]).map(it=>{
+                  if(!it.catKey||!it.varKey)return it;
+                  const correctCat=varKeyLocation[it.varKey];
+                  if(correctCat&&correctCat!==it.catKey){needsFix=true;return{...it,catKey:correctCat}}
+                  return it;
+                });
+                if(needsFix){ordersNeedingFix.push({no:o.no,items:newItems});fixedOrderLinks++}
+              });
+              if(ordersNeedingFix.length){
+                setOrders(prev=>prev.map(o=>{
+                  const fix=ordersNeedingFix.find(f=>f.no===o.no);
+                  return fix?{...o,items:fix.items}:o;
+                }));
+                const fixChunks=[];
+                for(let i=0;i<ordersNeedingFix.length;i+=400)fixChunks.push(ordersNeedingFix.slice(i,i+400));
+                for(const chunk of fixChunks){
+                  try{
+                    const batch=fs2.batch();
+                    chunk.forEach(o=>batch.set(fs2.collection("orders").doc(o.no),{items:o.items},{merge:true}));
+                    await withTimeout(batch.commit(),45000,"সময়সীমা পার");
+                  }catch(e5){}
+                }
+              }
               // ── অর্ডারে ব্যবহৃত কিন্তু ডেটাবেসে (সার্ভার+স্থানীয় মিলিয়েও) একেবারেই নেই
               // এমন মডেল — এটা সবচেয়ে গুরুতর অবস্থা, কারণ এই মডেল হারিয়ে গেলে কাঠের হিসাব,
               // স্টক, লাভ-ক্ষতি, কার্পেন্টার/পরিবহন শীট সবকিছু ভেঙে যায়। অর্ডারে সংরক্ষিত
@@ -2380,12 +2416,13 @@ function App({firebaseConfig,onResetConfig}){
                 });
               });
               const needsPush2=needsPush||restoredCats||restoredVars;
-              if(needsPush2){
-                await withTimeout(fs2.doc("meta/db").set(merged),45000,"সময়সীমা পার");
+              if(needsPush2||fixedOrderLinks){
+                if(needsPush2)await withTimeout(fs2.doc("meta/db").set(merged),45000,"সময়সীমা পার");
                 const parts=[];
                 if(addedCats+addedVars)parts.push(`${addedCats+addedVars}টা মডেল পাঠানো`);
                 if(filledWood)parts.push(`${filledWood}টা কাঠের মাপ পাঠানো`);
                 if(restoredCats+restoredVars)parts.push(`${restoredCats+restoredVars}টা মডেল অর্ডার থেকে পুনরুদ্ধার`);
+                if(fixedOrderLinks)parts.push(`${fixedOrderLinks}টা অর্ডারের ক্যাটাগরি-সংযোগ ঠিক করা`);
                 otherSyncStatus.db=parts.join(", ")+" হয়েছে";
               }else{
                 otherSyncStatus.db="মিলে আছে";
@@ -5872,6 +5909,13 @@ function ManageDB({db,saveDb,galleries,saveGalleryEntry,onBack,navigate,goBack,r
             </>:<>
               <span style={{fontWeight:700,fontSize:13,flex:1}}>{cat.bn}{cat.en&&cat.en!==cat.bn&&!(cat.bn||"").includes(cat.en)?` (${cat.en})`:""}</span>
               <button onClick={()=>startRenameCat(catK)} style={{background:"rgba(255,255,255,.2)",border:"none",color:"white",borderRadius:6,padding:"4px 9px",fontSize:11}}>✏️ নাম বদলান</button>
+              {Object.keys(cat.variants||{}).length===0&&<button onClick={()=>{
+                if(confirm(`"${cat.bn}" ক্যাটাগরিতে কোনো মডেল নেই — এটা মুছে ফেলবেন?`)){
+                  const nd=JSON.parse(JSON.stringify(db));
+                  delete nd[catK];
+                  saveDb(nd);
+                }
+              }} style={{background:"rgba(255,255,255,.2)",border:"none",color:"white",borderRadius:6,padding:"4px 9px",fontSize:11}}>🗑️ মুছুন</button>}
             </>}
           </div>
           {Object.entries(cat.variants).sort((a,b)=>(a[1].bn||"").localeCompare(b[1].bn||"","bn")).map(([vK,v])=>{
