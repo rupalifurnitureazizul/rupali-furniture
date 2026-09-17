@@ -104,7 +104,7 @@ function compressImage(file,maxDim=1200,quality=0.82,maxBytes=110000){
 /* ── FULL-RESOLUTION LOCAL FOLDER STORAGE (desktop Chrome/Edge/Brave only) ──
    Original, uncompressed images are saved as real files in a folder you choose
    on your computer. Only a small compressed thumbnail syncs to the cloud/mobile. */
-const BUILD_TAG="4.23";
+const BUILD_TAG="4.24";
 const FS_SUPPORTED=typeof window!=="undefined"&&"showDirectoryPicker" in window;
 function idbOpen(){
   return new Promise((resolve,reject)=>{
@@ -5878,32 +5878,38 @@ function ManageDB({db,saveDb,galleries,saveGalleryEntry,onBack,navigate,goBack,r
             const thisKey=catK+"|"+vK;
             const isSelectedForMerge=mergeSelectFirst===thisKey;
             return<div key={vK} style={{padding:"8px 12px",borderBottom:"1px solid #f0f0f0",background:isSelectedForMerge?"#fef2f2":highlightNo===("variant:"+catK+"__"+vK)?"#e0f2fe":"transparent",border:isSelectedForMerge?"2px solid #fca5a5":"none",borderRadius:isSelectedForMerge?8:0,transition:"background .4s"}}>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:6}}>
-            {movingVar===thisKey?<>
+            {movingVar===thisKey?<div style={{display:"flex",alignItems:"center",gap:6}}>
               <div style={{flex:1,fontSize:11,fontWeight:600,color:"#6d28d9"}}>কোন ক্যাটাগরিতে সরাবেন?</div>
               <select onChange={e=>{if(e.target.value)moveVariant(catK,vK,e.target.value)}} defaultValue="" style={{flex:1,border:"1px solid #ddd",borderRadius:6,padding:"5px 6px",fontSize:11}} autoFocus>
                 <option value="">-- বাছুন --</option>
                 {Object.entries(db).filter(([k])=>k!==catK).map(([k,c])=><option key={k} value={k}>{c.bn}</option>)}
               </select>
               <button onClick={()=>setMovingVar(null)} style={{background:"#f3f4f6",border:"none",borderRadius:6,padding:"5px 9px",fontSize:11}}>✕</button>
-            </>:renamingVar===thisKey?<>
+            </div>:renamingVar===thisKey?<div style={{display:"flex",alignItems:"center",gap:6}}>
               <input value={renameVarVal} onChange={e=>setRenameVarVal(e.target.value)} style={{flex:1,border:"1px solid #ddd",borderRadius:6,padding:"5px 8px",fontSize:12,outline:"none"}} autoFocus/>
               <button onClick={()=>saveRenameVar(catK,vK)} style={{background:"#6d28d9",color:"white",border:"none",borderRadius:6,padding:"5px 9px",fontSize:11,fontWeight:700}}>✓</button>
               <button onClick={()=>setRenamingVar(null)} style={{background:"#f3f4f6",border:"none",borderRadius:6,padding:"5px 9px",fontSize:11}}>✕</button>
-            </>:<>
-              {galleries&&galleries[`${catK}__${vK}`]&&galleries[`${catK}__${vK}`].coverImage&&<img src={galleries[`${catK}__${vK}`].coverImage} onClick={e=>{e.stopPropagation();openLightbox(galleries[`${catK}__${vK}`].coverImage)}} style={{width:32,height:32,objectFit:"cover",borderRadius:6,border:"1px solid #eee",flexShrink:0,cursor:"pointer"}} alt=""/>}
-              <div style={{flex:1}}><div style={{fontSize:12,fontWeight:600}}>{isEmptyWood(v)?"⚠️ ":""}{v.bn}</div><div style={{fontSize:10,color:"#888",fontFamily:"monospace"}}>Code: {v.code}{isEmptyWood(v)?" — কাঠের মাপ ফাঁকা":""}{galleries&&galleries[`${catK}__${vK}`]&&galleries[`${catK}__${vK}`].gallery&&galleries[`${catK}__${vK}`].gallery.length?` · ${galleries[`${catK}__${vK}`].gallery.length} ছবি`:""}</div></div>
-              <button onClick={()=>{
-                if(!mergeSelectFirst)setMergeSelectFirst(thisKey);
-                else if(mergeSelectFirst===thisKey)setMergeSelectFirst(null);
-                else{const[fc,fv]=mergeSelectFirst.split("|");doMergeVariants(fc,fv,thisKey)}
-              }} style={{background:isSelectedForMerge?"#b91c1c":"#fef2f2",border:"none",borderRadius:6,padding:"5px 8px",color:isSelectedForMerge?"white":"#b91c1c",fontSize:10,fontWeight:600}}>{isSelectedForMerge?"✓ নির্বাচিত":mergeSelectFirst?"🔗 এটার সাথে মেশান":"🔗 মেশান"}</button>
-              <button onClick={()=>setMovingVar(thisKey)} style={{background:"#ecfdf5",border:"none",borderRadius:6,padding:"5px 8px",color:"#047857",fontSize:10,fontWeight:600}}>📁 সরান</button>
-              <button onClick={()=>startRenameVar(catK,vK)} style={{background:"#f5f3ff",border:"none",borderRadius:6,padding:"5px 8px",color:"#6d28d9",fontSize:10,fontWeight:600}}>✏️ নাম</button>
-              <button onClick={()=>openGallery(catK,vK)} style={{background:"#fef3c7",border:"none",borderRadius:6,padding:"5px 8px",color:"#92400e",fontSize:10,fontWeight:600}}>🖼️ ছবি</button>
-              <button onClick={()=>openEdit(catK,vK)} style={{background:"#f5f3ff",border:"none",borderRadius:6,padding:"5px 10px",color:"#6d28d9",fontSize:11,fontWeight:600}}>কাঠ</button>
-            </>}
-            </div>
+            </div>:<div style={{display:"flex",alignItems:"stretch",gap:8}}>
+              <div style={{flex:1,display:"flex",gap:6,alignItems:"flex-start",minWidth:0}}>
+                {galleries&&galleries[`${catK}__${vK}`]&&galleries[`${catK}__${vK}`].coverImage&&<img src={galleries[`${catK}__${vK}`].coverImage} onClick={e=>{e.stopPropagation();openLightbox(galleries[`${catK}__${vK}`].coverImage)}} style={{width:32,height:32,objectFit:"cover",borderRadius:6,border:"1px solid #eee",flexShrink:0,cursor:"pointer"}} alt=""/>}
+                <div style={{minWidth:0}}><div style={{fontSize:12,fontWeight:600,wordBreak:"break-word"}}>{isEmptyWood(v)?"⚠️ ":""}{v.bn}</div><div style={{fontSize:10,color:"#888",fontFamily:"monospace"}}>Code: {v.code}{isEmptyWood(v)?" — কাঠের মাপ ফাঁকা":""}{galleries&&galleries[`${catK}__${vK}`]&&galleries[`${catK}__${vK}`].gallery&&galleries[`${catK}__${vK}`].gallery.length?` · ${galleries[`${catK}__${vK}`].gallery.length} ছবি`:""}</div></div>
+              </div>
+              <div style={{flex:1,display:"flex",flexDirection:"column",gap:4}}>
+                <div style={{display:"flex",gap:4}}>
+                  <button onClick={()=>startRenameVar(catK,vK)} style={{flex:1,background:"#f5f3ff",border:"none",borderRadius:6,padding:"5px 4px",color:"#6d28d9",fontSize:10,fontWeight:600}}>✏️ নাম</button>
+                  <button onClick={()=>openGallery(catK,vK)} style={{flex:1,background:"#fef3c7",border:"none",borderRadius:6,padding:"5px 4px",color:"#92400e",fontSize:10,fontWeight:600}}>🖼️ ছবি</button>
+                  <button onClick={()=>openEdit(catK,vK)} style={{flex:1,background:"#f5f3ff",border:"none",borderRadius:6,padding:"5px 4px",color:"#6d28d9",fontSize:10,fontWeight:600}}>কাঠ</button>
+                </div>
+                <div style={{display:"flex",gap:4}}>
+                  <button onClick={()=>{
+                    if(!mergeSelectFirst)setMergeSelectFirst(thisKey);
+                    else if(mergeSelectFirst===thisKey)setMergeSelectFirst(null);
+                    else{const[fc,fv]=mergeSelectFirst.split("|");doMergeVariants(fc,fv,thisKey)}
+                  }} style={{flex:1,background:isSelectedForMerge?"#b91c1c":"#fef2f2",border:"none",borderRadius:6,padding:"5px 4px",color:isSelectedForMerge?"white":"#b91c1c",fontSize:10,fontWeight:600}}>{isSelectedForMerge?"✓ নির্বাচিত":"🔗 মেশান"}</button>
+                  <button onClick={()=>setMovingVar(thisKey)} style={{flex:1,background:"#ecfdf5",border:"none",borderRadius:6,padding:"5px 4px",color:"#047857",fontSize:10,fontWeight:600}}>📁 সরান</button>
+                </div>
+              </div>
+            </div>}
           </div>;})}
         </div>)}
         {/* ⚠️ "ডিফল্টে রিসেট করুন" বাটন ইচ্ছাকৃতভাবে সরিয়ে দেওয়া হলো — বছরের পর বছর ধরে
