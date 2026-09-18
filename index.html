@@ -104,7 +104,7 @@ function compressImage(file,maxDim=1200,quality=0.82,maxBytes=110000){
 /* ── FULL-RESOLUTION LOCAL FOLDER STORAGE (desktop Chrome/Edge/Brave only) ──
    Original, uncompressed images are saved as real files in a folder you choose
    on your computer. Only a small compressed thumbnail syncs to the cloud/mobile. */
-const BUILD_TAG="4.45";
+const BUILD_TAG="4.52";
 const FS_SUPPORTED=typeof window!=="undefined"&&"showDirectoryPicker" in window;
 function idbOpen(){
   return new Promise((resolve,reject)=>{
@@ -292,6 +292,9 @@ function splitDbDoc(data){
   return{slim,tomb};
 }
 const BN_DIGITS="০১২৩৪৫৬৭৮৯";
+// v4.52: ধীর নেটে শুধু "সময়সীমা পার" মানে লেখাটা বাতিল হয়নি — ফোনের সারিতে আছে, নেট পেলেই নিজে পৌঁছাবে।
+// তাই এমন ক্ষেত্রে আর কোনো সতর্কবার্তা দেখানো হয় না; শুধু আসল ত্রুটিতে জানানো হয়
+const isTimeoutErr=(e)=>/সময়সীমা পার/.test(String((e&&e.message)||e||""));
 const toBnDigits=(n)=>String(n).replace(/[0-9]/g,d=>BN_DIGITS[+d]);
 // ── মডেল কোড: ছোট/বড় হাতের অক্ষর ও ফাঁকা জায়গা বাদ দিয়ে তুলনা — "alm-2" আর "ALM-2" একই ধরা হয় ──
 const normCode=(c)=>String(c==null?"":c).replace(/\s+/g,"").toUpperCase();
@@ -577,7 +580,26 @@ function FurnitureCategoryModelPicker({db,saveDb,galleries,catKey,varKey,onSelec
   const coverFor=(vk)=>(galleries&&galleries[`${catKey}__${vk}`]&&galleries[`${catKey}__${vk}`].coverImage)||null;
 
   const createNewCategory=()=>{
-    const catName=newCatName.trim()||`নতুন ফার্নিচার ${dbCats(db).length+1}`;
+    // ── v4.52: একই নামের ক্যাটাগরি আগে থেকেই থাকলে নতুন না বানিয়ে সেটাই ব্যবহারের সুযোগ ──
+    const typedCat=newCatName.trim();
+    const exCat=typedCat?dbCats(db).find(([,c])=>normModelName(c.bn)===normModelName(typedCat)):null;
+    if(exCat&&confirm(`"${exCat[1].bn}" নামে ক্যাটাগরি আগেই আছে — নতুন না বানিয়ে সেটাতেই রাখবেন?\n\nOK = আগের ক্যাটাগরিতেই\nCancel = আলাদা নতুন ক্যাটাগরি`)){
+      const exKey=exCat[0],exVars=exCat[1].variants||{};
+      const typedVar=newCatVarName.trim()||"স্ট্যান্ডার্ড মডেল";
+      const sameVar=Object.keys(exVars).find(k=>normModelName(exVars[k]&&exVars[k].bn)===normModelName(typedVar));
+      if(sameVar)onSelect(exKey,sameVar);
+      else{
+        const nd=JSON.parse(JSON.stringify(db));
+        if(!nd[exKey].variants)nd[exKey].variants={};
+        const nvk=newUniqueVarKey(nd);
+        nd[exKey].variants[nvk]={bn:typedVar,code:uniqueAutoCode(db,exCat[1].bn+" "+typedVar,String(Math.floor(Math.random()*900+100))),sections:[{name:"কাঠের তালিকা (পরে যোগ করুন)",pieces:[]}]};
+        saveDb(nd);
+        onSelect(exKey,nvk);
+      }
+      setNewCatMode(false);setNewCatName("");setNewCatVarName("");
+      return;
+    }
+    const catName=typedCat||`নতুন ফার্নিচার ${dbCats(db).length+1}`;
     const varName=newCatVarName.trim()||"স্ট্যান্ডার্ড মডেল";
     const newCatKey="cat_"+Date.now();
     const newVarKey="var_"+Date.now();
@@ -589,7 +611,16 @@ function FurnitureCategoryModelPicker({db,saveDb,galleries,catKey,varKey,onSelec
     setNewCatMode(false);setNewCatName("");setNewCatVarName("");
   };
   const createNewModel=()=>{
-    const varName=uniqueModelName(fCat.variants,newModelName.trim()||`নতুন মডেল ${Object.keys(fCat.variants||{}).length+1}`);
+    // ── v4.52: এই ক্যাটাগরিতে একই নামের মডেল থাকলে নতুন না বানিয়ে সেটাই বেছে নেওয়ার সুযোগ ──
+    const typedModel=newModelName.trim();
+    const exVars=(fCat&&fCat.variants)||{};
+    const sameModel=typedModel?Object.keys(exVars).find(k=>normModelName(exVars[k]&&exVars[k].bn)===normModelName(typedModel)):null;
+    if(sameModel&&confirm(`"${exVars[sameModel].bn}" নামে মডেল এই ক্যাটাগরিতে আগেই আছে — নতুন না বানিয়ে সেটাই বেছে নেবেন?\n\nOK = আগেরটাই বেছে নিন\nCancel = আলাদা নতুন মডেল বানান`)){
+      onSelect(catKey,sameModel);
+      setNewModelMode(false);setNewModelName("");
+      return;
+    }
+    const varName=uniqueModelName(fCat.variants,typedModel||`নতুন মডেল ${Object.keys(fCat.variants||{}).length+1}`);
     const newVarKey="var_"+Date.now();
     const code=uniqueAutoCode(db,(fCat.bn||"")+" "+varName,String(Math.floor(Math.random()*900+100)));
     const nd=JSON.parse(JSON.stringify(db));
@@ -1340,6 +1371,240 @@ function S6({order,onPrint,onUpdateOrder,onSetDelivered,onPhotoChange,onRemovePh
 }
 
 /* ── SIMPLE BAR CHART (SVG) ── */
+/* ── v4.52: খরচের একক খতিয়ান ──
+   "মোট ব্যয়", "সংগ্রহ বনাম ব্যয়", "মাসিক তারল্য", ৩০ দিনের পূর্বাভাস, কর্মীদের বেতনের চার্ট আর
+   "কোন ফার্নিচারে খরচ ও লাভ কত" — সব এই একটা খতিয়ান থেকে হিসাব হয়, তাই কোথাও সংখ্যা আলাদা দেখাবে না।
+   • খরচ: খরচের খাতার প্রতিটা এন্ট্রি তার নিজের তারিখে ("শ্রমিক বেতন" ক্যাটাগরি বাদে — ওটা বেতনের ভাগে)
+   • বেতন: প্রতি সপ্তাহে প্রতিটা কর্মীর মোট আয় (হাজিরা × দৈনিক হার), সপ্তাহ শেষের বৃহস্পতিবারের তারিখে।
+     অগ্রিম এই আয়েরই আগাম অংশ — সপ্তাহ শেষে মোট আয় থেকেই কাটা হয় — তাই আলাদা খরচ হিসেবে গোনা হয় না
+   • কাঠ: সাপ্লায়ারকে যেদিন যত টাকা দেওয়া হয়েছে সেই তারিখে (লটের মোট দাম বা কেনার তারিখ নয়),
+     স'মিল কাটাই বিল তার তারিখে, আর লটের পরিবহন/অন্যান্য খরচ লটের তারিখে ── */
+const PAY_DEPT_SHORT={"ছুতার":"ছুতার","কারিগর":"নকশা","বার্নিশ":"বার্নিশ","পরিবহন":"পরিবহন","অন্যান্য":"অন্যান্য"};
+const SALARY_SEGS=[
+  {id:"ছুতার",bn:"ছুতার",color:CHART_SOFT_BLUE},
+  {id:"কারিগর",bn:"নকশা",color:CHART_SOFT_GREEN},
+  {id:"বার্নিশ",bn:"বার্নিশ",color:CHART_SOFT_ORANGE},
+  {id:"পরিবহন",bn:"পরিবহন",color:CHART_SOFT_PURPLE},
+  {id:"অন্যান্য",bn:"অন্যান্য",color:CHART_SOFT_GREY},
+  {id:"__exp",bn:"খরচের খাতায় লেখা বেতন",color:CHART_SOFT_PINK}
+];
+const SPEND_SEGS=[
+  {id:"expense",bn:"খরচ",color:CHART_SOFT_TEAL},
+  {id:"salary",bn:"বেতন",color:CHART_SOFT_BLUE},
+  {id:"wood",bn:"কাঠ",color:CHART_SOFT_ORANGE}
+];
+function buildSpendLedger(expenses,payrollWeeks,workers,woodLots){
+  const out=[];
+  const wById={};(workers||[]).forEach(w=>{if(w&&w.id)wById[w.id]=w});
+  (expenses||[]).forEach(e=>{
+    const amt=parseFloat(e&&e.total)||0;
+    if(!amt||!e.date)return;
+    const date=String(e.date).slice(0,10);
+    if(e.category==="salary"){out.push({date,amount:amt,kind:"salary",seg:"__exp",label:"খরচের খাতায় লেখা বেতন"});return}
+    const c=EXP_CATS.find(x=>x.id===e.category);
+    out.push({date,amount:amt,kind:"expense",seg:"expense",label:c?c.bn:(e.category||"অন্যান্য"),supplier:(e.supplier||"").trim()});
+  });
+  Object.entries(payrollWeeks||{}).forEach(([weekEnd,wd])=>{
+    const snaps=(wd&&wd.wstat)||{};
+    Object.entries((wd&&wd.attendance)||{}).forEach(([wid,days])=>{
+      const w=wById[wid],sn=snaps[wid];
+      // কর্মীর প্রোফাইল থাকলে তার দৈনিক হার (পে-রোল পাতার মতোই); মুছে ফেলা হলে সেই সপ্তাহে রাখা হার
+      const rate=w?(parseFloat(w.dailyRate)||0):(sn?(parseFloat(sn.rate)||0):0);
+      const d=parseFloat(days)||0;
+      const amt=d*rate;
+      if(!amt)return;
+      const deptRaw=w?w.department:(sn&&sn.dept);
+      const dept=PAYROLL_DEPTS.includes(deptRaw)?deptRaw:"অন্যান্য";
+      out.push({date:weekEnd,amount:amt,kind:"salary",seg:dept,label:PAY_DEPT_SHORT[dept]||dept,workerId:wid,workerName:(w&&w.name)||(sn&&sn.name)||"(মুছে ফেলা কর্মী)",days:d});
+    });
+  });
+  (woodLots||[]).forEach(l=>{
+    if(!l)return;
+    const sup=(l.supplier||"").trim()||"অজানা সাপ্লায়ার";
+    (l.payments||[]).forEach(p=>{const amt=parseFloat(p&&p.amount)||0;if(amt&&p.date)out.push({date:String(p.date).slice(0,10),amount:amt,kind:"wood",seg:"wood",label:"সাপ্লায়ারকে পেমেন্ট",supplier:sup})});
+    (l.millingEntries||[]).forEach(m=>{const amt=parseFloat(m&&m.billAmount)||0;if(amt&&m.date)out.push({date:String(m.date).slice(0,10),amount:amt,kind:"wood",seg:"wood",label:"স'মিল কাটাই"})});
+    const extra=(parseFloat(l.transportCost)||0)+(parseFloat(l.otherCost)||0);
+    if(extra&&l.date)out.push({date:String(l.date).slice(0,10),amount:extra,kind:"wood",seg:"wood",label:"কাঠের পরিবহন ও অন্যান্য"});
+  });
+  return out;
+}
+// ── সময়ের ভাগ: সপ্তাহ = শুক্র থেকে বৃহস্পতি (পে-রোলের মতোই), চেনা হয় তার বৃহস্পতিবার দিয়ে ──
+const thursdayOf=(ds)=>{const d=parseISO(ds);d.setUTCDate(d.getUTCDate()+((4-d.getUTCDay()+7)%7));return toISO(d)};
+const periodKeyOf=(ds,mode)=>mode==="week"?thursdayOf(ds):mode==="year"?String(ds).slice(0,4):String(ds).slice(0,7);
+function lastPeriodKeys(mode,today,entries){
+  const keys=[];
+  if(mode==="week"){const t=thursdayOf(today);for(let i=11;i>=0;i--)keys.push(addDays(t,-7*i))}
+  else if(mode==="month"){const d=parseISO(today);for(let i=11;i>=0;i--)keys.push(toISO(new Date(Date.UTC(d.getUTCFullYear(),d.getUTCMonth()-i,1))).slice(0,7))}
+  else{
+    const cy=+String(today).slice(0,4);
+    let minY=cy;(entries||[]).forEach(e=>{const y=+String(e.date||"").slice(0,4);if(y&&y<minY)minY=y});
+    const from=Math.min(Math.max(minY,cy-5),cy-2);
+    for(let y=from;y<=cy;y++)keys.push(String(y));
+  }
+  return keys;
+}
+const periodShortLabel=(mode,key)=>{
+  if(mode==="week"){const d=parseISO(key);return`${toBnDigits(d.getUTCDate())}/${toBnDigits(d.getUTCMonth()+1)}`}
+  if(mode==="month")return monthName(+key.slice(5,7)-1);
+  return toBnDigits(key);
+};
+const periodLongLabel=(mode,key)=>{
+  if(mode==="week"){const e=parseISO(key),st=parseISO(addDays(key,-6));return`${toBnDigits(st.getUTCDate())} ${monthName(st.getUTCMonth())} – ${toBnDigits(e.getUTCDate())} ${monthName(e.getUTCMonth())} ${toBnDigits(e.getUTCFullYear())}`}
+  if(mode==="month")return`${monthName(+key.slice(5,7)-1)} ${toBnDigits(key.slice(0,4))}`;
+  return`${toBnDigits(key)} সাল`;
+};
+// ── একটা ফার্নিচার কবে "তৈরি শেষ": চার বিভাগই ১০০% হলে শেষ বিভাগের শেষ তারিখ (পে-রোল বনাম
+// উৎপাদনের মতোই); ট্র্যাকিং না থাকলে ডেলিভারির তারিখ ──
+function itemDoneDate(o,it,idx,ip){
+  const prog=((ip||effectiveItemProgress(o))[it.itemId||`idx_${idx}`])||{};
+  const ends=DEPTS.map(d=>prog[d.id]&&prog[d.id].end).filter(Boolean);
+  const pcts=DEPTS.map(d=>(prog[d.id]&&prog[d.id].pct)||0);
+  if(ends.length===DEPTS.length&&pcts.every(p=>p>=100))return String(ends.slice().sort().pop()).slice(0,10);
+  if(o.delivered)return String(o.deliveredAt||(o.cust&&(o.cust.delivery||o.cust.date))||"").slice(0,10)||null;
+  return null;
+}
+// ── অর্ডারের কাঠ কবে গেল: পরিবহন বিভাগের তারিখ (শেষ, না থাকলে শুরু); না থাকলে অর্ডারের তারিখ ──
+function itemWoodDate(o,it,idx,ip){
+  const t=(((ip||effectiveItemProgress(o))[it.itemId||`idx_${idx}`])||{}).transport;
+  return String((t&&(t.end||t.start))||(o.cust&&o.cust.date)||"").slice(0,10)||null;
+}
+/* ── v4.52: কোন ফার্নিচারে খরচ ও লাভ কত — পূর্ণ খরচ ধরে ──
+   বিক্রি: ডেলিভারি হওয়া অর্ডারের দাম × পরিমাণ
+   কাঠ: অর্ডারে যত CFT কাঠ গেছে × অর্ডারের সময়ের কাঠের দাম (আগের মতোই স্ন্যাপশট)
+   বেতন ও অন্যান্য খরচ: ফার্নিচারটা যে মাসে তৈরি শেষ, সেই মাস + আগের ২ মাসের মোট বেতন (বা খরচ) ÷ ওই
+   ৩ মাসে তৈরি শেষ হওয়া মোট CFT — এই হারে প্রতি CFT-তে বসানো। ৩ মাসের জানালা, কারণ কাজ চলে কয়েক
+   সপ্তাহ ধরে, আর কোনো মাসে কম জিনিস শেষ হলে এক মাসের হার অস্বাভাবিক লাফ দিত। পে-রোলে হাজিরা
+   শুরুর আগের অর্ডারে সেটিংসের শ্রম-হার ধরা হয়; খরচের খাতা শুরুর আগের অর্ডারে সামগ্রিক গড় ── */
+function furnitureCosting(orders,ledger,woodSettings,laborSettings,db,bottleneckDeptId){
+  const mk=(ds)=>{const d=parseISO(ds);return d.getUTCFullYear()*12+d.getUTCMonth()};
+  const active=(orders||[]).filter(o=>o&&!o.cancelled);
+  const ipCache=new Map();const ipOf=(o)=>{if(!ipCache.has(o))ipCache.set(o,effectiveItemProgress(o));return ipCache.get(o)};
+  const cftM={},salM={},expM={};
+  active.forEach(o=>(o.items||[]).forEach((it,idx)=>{const dd=itemDoneDate(o,it,idx,ipOf(o));if(!dd)return;const c=totalCft(it.sections||[])*(parseFloat(it.qty)||1);if(c>0){const k=mk(dd);cftM[k]=(cftM[k]||0)+c}}));
+  (ledger||[]).forEach(e=>{if(!e.date)return;const k=mk(e.date);if(e.kind==="salary")salM[k]=(salM[k]||0)+e.amount;else if(e.kind==="expense")expM[k]=(expM[k]||0)+e.amount});
+  const ks=(m)=>Object.keys(m).map(Number);
+  const salStart=ks(salM).length?Math.min(...ks(salM)):null;
+  const expStart=ks(expM).length?Math.min(...ks(expM)):null;
+  const sumR=(m,a,b)=>{let t=0;for(let k=a;k<=b;k++)t+=m[k]||0;return t};
+  const avgSince=(m,start)=>{if(start===null)return null;let c=0,t=0;ks(cftM).forEach(k=>{if(k>=start)c+=cftM[k]});ks(m).forEach(k=>{t+=m[k]});return c>0?t/c:null};
+  const salAvg=avgSince(salM,salStart),expAvg=avgSince(expM,expStart);
+  const rateFor=(ds)=>{
+    const k=ds?mk(ds):null;
+    let sal=null,basis="setting";
+    if(k!==null&&salStart!==null&&k>=salStart){const c=sumR(cftM,k-2,k);if(c>0){sal=sumR(salM,k-2,k)/c;basis="window"}else if(salAvg!==null){sal=salAvg;basis="avg"}}
+    let exp=expAvg||0;
+    if(k!==null&&expStart!==null&&k>=expStart){const c=sumR(cftM,k-2,k);if(c>0)exp=sumR(expM,k-2,k)/c}
+    return{sal,basis,exp};
+  };
+  const cats={};
+  active.filter(o=>o.delivered).forEach(o=>{
+    const ip=ipOf(o);
+    const lRate=orderLabourRate(o,laborSettings);
+    (o.items||[]).forEach((it,idx)=>{
+      const qty=parseFloat(it.qty)||1;
+      const revenue=(parseFloat(it.price)||0)*qty;
+      if(revenue<=0)return;
+      const catLabel=(db&&it.catKey&&db[it.catKey]&&db[it.catKey].bn)?db[it.catKey].bn:(((it.variantBn||"").split(" ")[0])||it.code||"অন্যান্য");
+      const itCft=totalCft(it.sections||[])*qty;
+      const woodCost=itemWoodCost(it,o,woodSettings);
+      const doneDate=itemDoneDate(o,it,idx,ip);
+      const r=rateFor(doneDate);
+      const salaryCost=itCft*(r.sal!==null?r.sal:lRate);
+      const expenseCost=itCft*r.exp;
+      const cost=woodCost+salaryCost+expenseCost;
+      const c=cats[catLabel]||(cats[catLabel]={label:catLabel,revenue:0,cft:0,woodCost:0,salaryCost:0,expenseCost:0,cost:0,count:0,rows:[],bottleneckDays:0,bnSamples:0});
+      c.revenue+=revenue;c.cft+=itCft;c.woodCost+=woodCost;c.salaryCost+=salaryCost;c.expenseCost+=expenseCost;c.cost+=cost;c.count+=1;
+      c.rows.push({no:o.no,cust:(o.cust&&o.cust.name)||"",model:it.variantBn||"",wood:it.woodBn||"",woodDate:itemWoodDate(o,it,idx,ip),doneDate,cft:itCft,woodCost,salaryCost,expenseCost,revenue,profit:revenue-cost,salBasis:r.basis});
+      // থ্রুপুট অ্যাকাউন্টিং (Goldratt): এই আইটেম বাধা-বিভাগে কত দিন দখল করেছিল
+      if(bottleneckDeptId){
+        const bn=(ip[it.itemId||`idx_${idx}`]||{})[bottleneckDeptId];
+        if(bn&&bn.start&&bn.end){const dd=daysBetween(bn.start,bn.end);if(dd>=0){c.bottleneckDays+=Math.max(dd,0.5);c.bnSamples+=1}}
+      }
+    });
+  });
+  const ranked=Object.values(cats).map(c=>({...c,labourCost:c.salaryCost,profit:c.revenue-c.cost,margin:c.revenue>0?((c.revenue-c.cost)/c.revenue)*100:0,profitPerBnDay:c.bottleneckDays>0?(c.revenue-c.cost)/c.bottleneckDays:null})).sort((a,b)=>b.margin-a.margin);
+  ranked.forEach(c=>c.rows.sort((a,b)=>String(b.woodDate||"").localeCompare(String(a.woodDate||""))));
+  const nowK=mk(todayStr());
+  const months=[];
+  for(let k=nowK-11;k<=nowK;k++){
+    const c3=sumR(cftM,k-2,k);
+    months.push({key:k,label:`${monthName(((k%12)+12)%12)} ${toBnDigits(String(Math.floor(k/12)).slice(2))}`,cft:cftM[k]||0,salary:salM[k]||0,expense:expM[k]||0,salPerCft:c3>0&&salStart!==null&&k>=salStart?sumR(salM,k-2,k)/c3:null,expPerCft:c3>0&&expStart!==null&&k>=expStart?sumR(expM,k-2,k)/c3:null});
+  }
+  return{ranked,months,hasPayroll:salStart!==null};
+}
+// ── স্তূপ-কলাম চার্ট: প্রতিটা কলাম একটা সময় (সপ্তাহ/মাস/বছর), ভেতরে ভাগগুলো রঙে রঙে ──
+function StackedBars({bars,segs,height=140,selectedKey,onSelect}){
+  const maxV=Math.max(...bars.map(b=>b.total),1);
+  const shortK=(v)=>(v/1000).toFixed(v>=10000?0:1);
+  return<div style={{display:"flex",alignItems:"stretch",gap:3,height}}>
+    {bars.map(b=>{const on=b.key===selectedKey;return<div key={b.key} onClick={()=>onSelect&&onSelect(b.key)} style={{flex:1,minWidth:0,display:"flex",flexDirection:"column",alignItems:"center",height:"100%",cursor:"pointer"}}>
+      <div style={{flex:1,width:"100%",display:"flex",flexDirection:"column",justifyContent:"flex-end",alignItems:"center"}}>
+        <div style={{fontSize:6.5,color:on?"#222":"#888",fontWeight:on?800:500,marginBottom:1,whiteSpace:"nowrap"}}>{b.total>0?shortK(b.total):""}</div>
+        <div style={{width:"80%",height:`${(b.total/maxV)*100}%`,minHeight:b.total>0?2:0,display:"flex",flexDirection:"column-reverse",borderRadius:"3px 3px 0 0",overflow:"hidden",boxShadow:on?"0 0 0 2px #334155":"none",opacity:b.partial&&!on?0.72:1}}>
+          {segs.map(sg=>{const v=b.values[sg.id]||0;return v>0?<div key={sg.id} style={{height:`${(v/b.total)*100}%`,background:sg.color,flexShrink:0}}></div>:null})}
+        </div>
+      </div>
+      <div style={{fontSize:6.5,color:on?"#222":"#999",fontWeight:on?800:400,marginTop:3,whiteSpace:"nowrap"}}>{b.label}</div>
+    </div>})}
+  </div>;
+}
+function MiniStat({label,value,sub,subColor}){
+  return<div style={{background:"#f8fafc",borderRadius:8,padding:"7px 5px",textAlign:"center",minWidth:0}}>
+    <div style={{fontSize:8.5,color:"#888",marginBottom:2}}>{label}</div>
+    <div style={{fontSize:12,fontWeight:800,color:"#333",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{value}</div>
+    {sub&&<div style={{fontSize:8,color:subColor||"#aaa",marginTop:1,lineHeight:1.3}}>{sub}</div>}
+  </div>;
+}
+const PERIOD_MODES=[{id:"week",bn:"সাপ্তাহিক",unit:"সপ্তাহ",gen:"সপ্তাহের"},{id:"month",bn:"মাসিক",unit:"মাস",gen:"মাসের"},{id:"year",bn:"বাৎসরিক",unit:"বছর",gen:"বছরের"}];
+// ── সাপ্তাহিক / মাসিক / বাৎসরিক বাছাই সহ ব্যয়ের চার্ট — উপরে তিনটা সারাংশ, মাঝে স্তূপ-কলাম,
+// যেকোনো কলামে চাপলে নিচে সেই সময়ের পুরো ভাঙা হিসাব ──
+function SpendPeriodChart({icon,title,note,entries,segs,segOf,renderDetail,accent="#166534"}){
+  const[mode,setMode]=useState("month");
+  const[sel,setSel]=useState(null);
+  const bars=useMemo(()=>{
+    const keys=lastPeriodKeys(mode,todayStr(),entries);
+    const at={};keys.forEach((k,i)=>at[k]=i);
+    const out=keys.map(k=>({key:k,label:periodShortLabel(mode,k),values:{},total:0,entries:[]}));
+    (entries||[]).forEach(e=>{if(!e.date)return;const i=at[periodKeyOf(e.date,mode)];if(i===undefined)return;const b=out[i];const sg=segOf(e);b.values[sg]=(b.values[sg]||0)+e.amount;b.total+=e.amount;b.entries.push(e)});
+    if(out.length)out[out.length-1].partial=true;
+    return out;
+  },[entries,mode]);
+  const pm=PERIOD_MODES.find(p=>p.id===mode)||PERIOD_MODES[1];const unit=pm.unit;
+  const cur=bars[bars.length-1],last=bars[bars.length-2],before=bars[bars.length-3];
+  const firstNZ=bars.findIndex(b=>b.total>0);
+  const complete=firstNZ>=0?bars.slice(firstNZ,bars.length-1):[];
+  const avg=complete.length?complete.reduce((t,b)=>t+b.total,0)/complete.length:0;
+  const chg=last&&before&&before.total>0?((last.total-before.total)/before.total)*100:null;
+  const selKey=sel&&bars.some(b=>b.key===sel)?sel:(cur?cur.key:null);
+  const selBar=bars.find(b=>b.key===selKey);
+  const usedSegs=segs.filter(sg=>bars.some(b=>(b.values[sg.id]||0)>0));
+  return<div style={{marginBottom:18}}>
+    <div style={{fontWeight:700,fontSize:13,color:"#222",marginBottom:3}}>{icon} {title}</div>
+    {note&&<div style={{fontSize:9,color:"#999",marginBottom:8,lineHeight:1.55}}>{note}</div>}
+    <div style={{display:"flex",gap:6,marginBottom:8}}>
+      {PERIOD_MODES.map(p=><button key={p.id} onClick={()=>{setMode(p.id);setSel(null)}} style={{flex:1,padding:"7px 6px",borderRadius:20,border:mode===p.id?"none":"1px solid #ddd",background:mode===p.id?accent:"white",color:mode===p.id?"white":"#666",fontSize:11,fontWeight:700}}>{p.bn}</button>)}
+    </div>
+    <div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"10px 8px"}}>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:6,marginBottom:10}}>
+        <MiniStat label={`চলতি ${unit}`} value={money(Math.round(cur?cur.total:0))} sub="এখনো চলছে"/>
+        <MiniStat label={`গত ${unit}`} value={money(Math.round(last?last.total:0))} sub={chg===null?"":`${chg>=0?"↑":"↓"} ${toBnDigits(Math.abs(chg).toFixed(0))}% (আগের ${pm.gen} তুলনায়)`} subColor={chg===null?"#aaa":chg>0?CHART_SOFT_RED:CHART_SOFT_GREEN}/>
+        <MiniStat label={`গড় প্রতি ${unit}`} value={money(Math.round(avg))} sub={complete.length?`শেষ ${toBnDigits(complete.length)}টা পূর্ণ ${unit}`:""}/>
+      </div>
+      <StackedBars bars={bars} segs={segs} selectedKey={selKey} onSelect={setSel}/>
+      <div style={{display:"flex",flexWrap:"wrap",gap:"4px 12px",justifyContent:"center",marginTop:8}}>
+        {usedSegs.map(sg=><div key={sg.id} style={{display:"flex",alignItems:"center",gap:4,fontSize:9.5,color:"#666"}}><div style={{width:9,height:9,background:sg.color,borderRadius:2}}></div>{sg.bn}</div>)}
+      </div>
+      <div style={{fontSize:8.5,color:"#aaa",textAlign:"center",marginTop:5}}>কলামের উপরের সংখ্যা হাজার টাকায় · যেকোনো কলামে চাপলে সেই সময়ের বিস্তারিত নিচে দেখাবে</div>
+    </div>
+    {selBar&&renderDetail&&<div style={{background:"#fafafa",border:"1px solid #eee",borderRadius:10,padding:"11px 12px",marginTop:8}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:8,marginBottom:7}}>
+        <span style={{fontSize:11.5,fontWeight:700,color:"#333"}}>📅 {periodLongLabel(mode,selBar.key)}{selBar.partial?" (চলতি)":""}</span>
+        <span style={{fontSize:13,fontWeight:800,color:accent,flexShrink:0}}>{money(Math.round(selBar.total))}</span>
+      </div>
+      {renderDetail(selBar,mode)}
+    </div>}
+  </div>;
+}
 function BarChart({data,height=140,color=CHART_SOFT_RED,formatY}){
   const max=Math.max(...data.map(d=>d.value),1);
   const w=100/data.length;
@@ -1767,6 +2032,9 @@ function App({firebaseConfig,onResetConfig}){
   // ── ইচ্ছাকৃতভাবে মুছে ফেলা মডেল/ক্যাটাগরির রেকর্ড — যাতে অন্য ডিভাইস সেগুলো আবার
   // স্বয়ংক্রিয়ভাবে ফিরিয়ে না আনে ──
   const deletedRecordRef=useRef({});
+  // v4.52: এই ডিভাইস থেকে ফার্নিচার ডেটাবেসের কতগুলো লেখা এখনো সার্ভারে পৌঁছায়নি — এগুলো পৌঁছানোর
+  // আগে সার্ভারের (পুরনো) কপি দিয়ে স্ক্রিন বা সার্ভার কোনোটাই আর ওভাররাইট করা হয় না
+  const dbPendingRef=useRef(0);
   otherDataRef.current={expenses,woodLots,workers,payrollWeeks,db};
   const[carpenters,setCarpenters]=useState([]);
   const[draft,setDraft]=useState(null);
@@ -2215,7 +2483,7 @@ function App({firebaseConfig,onResetConfig}){
         setPayrollWeeks(map);
       },err=>{});
 
-      const unsubDb=firestore.doc("meta/db").onSnapshot(snap=>{
+      const unsubDb=firestore.doc("meta/db").onSnapshot({includeMetadataChanges:true},snap=>{
         clearTimeout(timer);setTimedOut(false);
         if(snap.exists){
           const data=snap.data();
@@ -2442,6 +2710,10 @@ function App({firebaseConfig,onResetConfig}){
               const LEGACY_DEL="_"+"_deleted_"+"_";
               const tombstones={...(sv[LEGACY_DEL]||{}),...(sv.zz_deletedRecord||{})};
               const localDb=dbRef.current||{};
+              // v4.52: এই ডিভাইসের কোনো পরিবর্তন এখনো পৌঁছানোর পথে থাকলে এই দফায় কিছু পাঠানো হয় না
+              // (সার্ভারের কপিটা তখন পুরনো, তার ভিত্তিতে পাঠালে সদ্য করা কাজ উল্টে যেত)
+              const skipPush=dbPendingRef.current>0;
+              const pushWrites=[]; // শুধু যা সার্ভারে নেই — [[ঘরের পথ...], মান]
               const merged=JSON.parse(JSON.stringify(sv));
               delete merged.zz_deletedRecord;
               delete merged[LEGACY_DEL];
@@ -2456,6 +2728,7 @@ function App({firebaseConfig,onResetConfig}){
                   // মুছে ফেলা মডেলগুলো বাদ দিয়ে ক্যাটাগরিটা যোগ করা হয়
                   Object.keys(cloned.variants||{}).forEach(vk=>{if(tombstones[vk]||tombstones["mv:"+catKey+"|"+vk])delete cloned.variants[vk]});
                   merged[catKey]=cloned;
+                  pushWrites.push([[catKey],JSON.parse(JSON.stringify(cloned))]);
                   addedCats++;
                   return;
                 }
@@ -2466,6 +2739,7 @@ function App({firebaseConfig,onResetConfig}){
                   const serverVar=merged[catKey].variants[varKey];
                   if(!serverVar){
                     merged[catKey].variants[varKey]=JSON.parse(JSON.stringify(localVar));
+                    pushWrites.push([[catKey,"variants",varKey],JSON.parse(JSON.stringify(localVar))]);
                     addedVars++;
                   }else if(isEmptyWood(serverVar)&&!isEmptyWood(localVar)){
                     // ── এখানে আগে বিপজ্জনক কাজ হতো: সার্ভারে কাঠের মাপ ফাঁকা দেখলেই এই
@@ -2478,6 +2752,9 @@ function App({firebaseConfig,onResetConfig}){
                     const serverTs=(serverVar.woodUpdatedAt||0);
                     if(localTs>serverTs){
                       merged[catKey].variants[varKey]={...serverVar,sections:localVar.sections,woodOverride:localVar.woodOverride,woodUpdatedAt:localTs};
+                      pushWrites.push([[catKey,"variants",varKey,"sections"],JSON.parse(JSON.stringify(localVar.sections||[]))]);
+                      pushWrites.push([[catKey,"variants",varKey,"woodUpdatedAt"],localTs]);
+                      if(localVar.woodOverride!==undefined)pushWrites.push([[catKey,"variants",varKey,"woodOverride"],localVar.woodOverride]);
                       filledWood++;
                     }
                   }
@@ -2547,9 +2824,13 @@ function App({firebaseConfig,onResetConfig}){
               // নিরাপদ, কারণ: (১) এই মিলকরণ শুধু যোগ করে, কখনো কিছু মোছে না; (২) আপনি
               // ইচ্ছাকৃতভাবে যা মুছেছেন তার রেকর্ড রাখা হয়, তাই অন্য ডিভাইস সেগুলো আবার
               // ফিরিয়ে আনে না। ফলে যে ডিভাইসেই কাজ করুন, সব ডিভাইসে একই তথ্য থাকবে ──
-              if(needsPush){
+              // ── v4.52: আগে এখানে পুরো ডেটাবেস নতুন করে লেখা হতো (set) — এর মাঝে অন্য কোথাও করা
+              // পরিবর্তন মুছে যেতে পারত। এখন শুধু যা সার্ভারে নেই সেই ঘরগুলোই যোগ হয় ──
+              if(needsPush&&!skipPush&&pushWrites.length){
                 try{
-                  await withTimeout(fs2.doc("meta/db").set({...merged,zz_deletedRecord:tombstones}),45000,"সময়সীমা পার");
+                  const FP=firebase.firestore.FieldPath;
+                  const args=[];pushWrites.forEach(([segs,val])=>{args.push(new FP(...segs),val)});
+                  await withTimeout(fs2.doc("meta/db").update(...args),45000,"সময়সীমা পার");
                 }catch(e6){}
               }
               const gapParts=[];
@@ -2692,7 +2973,7 @@ function App({firebaseConfig,onResetConfig}){
           const map={};snap.docs.forEach(d=>{map[d.id]=d.data()});setPayrollWeeks(map);
         }),
         fs.collection("workers").get({source:"server"}).then(snap=>{setWorkers(snap.docs.map(d=>d.data()))}),
-        fs.doc("meta/db").get({source:"server"}).then(s=>{if(s.exists){const{slim,tomb}=splitDbDoc(s.data());deletedRecordRef.current={...(deletedRecordRef.current||{}),...tomb};setDb(slim)}}),
+        fs.doc("meta/db").get({source:"server"}).then(s=>{if(s.exists&&dbPendingRef.current===0){const{slim,tomb}=splitDbDoc(s.data());deletedRecordRef.current={...(deletedRecordRef.current||{}),...tomb};setDb(slim)}}),
         fs.doc("meta/woodSettings").get({source:"server"}).then(s=>{setWoodSettings(s.exists?s.data():{})}),
         fs.doc("meta/laborSettings").get({source:"server"}).then(s=>{setLaborSettings(s.exists?s.data():{})}),
         fs.doc("meta/carpenters").get({source:"server"}).then(s=>{setCarpenters(s.exists?(s.data().list||[]):[])}),
@@ -2742,50 +3023,44 @@ function App({firebaseConfig,onResetConfig}){
   // কপির উপর বসানো হয়। আগে পুরো নথি লেখা হতো, ফলে যে ডিভাইসের কপি কোনো কারণে অসম্পূর্ণ
   // (যেমন কম্পিউটারে ১০-১২টা মডেল, অথচ মোবাইলে ১০০+) সেখান থেকে একটা ছোট সম্পাদনা করলেই
   // বাকি ডিভাইসের সব মডেল মুছে যেত। এখন সেটা অসম্ভব — শুধু আপনার করা পরিবর্তনটাই যায় ──
-  const saveDb=(newDb)=>{
+  const saveDb=(newDb,opts)=>{
     const oldDb=dbRef.current||{};
     setDb(newDb);
     const fs=fsRef.current;
     if(!fs)return;
-    // ── এখানে আগে সার্ভার থেকে পড়ে, তারপর লেখা হতো। দুর্বল সংযোগে সেই পড়াটা শেষ হওয়ার
-    // আগেই লিসেনার সার্ভারের পুরনো কপি এনে আপনার সদ্য করা পরিবর্তন মুছে দিত — এই কারণেই
-    // নাম বদলানো বা কাঠের মাপ বসানো যাচ্ছিল না, টাইপ করলেও হারিয়ে যাচ্ছিল।
-    // এখন সার্ভার থেকে পড়ার দরকারই নেই: এই ডিভাইসেই আগের-পরের তুলনা করে শুধু যা বদলেছে
-    // সেটুকুই merge করে পাঠানো হয় — সাথে সাথে, অপেক্ষা ছাড়া। merge হওয়ায় অন্য ডিভাইসের
-    // কোনো মডেল এতে স্পর্শও হয় না ──
-    const payload={};      // যা যোগ/বদল হয়েছে (নেস্টেড merge)
-    const deletePaths=[];  // যা ইচ্ছাকৃতভাবে মুছতে হবে — প্রতিটা পাথ আলাদা অংশে, যেমন [ক্যাটাগরি,"variants",মডেল]
+    // ── v4.52: আগে একটা পরিবর্তন দুই ধাপে যেত (আগে যোগ, তারপর মোছা)। ধীর নেটে প্রথম ধাপ ৪৫
+    // সেকেন্ডে শেষ না হলে দ্বিতীয় ধাপটা আর পাঠানোই হতো না — ফলে সরানো মডেল দুই ক্যাটাগরিতেই থেকে
+    // যেত (নতুন ডুপ্লিকেট)। এখন যোগ, বদল, মোছা আর মুছে-ফেলার রেকর্ড — সব একটাই লেখায় (atomic):
+    // হয় পুরোটা হবে, নয়তো কিছুই না। প্রতিটা ঘর আলাদা FieldPath দিয়ে, তাই নামে ডট বা বিশেষ চিহ্ন
+    // থাকলেও ভুল জায়গায় লেখা হয় না। শুধু যা বদলেছে সেটুকুই যায় — অন্য ডিভাইসের কিছু স্পর্শ হয় না ──
+    const DEL={__del:true};
+    const writes=[]; // [[ঘরের পথ...], মান অথবা DEL]
     const prevTomb=deletedRecordRef.current||{};
     const tombstones={...prevTomb};
-    let changeCount=0;
     Object.entries(newDb).forEach(([ck,cat])=>{
       if(!isCatEntry(ck,cat))return;
       const oldCat=oldDb[ck];
-      if(!oldCat){
-        payload[ck]=JSON.parse(JSON.stringify(cat));changeCount++;
+      if(!isCatEntry(ck,oldCat)){
+        writes.push([[ck],JSON.parse(JSON.stringify(cat))]);
         // ক্যাটাগরিটা (আবার) যোগ হলো — এর আগের "মুছে ফেলা/সরিয়ে নেওয়া" চিহ্ন আর প্রযোজ্য নয়
         delete tombstones["cat:"+ck];
         Object.keys(cat.variants||{}).forEach(vk=>{delete tombstones["mv:"+ck+"|"+vk]});
         return;
       }
-      const catPatch={};
-      if(oldCat.bn!==cat.bn){catPatch.bn=cat.bn;changeCount++}
-      if(oldCat.en!==cat.en){catPatch.en=cat.en;changeCount++}
-      const varPatch={};
+      if(oldCat.bn!==cat.bn)writes.push([[ck,"bn"],cat.bn===undefined?DEL:cat.bn]);
+      if(oldCat.en!==cat.en)writes.push([[ck,"en"],cat.en===undefined?DEL:cat.en]);
       Object.entries(cat.variants||{}).forEach(([vk,v])=>{
         const oldV=(oldCat.variants||{})[vk];
-        if(!oldV||JSON.stringify(oldV)!==JSON.stringify(v)){varPatch[vk]=JSON.parse(JSON.stringify(v));changeCount++}
+        if(!oldV||JSON.stringify(oldV)!==JSON.stringify(v))writes.push([[ck,"variants",vk],JSON.parse(JSON.stringify(v))]);
         // মডেলটা এই ক্যাটাগরিতে (আবার) এসেছে — "এখান থেকে সরানো হয়েছিল" চিহ্ন তুলে দেওয়া হয়
         if(!oldV)delete tombstones["mv:"+ck+"|"+vk];
       });
-      if(Object.keys(varPatch).length)catPatch.variants=varPatch;
-      if(Object.keys(catPatch).length)payload[ck]=catPatch;
     });
     // মুছে ফেলা শনাক্ত করা
     const pendingVarDeletes=[],pendingCatDeletes=[];
     Object.entries(oldDb).forEach(([ck,oldCat])=>{
       if(!isCatEntry(ck,oldCat))return;
-      if(!newDb[ck]){pendingCatDeletes.push(ck);return}
+      if(!isCatEntry(ck,newDb[ck])){pendingCatDeletes.push(ck);return}
       Object.keys(oldCat.variants||{}).forEach(vk=>{
         if(!((newDb[ck].variants)||{})[vk]){
           const movedElsewhere=Object.entries(newDb).some(([ck2,c2])=>ck2!==ck&&isCatEntry(ck2,c2)&&(c2.variants||{})[vk]);
@@ -2793,52 +3068,45 @@ function App({firebaseConfig,onResetConfig}){
         }
       });
     });
-    // ── v4.45: অন্য ক্যাটাগরিতে সরানো মডেলের পুরনো জায়গা সবসময় মোছা হয়, সাথে "এই ক্যাটাগরি থেকে
-    // সরানো হয়েছে" চিহ্ন রাখা হয় — যাতে অন্য কোনো ডিভাইসের পুরনো কপি মডেলটাকে আগের ক্যাটাগরিতে
-    // আর ফিরিয়ে আনতে না পারে। আগে ঠিক এভাবেই একই মডেলের "ভূত-কপি" তৈরি হতো ──
+    // অন্য ক্যাটাগরিতে সরানো মডেলের পুরনো জায়গা সবসময় মোছা হয়, সাথে "এই ক্যাটাগরি থেকে সরানো
+    // হয়েছে" চিহ্ন — যাতে অন্য ডিভাইসের পুরনো কপি মডেলটাকে আগের ক্যাটাগরিতে আর ফেরাতে না পারে
     pendingVarDeletes.filter(d=>d.movedElsewhere).forEach(({ck,vk})=>{
-      deletePaths.push([ck,"variants",vk]);
+      writes.push([[ck,"variants",vk],DEL]);
       tombstones["mv:"+ck+"|"+vk]=Date.now();
     });
-    // ── ভর-মুছে-ফেলার রক্ষাকবচ: একবারে ৩টার বেশি মুছে যাওয়ার কথা এলে মোছার অংশটা
-    // বাতিল হয় (যোগ/সম্পাদনা ঠিকই সেভ হয়) ──
+    // ── ভর-মুছে-ফেলার রক্ষাকবচ: একবারে ৩টার বেশি মুছে যাওয়ার কথা এলে মোছার অংশটা বাতিল হয়
+    // (যোগ/সম্পাদনা ঠিকই সেভ হয়)। আপনি নিজে ইচ্ছা করে একসাথে কয়েকটা মেশালে এটা প্রযোজ্য নয় ──
     const realDeletes=pendingVarDeletes.filter(d=>!d.movedElsewhere).length+pendingCatDeletes.length;
-    if(realDeletes>3){
+    if(realDeletes>3&&!(opts&&opts.intentional)){
       alert(`🛡️ নিরাপত্তা: এই সেভে ${realDeletes}টা মডেল/ক্যাটাগরি মুছে যেত।\n\nএকবারে এতগুলো মোছা স্বাভাবিক নয় — সম্ভবত এই ডিভাইসের কপি পুরনো ছিল। মোছার অংশটা বাতিল করা হলো।\n\nআপনার যোগ/নাম-বদল/কাঠের মাপ ঠিকই সেভ হয়েছে।`);
     }else{
       pendingVarDeletes.filter(d=>!d.movedElsewhere).forEach(({ck,vk})=>{
-        deletePaths.push([ck,"variants",vk]);
+        writes.push([[ck,"variants",vk],DEL]);
         tombstones[vk]=Date.now();
       });
       pendingCatDeletes.forEach(ck=>{
-        deletePaths.push([ck]);
+        writes.push([[ck],DEL]);
         tombstones["cat:"+ck]=Date.now();
       });
     }
     deletedRecordRef.current=tombstones;
-    const tombChanged=Object.keys(tombstones).filter(k=>prevTomb[k]!==tombstones[k]);
-    const tombCleared=Object.keys(prevTomb).filter(k=>!(k in tombstones));
-    const run=async()=>{
-      try{
-        if(Object.keys(payload).length){
-          await withTimeout(fs.doc("meta/db").set(payload,{merge:true}),45000,"সময়সীমা পার");
-        }
-        // ── মোছা আর মুছে-ফেলার রেকর্ড একসাথে এক লেখায়, প্রতিটা ঘর আলাদা FieldPath দিয়ে — নামে
-        // ডট (.) বা বিশেষ চিহ্ন থাকলেও ভুল জায়গায় লেখা বা লেখা ব্যর্থ হয় না, আর অন্য ডিভাইসের
-        // যোগ করা রেকর্ডও মুছে যায় না ──
-        const FP=firebase.firestore.FieldPath,FV=firebase.firestore.FieldValue;
-        const args=[];
-        deletePaths.forEach(segs=>{args.push(new FP(...segs),FV.delete())});
-        tombChanged.forEach(k=>{args.push(new FP("zz_deletedRecord",k),tombstones[k])});
-        tombCleared.forEach(k=>{args.push(new FP("zz_deletedRecord",k),FV.delete())});
-        if(args.length){
-          await withTimeout(fs.doc("meta/db").update(...args),45000,"সময়সীমা পার");
-        }
-      }catch(err){
-        alert("⚠️ ক্লাউডে সেভ করতে সমস্যা হয়েছে: "+err.message+"\n\nপরিবর্তনটা এই ডিভাইসে আছে — অ্যাপ খোলা রাখলে স্বয়ংক্রিয়ভাবে আবার চেষ্টা হবে।");
+    Object.keys(tombstones).forEach(k=>{if(prevTomb[k]!==tombstones[k])writes.push([["zz_deletedRecord",k],tombstones[k]])});
+    Object.keys(prevTomb).forEach(k=>{if(!(k in tombstones))writes.push([["zz_deletedRecord",k],DEL])});
+    if(!writes.length)return;
+    const FP=firebase.firestore.FieldPath,FV=firebase.firestore.FieldValue;
+    const args=[];
+    writes.forEach(([segs,val])=>{args.push(new FP(...segs),val===DEL?FV.delete():val)});
+    let p;
+    try{p=fs.doc("meta/db").update(...args)}catch(err){p=Promise.reject(err)}
+    // ধীর নেটে এখানে আর কোনো সময়সীমা বা সতর্কবার্তা নেই — লেখাটা ফোনের সারিতে থাকে, নেট পেলেই পৌঁছায়
+    dbPendingRef.current++;
+    p.catch(err=>{
+      if(err&&err.code==="not-found"){
+        // নথিটা এখনো তৈরিই হয়নি (একদম নতুন প্রজেক্ট) — পুরো ডেটাবেস একবারে বসানো হয়
+        return fs.doc("meta/db").set({...JSON.parse(JSON.stringify(Object.fromEntries(dbCats(newDb)))),zz_deletedRecord:tombstones},{merge:true});
       }
-    };
-    run();
+      if(!isTimeoutErr(err))alert("⚠️ ক্লাউডে সেভ করতে সমস্যা হয়েছে: "+err.message+"\n\nপরিবর্তনটা এই ডিভাইসে আছে।");
+    }).catch(()=>{}).then(()=>{dbPendingRef.current=Math.max(0,dbPendingRef.current-1)});
   };
   // ── মডেলের নাম বদলালে, সেই মডেল ব্যবহার করা প্রতিটা অর্ডারেও নামটা সাথে সাথে বদলে দেওয়া হয়।
   // প্রতিটা অর্ডার আইটেমে মডেলের নামের একটা কপি (variantBn) সংরক্ষিত থাকে — প্রিন্ট শীট,
@@ -2867,13 +3135,39 @@ function App({firebaseConfig,onResetConfig}){
         const batch=fs.batch();
         chunk.forEach(o=>batch.set(fs.collection("orders").doc(o.no),{items:applyTo(o.items)},{merge:true}));
         await withTimeout(batch.commit(),45000,"সময়সীমা পার");
-      }catch(e){alert(`⚠️ কিছু অর্ডারে নতুন কাঠের মাপ পাঠাতে সমস্যা হয়েছে (${e.message}) — অ্যাপ খোলা রাখলে আবার চেষ্টা হবে।`)}
+      }catch(e){if(!isTimeoutErr(e))alert(`⚠️ কিছু অর্ডারে নতুন কাঠের মাপ পাঠাতে সমস্যা হয়েছে (${e.message}) — অ্যাপ খোলা রাখলে আবার চেষ্টা হবে।`)}
     }
     if(affected.length)alert(`✅ ${affected.length}টা অসম্পূর্ণ অর্ডারে নতুন কাঠের মাপ বসানো হয়েছে। ডেলিভারি হয়ে যাওয়া অর্ডার অপরিবর্তিত আছে (ইতিহাস ঠিক রাখতে)।`);
   };
   // ── দুটো মডেল একত্র (merge) করা: সব অর্ডারে পুরনো মডেলের সংযোগ নতুন মডেলে বদলে দেওয়া হয়,
   // সাথে নাম ও কোডও। ডেলিভারড অর্ডারের কাঠের মাপ অপরিবর্তিত থাকে (ইতিহাস), অসম্পূর্ণ
   // অর্ডারে রাখা-মডেলের মাপ বসে যায় ──
+  // ── v4.52: এক বা একাধিক মডেল একটা মডেলে মেশানোর পর অর্ডারের সংযোগ বদলানো — এক দফায়, কোনো
+  // বার্তা ছাড়া (যে পাতা থেকে মেশানো হয় সেই পাতাই ফল জানায়)। ফেরত দেয় কতটা অর্ডারে বদল হলো ──
+  const mergeManyAcrossOrders=async(sources,toCat,toVar,keptVariant)=>{
+    const fs=fsRef.current;
+    const isSrc=(it)=>(sources||[]).some(([c,v])=>it.catKey===c&&it.varKey===v);
+    const affected=(ordersRef.current||[]).filter(o=>(o.items||[]).some(isSrc));
+    const remap=(o)=>(o.items||[]).map(it=>{
+      if(!isSrc(it))return it;
+      const base={...it,catKey:toCat,varKey:toVar,variantBn:keptVariant.bn,code:keptVariant.code||it.code};
+      if(!o.delivered&&!o.cancelled&&keptVariant.sections&&keptVariant.sections.length)base.sections=JSON.parse(JSON.stringify(keptVariant.sections));
+      return base;
+    });
+    setOrders(prev=>prev.map(o=>(o.items||[]).some(isSrc)?{...o,items:remap(o)}:o));
+    if(fs&&affected.length){
+      const chunks=[];
+      for(let i=0;i<affected.length;i+=400)chunks.push(affected.slice(i,i+400));
+      for(const chunk of chunks){
+        try{
+          const batch=fs.batch();
+          chunk.forEach(o=>batch.set(fs.collection("orders").doc(o.no),{items:remap(o)},{merge:true}));
+          await withTimeout(batch.commit(),45000,"সময়সীমা পার");
+        }catch(e){if(!isTimeoutErr(e))alert(`⚠️ কিছু অর্ডার একত্র করতে সমস্যা হয়েছে (${e.message})।`)}
+      }
+    }
+    return affected.length;
+  };
   const mergeVariantsAcrossOrders=async(fromCat,fromVar,toCat,toVar,keptVariant)=>{
     const fs=fsRef.current;
     const affected=(ordersRef.current||[]).filter(o=>(o.items||[]).some(it=>it.catKey===fromCat&&it.varKey===fromVar));
@@ -2892,7 +3186,7 @@ function App({firebaseConfig,onResetConfig}){
           const batch=fs.batch();
           chunk.forEach(o=>batch.set(fs.collection("orders").doc(o.no),{items:remap(o)},{merge:true}));
           await withTimeout(batch.commit(),45000,"সময়সীমা পার");
-        }catch(e){alert(`⚠️ কিছু অর্ডার একত্র করতে সমস্যা হয়েছে (${e.message}) — অ্যাপ খোলা রাখলে আবার চেষ্টা হবে।`)}
+        }catch(e){if(!isTimeoutErr(e))alert(`⚠️ কিছু অর্ডার একত্র করতে সমস্যা হয়েছে (${e.message}) — অ্যাপ খোলা রাখলে আবার চেষ্টা হবে।`)}
       }
     }
     alert(`✅ একত্র করা সম্পন্ন। ${affected.length}টা অর্ডার নতুন মডেলের সাথে যুক্ত হয়েছে।`);
@@ -2913,7 +3207,7 @@ function App({firebaseConfig,onResetConfig}){
         const batch=fs.batch();
         chunk.forEach(o=>batch.set(fs.collection("orders").doc(o.no),{items:(o.items||[]).map(remapItem)},{merge:true}));
         await withTimeout(batch.commit(),45000,"সময়সীমা পার");
-      }catch(e){alert(`⚠️ কিছু অর্ডারে নতুন ক্যাটাগরি পাঠাতে সমস্যা হয়েছে (${e.message}) — অ্যাপ খোলা রাখলে স্বয়ংক্রিয়ভাবে আবার চেষ্টা হবে।`)}
+      }catch(e){if(!isTimeoutErr(e))alert(`⚠️ কিছু অর্ডারে নতুন ক্যাটাগরি পাঠাতে সমস্যা হয়েছে (${e.message}) — অ্যাপ খোলা রাখলে স্বয়ংক্রিয়ভাবে আবার চেষ্টা হবে।`)}
     }
   };
   // ── v4.45: মডেলের কোড বদলালে সেই মডেল ব্যবহার করা প্রতিটা অর্ডারেও কোডটা বদলে যায় (নাম
@@ -2933,7 +3227,7 @@ function App({firebaseConfig,onResetConfig}){
         const batch=fs.batch();
         chunk.forEach(o=>batch.set(fs.collection("orders").doc(o.no),{items:(o.items||[]).map(remapItem)},{merge:true}));
         await withTimeout(batch.commit(),45000,"সময়সীমা পার");
-      }catch(e){alert(`⚠️ কিছু অর্ডারে নতুন কোড পাঠাতে সমস্যা হয়েছে (${e.message}) — অ্যাপ খোলা রাখলে স্বয়ংক্রিয়ভাবে আবার চেষ্টা হবে।`)}
+      }catch(e){if(!isTimeoutErr(e))alert(`⚠️ কিছু অর্ডারে নতুন কোড পাঠাতে সমস্যা হয়েছে (${e.message}) — অ্যাপ খোলা রাখলে স্বয়ংক্রিয়ভাবে আবার চেষ্টা হবে।`)}
     }
   };
   const propagateVariantRename=async(catKey,varKey,newVariantBn)=>{
@@ -2957,7 +3251,7 @@ function App({firebaseConfig,onResetConfig}){
           batch.set(fs.collection("orders").doc(o.no),{items:newItems},{merge:true});
         });
         await withTimeout(batch.commit(),45000,"সময়সীমা পার");
-      }catch(e){alert(`⚠️ কিছু অর্ডারে নতুন নাম পাঠাতে সমস্যা হয়েছে (${e.message}) — অ্যাপ খোলা রাখলে স্বয়ংক্রিয়ভাবে আবার চেষ্টা হবে।`)}
+      }catch(e){if(!isTimeoutErr(e))alert(`⚠️ কিছু অর্ডারে নতুন নাম পাঠাতে সমস্যা হয়েছে (${e.message}) — অ্যাপ খোলা রাখলে স্বয়ংক্রিয়ভাবে আবার চেষ্টা হবে।`)}
     }
   };
   // ── ক্রমিক অর্ডার নম্বর — Firestore transaction দিয়ে, যাতে দুইটা ডিভাইস একই সময়ে
@@ -3152,9 +3446,13 @@ function App({firebaseConfig,onResetConfig}){
   // একজনের লেখা আরেকজনের লেখা মুছে ফেলবে না। উপরের savePayrollWeek পুরো ডকুমেন্ট বদলে দেয় বলে
   // একটা ডিভাইসের পুরনো/স্টেল কপি দিয়ে সেভ করলে অন্য ডিভাইসের এন্ট্রি হারিয়ে যেতে পারত — এখন আর পারবে না।
   const updateAttendance=(weekEnd,workerId,days)=>{
+    // v4.52: হাজিরার সাথে কর্মীর তখনকার দৈনিক হার, নাম ও বিভাগও সপ্তাহের নথিতে থাকে — পরে কর্মীর
+    // প্রোফাইল মুছে ফেললেও সেই সপ্তাহের বেতন বেতনের চার্ট ও মোট ব্যয়ে ঠিকঠাক গোনা যায়
+    const wk=((otherDataRef.current&&otherDataRef.current.workers)||[]).find(x=>x.id===workerId);
+    const wsnap=wk?{rate:parseFloat(wk.dailyRate)||0,name:wk.name||"",dept:wk.department||""}:null;
     setPayrollWeeks(prev=>{
       const wd=prev[weekEnd]||{attendance:{},advances:[]};
-      return{...prev,[weekEnd]:{...wd,attendance:{...(wd.attendance||{}),[workerId]:days}}};
+      return{...prev,[weekEnd]:{...wd,attendance:{...(wd.attendance||{}),[workerId]:days},...(wsnap?{wstat:{...(wd.wstat||{}),[workerId]:wsnap}}:{})}};
     });
     // ── আগে এখানে {"attendance.<id>": days} এভাবে set() করা হতো — কিন্তু set()-এ সাধারণ
     // অবজেক্টের ভেতরে ডট-যুক্ত নাম দিলে Firestore সেটাকে নেস্টেড ম্যাপ হিসেবে না নিয়ে
@@ -3163,7 +3461,7 @@ function App({firebaseConfig,onResetConfig}){
     // দিন বসানো যাচ্ছিল না। নেস্টেড ম্যাপে লিখতে হলে আলাদা করে ম্যাপ পাঠাতে হয় ──
     if(fsRef.current){
       fsRef.current.collection("payrollWeeks").doc(weekEnd)
-        .set({attendance:{[workerId]:days}},{merge:true})
+        .set({attendance:{[workerId]:days},...(wsnap?{wstat:{[workerId]:wsnap}}:{})},{merge:true})
         .catch(err=>alert("⚠️ হাজিরা সিঙ্ক করতে সমস্যা হয়েছে: "+err.message));
     }
   };
@@ -3230,7 +3528,7 @@ function App({firebaseConfig,onResetConfig}){
   if(page==="preview")return<Preview order={viewed||draft} onBack={goBack} slip={slip} setSlip={setSlip} onUpdate={updateOrder} onAddPayment={addOrderPayment} onSetDelivered={setOrderDelivered} onDelete={deleteOrderPermanently} db={db} saveDb={saveDb} carpenters={carpenters} saveCarpenters={saveCarpenters} galleries={galleries} saveGalleryEntry={saveGalleryEntry} woodSettings={woodSettingsWithBands} laborSettings={laborSettings} workers={workers} allOrders={orders} rackSplits={rackSplits}/>;
   if(page==="form")return<Form onSave={saveOrder} onBack={goBack} db={db} saveDb={saveDb} galleries={galleries} woodSettings={woodSettings} laborSettings={laborSettings} orders={orders} getNextOrderNumber={getNextOrderNumber}/>;
   if(page==="history")return<Hist orders={orders} db={db} onBack={goBack} onView={o=>navigate({page:"preview",orderNo:o.no,slip:0})} highlightNo={highlightNo} q={curScreen.q||""} setQ={q=>replaceTop({...curScreen,q})} statusFilter={curScreen.statusFilter||"all"} setStatusFilter={statusFilter=>replaceTop({...curScreen,statusFilter})} catFilter={curScreen.catFilter||"all"} setCatFilter={catFilter=>replaceTop({...curScreen,catFilter})} sortMode={curScreen.sortMode||"recent"} setSortMode={sortMode=>replaceTop({...curScreen,sortMode})}/>;
-  if(page==="manage")return<ManageDB db={db} saveDb={saveDb} galleries={galleries} saveGalleryEntry={saveGalleryEntry} onBack={goBack} navigate={navigate} goBack={goBack} replaceTop={replaceTop} curScreen={curScreen} highlightNo={highlightNo} onRenameVariant={propagateVariantRename} onMoveVariant={propagateVariantMove} onRecodeVariant={propagateVariantCode} onWoodChange={propagateWoodChange} onMergeVariants={mergeVariantsAcrossOrders}/>;
+  if(page==="manage")return<ManageDB db={db} saveDb={saveDb} galleries={galleries} saveGalleryEntry={saveGalleryEntry} onBack={goBack} navigate={navigate} goBack={goBack} replaceTop={replaceTop} curScreen={curScreen} highlightNo={highlightNo} onRenameVariant={propagateVariantRename} orders={orders} onMergeMany={mergeManyAcrossOrders} onMoveVariant={propagateVariantMove} onRecodeVariant={propagateVariantCode} onWoodChange={propagateWoodChange} onMergeVariants={mergeVariantsAcrossOrders}/>;
   if(page==="woodstock")return<WoodStockPage woodLots={woodLots} saveWoodLots={saveWoodLots} addLotPayment={addLotPayment} woodSettings={woodSettingsWithBands} saveWoodSettings={saveWoodSettings} laborSettings={laborSettings} saveLaborSettings={saveLaborSettings} rackSplits={rackSplits} addRackSplit={addRackSplit} rackBands={rackBands} addRackBand={addRackBand} removeRackBand={removeRackBand} payrollWeeks={payrollWeeks} workers={workers} orders={orders} expenses={expenses} onBack={goBack} view={curScreen.view||"list"} lotId={curScreen.lotId||null} onOpenList={()=>navigate({page:"woodstock",view:"list"})} onOpenDetail={lotId=>navigate({page:"woodstock",view:"detail",lotId})} onOpenNew={()=>navigate({page:"woodstock",view:"new"})} onOpenRates={()=>navigate({page:"woodstock",view:"rates"})} onOpenUsage={()=>navigate({page:"woodstock",view:"usage"})} highlightNo={highlightNo}/>;
   if(page==="expense")return<ExpensePage expenses={expenses} onSave={saveExpense} onBack={goBack}/>;
   if(page==="payroll")return<PayrollPage workers={workers} saveWorker={saveWorker} deleteWorker={deleteWorker} payrollWeeks={payrollWeeks} savePayrollWeek={savePayrollWeek} updateAttendance={updateAttendance} addAdvanceEntry={addAdvanceEntry} removeAdvanceEntry={removeAdvanceEntry} onBack={goBack}/>;
@@ -3267,6 +3565,15 @@ function Home({lastPageCrash,orders,expenses,woodLots,db,woodSettings,laborSetti
   },[]);
   const[syncCheck,setSyncCheck]=useState(null); // null=না চালানো, "loading", অথবা ফলাফল
   const[resending,setResending]=useState({});
+  // ── v4.52: খরচের একক খতিয়ান (বিস্তারিত উপরে buildSpendLedger-এ) ──
+  const spendLedger=useMemo(()=>buildSpendLedger(expenses,payrollWeeks,workers,woodLots),[expenses,payrollWeeks,workers,woodLots]);
+  const salaryLedger=useMemo(()=>spendLedger.filter(e=>e.kind==="salary"),[spendLedger]);
+  const cftDoneList=useMemo(()=>{
+    const out=[];
+    (orders||[]).forEach(o=>{if(!o||o.cancelled)return;const ip=effectiveItemProgress(o);(o.items||[]).forEach((it,idx)=>{const d=itemDoneDate(o,it,idx,ip);if(!d)return;const c=totalCft(it.sections||[])*(parseFloat(it.qty)||1);if(c>0)out.push({date:d,cft:c})})});
+    return out;
+  },[orders]);
+  const[profitOpenCat,setProfitOpenCat]=useState(null);
   const stats=useMemo(()=>{
     // Running orders (not fully paid = not delivered typically, but we track by payment completion as proxy + delivery date)
     // ── একটা অর্ডারের সব পিসের সব বিভাগ ১০০% শেষ কিনা — এটা "চলমান" থেকে বাদ দিতে
@@ -3347,17 +3654,8 @@ function Home({lastPageCrash,orders,expenses,woodLots,db,woodSettings,laborSetti
         return s+Math.max(0,(parseFloat(o.cust.total)||0)-paid);
       },0);
     const threeMoAgoStr=monthsAgo(todayStr(),3);
-    const recentExpenseTotal=(expenses||[]).filter(e=>e.date>=threeMoAgoStr).reduce((s,e)=>s+(parseFloat(e.total)||0),0);
-    const recentWoodTotal=(woodLots||[]).filter(l=>l.date>=threeMoAgoStr).reduce((s,l)=>s+(l.logs||[]).reduce((ls,lg)=>ls+lg.cft,0)*(parseFloat(l.ratePerCft)||0),0);
-    let recentPayrollTotal=0;
-    Object.entries(payrollWeeks||{}).forEach(([weekEnd,wd])=>{
-      if(weekEnd<threeMoAgoStr)return;
-      Object.entries(wd.attendance||{}).forEach(([wid,days])=>{
-        const w=(workers||[]).find(x=>x.id===wid);
-        if(w)recentPayrollTotal+=(parseFloat(days)||0)*(parseFloat(w.dailyRate)||0);
-      });
-    });
-    const cfOutflow=(recentExpenseTotal+recentWoodTotal+recentPayrollTotal)/3; // মাসিক গড়
+    // ── v4.52: বাইরে যাওয়া টাকা "মোট ব্যয়"-এর একই খতিয়ান থেকে (কাঠ = সাপ্লায়ারকে আসল পেমেন্ট) ──
+    const cfOutflow=(spendLedger||[]).reduce((t,e)=>e.date>=threeMoAgoStr?t+e.amount:t,0)/3; // মাসিক গড়
     const cfNet=cfInflow-cfOutflow;
 
 
@@ -3480,39 +3778,9 @@ function Home({lastPageCrash,orders,expenses,woodLots,db,woodSettings,laborSetti
       });
       return{labels:monthsB.map(mo=>monthName(mo.m)),inCounts,outCounts};
     })();
-    const catProfit={};
-    activeOrders.filter(o=>o.delivered).forEach(o=>{
-      const lRate=orderLabourRate(o,laborSettings);
-      (o.items||[]).forEach(it=>{
-        const catLabel=(db&&it.catKey&&db[it.catKey])?db[it.catKey].bn:(it.variantBn.split(" ")[0]||it.code);
-        const woodCost=itemWoodCost(it,o,woodSettings);
-        const labourCost=totalCft(it.sections||[])*(it.qty||1)*lRate;
-        const revenue=(parseFloat(it.price)||0)*(parseFloat(it.qty)||1);
-        if(revenue<=0)return;
-        if(!catProfit[catLabel])catProfit[catLabel]={label:catLabel,revenue:0,cost:0,woodCost:0,labourCost:0,count:0,bottleneckDays:0,bnSamples:0};
-        catProfit[catLabel].revenue+=revenue;
-        catProfit[catLabel].cost+=woodCost+labourCost;
-        catProfit[catLabel].woodCost+=woodCost;
-        catProfit[catLabel].labourCost+=labourCost;
-        catProfit[catLabel].count+=1;
-        // থ্রুপুট অ্যাকাউন্টিং (Goldratt): এই আইটেম বাধা-বিভাগে কত দিন দখল করেছিল
-        if(bottleneckDeptId){
-          const ipx=effectiveItemProgress(o);
-          const ikey=it.itemId||"idx_0";
-          const bn=(ipx[ikey]||{})[bottleneckDeptId];
-          if(bn&&bn.start&&bn.end){
-            const dd=daysBetween(bn.start,bn.end);
-            if(dd>=0){catProfit[catLabel].bottleneckDays+=Math.max(dd,0.5);catProfit[catLabel].bnSamples+=1}
-          }
-        }
-      });
-    });
-    const catProfitRanked=Object.values(catProfit).map(c=>({...c,
-      profit:c.revenue-c.cost,
-      margin:c.revenue>0?((c.revenue-c.cost)/c.revenue)*100:0,
-      // বাধার প্রতিদিনে কত টাকা লাভ — Goldratt-এর মতে এটাই আসল অগ্রাধিকারের মাপ
-      profitPerBnDay:c.bottleneckDays>0?(c.revenue-c.cost)/c.bottleneckDays:null
-    })).sort((a,b)=>b.margin-a.margin);
+    // ── v4.52: পূর্ণ খরচ ধরে হিসাব — কাঠ + কর্মীদের আসল বেতন + অন্যান্য খরচ (বিস্তারিত furnitureCosting-এ) ──
+    const fcost=furnitureCosting(activeOrders,spendLedger,woodSettings,laborSettings,db,bottleneckDeptId);
+    const catProfitRanked=fcost.ranked;
     const throughputRanked=catProfitRanked.filter(c=>c.profitPerBnDay!==null).sort((a,b)=>b.profitPerBnDay-a.profitPerBnDay);
 
     // ── ৭. কর্মী-ভিত্তিক উৎপাদনশীলতা: কে কত CFT কাজে যুক্ত ছিলেন (গত ৬ মাস) ──
@@ -3715,8 +3983,8 @@ function Home({lastPageCrash,orders,expenses,woodLots,db,woodSettings,laborSetti
         daysUntilOrder:dailyUse>0?Math.round((stock-reorderPoint)/dailyUse):null};
     }).filter(Boolean).sort((a,b)=>a.monthsLeft-b.monthsLeft);
 
-    return{running:withDays,yoy,totalRevenue,totalExpense,catPie,thisMonthCount:thisMonthOrders.length,avgOrderValue,totalOutstanding,yearly,stockPie,payables,totalPayable,cfInflow,cfOutflow,cfNet,deptAvg,deptAvgMax,stuckItems,payrollProdByMonth,validPerCft,setLabourRate,emptyWoodModels,repeatRate,repeatCount:repeatCusts.length,totalCustCount:custList.length,repeatRevenueShare,stockAlerts,readyNotCollected,readyValueStuck,avgProdDays,recentAvgProd,olderAvgProd,prodCount:prodTimes.length,woodPriceAlerts,catProfitRanked,throughputRanked,bottleneckDeptBn,workerRanked,backlogTrend};
-  },[orders,expenses,db,woodLots,woodSettings,laborSettings,workers,payrollWeeks,alertSettings]);
+    return{furnitureMonths:fcost.months,furnitureHasPayroll:fcost.hasPayroll,running:withDays,yoy,totalRevenue,totalExpense,catPie,thisMonthCount:thisMonthOrders.length,avgOrderValue,totalOutstanding,yearly,stockPie,payables,totalPayable,cfInflow,cfOutflow,cfNet,deptAvg,deptAvgMax,stuckItems,payrollProdByMonth,validPerCft,setLabourRate,emptyWoodModels,repeatRate,repeatCount:repeatCusts.length,totalCustCount:custList.length,repeatRevenueShare,stockAlerts,readyNotCollected,readyValueStuck,avgProdDays,recentAvgProd,olderAvgProd,prodCount:prodTimes.length,woodPriceAlerts,catProfitRanked,throughputRanked,bottleneckDeptBn,workerRanked,backlogTrend};
+  },[orders,expenses,db,woodLots,woodSettings,laborSettings,workers,payrollWeeks,alertSettings,spendLedger]);
 
   // ── "খরচ — ক্যাটাগরি অনুযায়ী" এখন সময়সীমা বাছাই করা যায় — এটা আলাদা, ছোট useMemo-তে রাখা
   // হয়েছে (উপরের বিশাল হিসাবের অংশ না) যাতে শুধু সময়সীমা বদলালে পুরো ড্যাশবোর্ড নতুন করে
@@ -3732,34 +4000,14 @@ function Home({lastPageCrash,orders,expenses,woodLots,db,woodSettings,laborSetti
     else if(expRangeSelect==="2y")rangeStart.setFullYear(rangeStart.getFullYear()-2);
 
     const expByCat={};
-    (expenses||[]).filter(e=>new Date(e.date)>=rangeStart).forEach(e=>{
+    (expenses||[]).filter(e=>new Date(e.date)>=rangeStart&&e.category!=="salary").forEach(e=>{
       const cat=EXP_CATS.find(c=>c.id===e.category);
       const label=cat?cat.bn:e.category;
       expByCat[label]=(expByCat[label]||0)+(parseFloat(e.total)||0);
     });
-    // ── পে-রোলের টাকাও এখন খরচের ভাগে দেখায়। হিসাবটা এভাবে: প্রতি সপ্তাহের মোট প্রাপ্য
-    // (হাজিরা × দৈনিক হার) হলো আসল বেতন-খরচ; সেই সপ্তাহে যে অগ্রিম দেওয়া হয়েছে তা ওই
-    // প্রাপ্যেরই একটা অংশ, তাই দুটো আলাদা করে যোগ করা হয় না (করলে দুইবার গোনা হয়ে যেত)।
-    // অগ্রিম তার নিজের তারিখে ধরা হয়, আর বাকিটা সপ্তাহ শেষের তারিখে ──
-    let payrollAdvanceTotal=0,payrollBalanceTotal=0;
-    Object.entries(payrollWeeks||{}).forEach(([weekEnd,wd])=>{
-      let weekDue=0;
-      Object.entries(wd.attendance||{}).forEach(([wid,days])=>{
-        const w=(workers||[]).find(x=>x.id===wid);
-        if(w)weekDue+=(parseFloat(days)||0)*(parseFloat(w.dailyRate)||0);
-      });
-      let advInRange=0,advTotal=0;
-      (wd.advances||[]).forEach(a=>{
-        const amt=parseFloat(a.amount)||0;
-        advTotal+=amt;
-        if(a.date&&new Date(a.date)>=rangeStart)advInRange+=amt;
-      });
-      payrollAdvanceTotal+=advInRange;
-      const balance=Math.max(weekDue-advTotal,0);
-      if(new Date(weekEnd)>=rangeStart)payrollBalanceTotal+=balance;
-    });
-    if(payrollAdvanceTotal>0)expByCat["কর্মীর অগ্রিম"]=(expByCat["কর্মীর অগ্রিম"]||0)+payrollAdvanceTotal;
-    if(payrollBalanceTotal>0)expByCat["সাপ্তাহিক বেতন (অগ্রিম বাদে)"]=(expByCat["সাপ্তাহিক বেতন (অগ্রিম বাদে)"]||0)+payrollBalanceTotal;
+    // ── v4.52: কর্মীদের বেতন আর এই পাইয়ে নেই — "কর্মীদের বেতন" নামে আলাদা চার্টে পুরো হিসাব দেখায়।
+    // (আগে এখানে "কর্মীর অগ্রিম" আর "সাপ্তাহিক বেতন (অগ্রিম বাদে)" আলাদা দুটো ভাগ ছিল — অথচ অগ্রিম
+    // বেতনেরই অংশ, তাই সেটা বিভ্রান্তিকর ছিল) ──
     const EXP_PIE_COLORS=[CHART_SOFT_TEAL,CHART_SOFT_BLUE,CHART_SOFT_ORANGE,CHART_SOFT_PURPLE,CHART_SOFT_PINK,CHART_SOFT_GREY,"#d4b26a",CHART_SOFT_GREEN];
     const expensePie=Object.entries(expByCat).sort((a,b)=>b[1]-a[1]).map(([label,value],i)=>({label,value,color:EXP_PIE_COLORS[i%EXP_PIE_COLORS.length]}));
 
@@ -3955,25 +4203,16 @@ function Home({lastPageCrash,orders,expenses,woodLots,db,woodSettings,laborSetti
         const pd=new Date(p.date);
         return pd.getFullYear()===year&&pd.getMonth()===m;
       }).reduce((s,p)=>s+(parseFloat(p.amount)||0),0),0);
-      const total=(expenses||[]).filter(e=>{const ed=new Date(e.date);return ed.getFullYear()===year&&ed.getMonth()===m}).reduce((s,e)=>s+(parseFloat(e.total)||0),0);
-      // ── "ব্যয়" শুধু ট্র্যাক-করা খরচ না — কাঠ ক্রয় ও বেতনও যোগ হয় (আগের মতোই) ──
-      const woodCost=(woodLots||[]).filter(l=>{const ld=new Date(l.date);return ld.getFullYear()===year&&ld.getMonth()===m}).reduce((s,l)=>s+(l.logs||[]).reduce((ls,lg)=>ls+lg.cft,0)*(parseFloat(l.ratePerCft)||0),0);
-      let payrollCost=0;
-      Object.entries(payrollWeeks||{}).forEach(([weekEnd,wd])=>{
-        const wed=new Date(weekEnd);
-        if(wed.getFullYear()!==year||wed.getMonth()!==m)return;
-        Object.entries(wd.attendance||{}).forEach(([wid,days])=>{
-          const w=(workers||[]).find(x=>x.id===wid);
-          if(w)payrollCost+=(parseFloat(days)||0)*(parseFloat(w.dailyRate)||0);
-        });
-      });
-      return{label:monthName(m),revenue:collection,expense:total+woodCost+payrollCost};
+      // ── v4.52: "ব্যয়" = "মোট ব্যয়"-এর একই খতিয়ান: সব খরচ + কর্মীদের বেতন + কাঠ (সাপ্লায়ারকে যেদিন
+      // যত টাকা দেওয়া হয়েছে সেই তারিখে, সাথে কাটাই ও পরিবহন) ──
+      const expense=(spendLedger||[]).reduce((t,e)=>{const d=parseISO(e.date);return(d.getUTCFullYear()===year&&d.getUTCMonth()===m)?t+e.amount:t},0);
+      return{label:monthName(m),revenue:collection,expense};
     });
   };
   const[svExpYearSelect,setSvExpYearSelect]=useState(()=>new Date().getFullYear());
-  const svExpData=useMemo(()=>({year:svExpYearSelect,monthly:computeMonthlyFinance(svExpYearSelect)}),[orders,expenses,woodLots,payrollWeeks,workers,svExpYearSelect]);
+  const svExpData=useMemo(()=>({year:svExpYearSelect,monthly:computeMonthlyFinance(svExpYearSelect)}),[orders,spendLedger,svExpYearSelect]);
   const[monthlyIncomeYearSelect,setMonthlyIncomeYearSelect]=useState(()=>new Date().getFullYear());
-  const monthlyIncomeData=useMemo(()=>({year:monthlyIncomeYearSelect,monthly:computeMonthlyFinance(monthlyIncomeYearSelect)}),[orders,expenses,woodLots,payrollWeeks,workers,monthlyIncomeYearSelect]);
+  const monthlyIncomeData=useMemo(()=>({year:monthlyIncomeYearSelect,monthly:computeMonthlyFinance(monthlyIncomeYearSelect)}),[orders,spendLedger,monthlyIncomeYearSelect]);
   const financeYearOptions=useMemo(()=>{
     const cy=new Date().getFullYear();
     const arr=[];
@@ -4296,7 +4535,8 @@ function Home({lastPageCrash,orders,expenses,woodLots,db,woodSettings,laborSetti
       <div id="z-health" style={{scrollMarginTop:56,fontSize:11,fontWeight:800,color:"#1d4ed8",letterSpacing:"0.3px",margin:"18px 0 8px",paddingBottom:4,borderBottom:"2px solid #1d4ed822"}}>📊 ব্যবসার স্বাস্থ্য</div>
       {/* Revenue vs Expense */}
       <div style={{marginBottom:18}}>
-        <div style={{fontWeight:700,fontSize:13,color:"#222",marginBottom:6}}>💰 সংগ্রহ বনাম ব্যয় ({svExpData.year})</div>
+        <div style={{fontWeight:700,fontSize:13,color:"#222",marginBottom:2}}>💰 সংগ্রহ বনাম ব্যয় ({svExpData.year})</div>
+        <div style={{fontSize:9,color:"#999",marginBottom:6}}>ব্যয় = সব খরচ + কর্মীদের বেতন + কাঠের পেমেন্ট (নিচের "মোট ব্যয়"-এর মতোই)</div>
         <div style={{display:"flex",gap:5,marginBottom:8,overflowX:"auto"}}>
           {financeYearOptions.map(y=><button key={y} onClick={()=>setSvExpYearSelect(y)} style={{flexShrink:0,padding:"6px 12px",borderRadius:20,border:svExpYearSelect===y?"none":"1px solid #ddd",background:svExpYearSelect===y?"#166534":"white",color:svExpYearSelect===y?"white":"#666",fontSize:10,fontWeight:600}}>{y}</button>)}
         </div>
@@ -4329,7 +4569,8 @@ function Home({lastPageCrash,orders,expenses,woodLots,db,woodSettings,laborSetti
 
       {/* Pie chart - expense by category */}
       {expRangeData.expensePie&&expRangeData.expensePie.length>0&&<div style={{marginBottom:18}}>
-        <div style={{fontWeight:700,fontSize:13,color:"#222",marginBottom:8}}>💸 খরচ — ক্যাটাগরি অনুযায়ী ({EXP_RANGE_LABELS[expRangeSelect]})</div>
+        <div style={{fontWeight:700,fontSize:13,color:"#222",marginBottom:2}}>💸 খরচ — ক্যাটাগরি অনুযায়ী ({EXP_RANGE_LABELS[expRangeSelect]})</div>
+        <div style={{fontSize:9,color:"#999",marginBottom:8}}>কর্মীদের বেতন এখানে নেই — ঠিক নিচে আলাদা চার্টে পুরো হিসাব</div>
         <div style={{display:"flex",gap:6,marginBottom:8,overflowX:"auto"}}>
           {Object.entries(EXP_RANGE_LABELS).map(([k,l])=><button key={k} onClick={()=>setExpRangeSelect(k)} style={{flexShrink:0,padding:"6px 12px",borderRadius:20,border:expRangeSelect===k?"none":"1px solid #ddd",background:expRangeSelect===k?"#166534":"white",color:expRangeSelect===k?"white":"#666",fontSize:10,fontWeight:600}}>{l}</button>)}
         </div>
@@ -4352,9 +4593,64 @@ function Home({lastPageCrash,orders,expenses,woodLots,db,woodSettings,laborSetti
         </div>}
       </div>}
 
+      {/* ── v4.52: কর্মীদের বেতন — খরচের পাই থেকে আলাদা, সপ্তাহ/মাস/বছর অনুযায়ী পূর্ণ চিত্র ── */}
+      <SpendPeriodChart icon="👷" title="কর্মীদের বেতন" accent="#1d4ed8"
+        note="প্রতি সপ্তাহে প্রতিটা কর্মীর মোট আয় (হাজিরা × দৈনিক হার), বিভাগ অনুযায়ী রঙে ভাগ করা। অগ্রিম এই আয়েরই আগাম অংশ — সপ্তাহ শেষে মোট আয় থেকেই কাটা হয় — তাই আলাদা করে দেখানো হয় না। প্রতিটা সপ্তাহ তার বৃহস্পতিবারের তারিখে ধরা।"
+        entries={salaryLedger} segs={SALARY_SEGS} segOf={e=>e.seg}
+        renderDetail={(bar,mode)=>{
+          if(!bar.total)return<div style={{fontSize:11,color:"#999"}}>এই সময়ে কোনো বেতন লেখা নেই</div>;
+          const depts=SALARY_SEGS.map(sg=>({...sg,v:bar.values[sg.id]||0})).filter(x=>x.v>0);
+          const byW={};
+          bar.entries.forEach(e=>{if(!e.workerId)return;const w=byW[e.workerId]||(byW[e.workerId]={name:e.workerName,dept:e.label,days:0,amt:0});w.days+=e.days||0;w.amt+=e.amount});
+          const ws=Object.values(byW).sort((x,y)=>y.amt-x.amt);
+          const cftDone=cftDoneList.reduce((t,x)=>periodKeyOf(x.date,mode)===bar.key?t+x.cft:t,0);
+          return<div>
+            {depts.map(d=><div key={d.id} style={{display:"flex",alignItems:"center",gap:6,fontSize:11,marginBottom:4}}>
+              <span style={{width:9,height:9,borderRadius:2,background:d.color,flexShrink:0}}></span>
+              <span style={{flex:1,color:"#444"}}>{d.bn}</span>
+              <span style={{color:"#888",fontSize:10}}>{toBnDigits(((d.v/bar.total)*100).toFixed(0))}%</span>
+              <span style={{fontWeight:700,minWidth:74,textAlign:"right"}}>{money(Math.round(d.v))}</span>
+            </div>)}
+            {cftDone>0&&<div style={{fontSize:10,color:"#555",background:"white",border:"1px dashed #ddd",borderRadius:7,padding:"6px 8px",margin:"8px 0"}}>🪚 এই সময়ে তৈরি শেষ: <strong>{toBnDigits(cftDone.toFixed(1))} CFT</strong> · প্রতি CFT-তে বেতন: <strong>{money(Math.round(bar.total/cftDone))}</strong></div>}
+            {ws.length>0&&<div style={{marginTop:6}}>
+              <div style={{fontSize:10,fontWeight:700,color:"#666",marginBottom:4}}>কর্মী অনুযায়ী</div>
+              {ws.slice(0,12).map((w,i)=><div key={i} style={{display:"flex",justifyContent:"space-between",gap:6,fontSize:10.5,padding:"3px 0",borderBottom:"1px solid #f0f0f0"}}>
+                <span style={{color:"#333",minWidth:0}}>{w.name} <span style={{color:"#aaa",fontSize:9}}>· {w.dept} · {toBnDigits(String(Math.round(w.days*10)/10))} দিন</span></span>
+                <span style={{fontWeight:600,flexShrink:0}}>{money(Math.round(w.amt))}</span>
+              </div>)}
+              {ws.length>12&&<div style={{fontSize:9,color:"#aaa",marginTop:3}}>আরও {toBnDigits(ws.length-12)} জন</div>}
+            </div>}
+          </div>;
+        }}/>
+
+      {/* ── v4.52: মোট ব্যয় — সব খরচ + বেতন + কাঠের আসল পেমেন্ট ── */}
+      <SpendPeriodChart icon="🧾" title="মোট ব্যয়" accent="#0f766e"
+        note="সব খরচ + কর্মীদের বেতন + কাঠ। কাঠ ধরা হয় সাপ্লায়ারকে যেদিন যত টাকা দেওয়া হয়েছে সেই তারিখে (লটের মোট দাম বা কেনার তারিখে নয়), সাথে স'মিল কাটাই আর কাঠ পরিবহনের খরচ। উপরের 'সংগ্রহ বনাম ব্যয়'-এর ব্যয়ও ঠিক এটাই।"
+        entries={spendLedger} segs={SPEND_SEGS} segOf={e=>e.kind}
+        renderDetail={(bar)=>{
+          if(!bar.total)return<div style={{fontSize:11,color:"#999"}}>এই সময়ে কোনো ব্যয় লেখা নেই</div>;
+          const group=(kind,keyFn)=>{const m={};bar.entries.forEach(e=>{if(e.kind!==kind)return;const k=keyFn(e);m[k]=(m[k]||0)+e.amount});return Object.entries(m).sort((x,y)=>y[1]-x[1])};
+          const partBlock=(sg,total,rows,extra)=>total>0?<div key={sg.id} style={{marginBottom:9}}>
+            <div style={{display:"flex",alignItems:"center",gap:6,fontSize:11.5,fontWeight:700,color:"#333",marginBottom:3}}>
+              <span style={{width:9,height:9,borderRadius:2,background:sg.color,flexShrink:0}}></span>
+              <span style={{flex:1}}>{sg.bn}</span>
+              <span style={{color:"#888",fontSize:10,fontWeight:600}}>{toBnDigits(((total/bar.total)*100).toFixed(0))}%</span>
+              <span>{money(Math.round(total))}</span>
+            </div>
+            {(rows||[]).slice(0,6).map(([k,v])=><div key={k} style={{display:"flex",justifyContent:"space-between",gap:6,fontSize:10,color:"#666",padding:"1px 0 1px 15px"}}><span style={{minWidth:0}}>{k}</span><span style={{flexShrink:0}}>{money(Math.round(v))}</span></div>)}
+            {rows&&rows.length>6&&<div style={{fontSize:9,color:"#aaa",paddingLeft:15}}>আরও {toBnDigits(rows.length-6)}টা</div>}
+            {extra}
+          </div>:null;
+          return<div>
+            {partBlock(SPEND_SEGS[0],bar.values.expense||0,group("expense",e=>e.label))}
+            {partBlock(SPEND_SEGS[1],bar.values.salary||0,null,<div style={{fontSize:9.5,color:"#999",paddingLeft:15}}>বিস্তারিত উপরের "কর্মীদের বেতন" চার্টে</div>)}
+            {partBlock(SPEND_SEGS[2],bar.values.wood||0,group("wood",e=>e.label==="সাপ্লায়ারকে পেমেন্ট"?`সাপ্লায়ার: ${e.supplier}`:e.label))}
+          </div>;
+        }}/>
+
       {stats.catProfitRanked&&stats.catProfitRanked.length>0&&<div onClick={()=>setProfitDetailOpen(true)} style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 14px",marginBottom:14,cursor:"pointer"}}>
-        <div style={{fontSize:12,fontWeight:700,color:"#166534",marginBottom:3,display:"flex",justifyContent:"space-between",alignItems:"center"}}><span>💰 কোন ফার্নিচারে লাভ বেশি</span><span style={{color:"#aaa",fontSize:14}}>›</span></div>
-        <div style={{fontSize:9,color:"#999",marginBottom:8}}>শুধু ডেলিভারি হওয়া অর্ডার থেকে — বেশি বিক্রি মানেই বেশি লাভ নয়। বিস্তারিত দেখতে ট্যাপ করুন।</div>
+        <div style={{fontSize:12,fontWeight:700,color:"#166534",marginBottom:3,display:"flex",justifyContent:"space-between",alignItems:"center"}}><span>💰 কোন ফার্নিচারে খরচ ও লাভ কত</span><span style={{color:"#aaa",fontSize:14}}>›</span></div>
+        <div style={{fontSize:9,color:"#999",marginBottom:8}}>ডেলিভারি হওয়া অর্ডার থেকে — কাঠ, কর্মীদের বেতন আর অন্যান্য খরচ বাদ দিয়ে আসল লাভ। অর্ডার ধরে পুরো হিসাব দেখতে ট্যাপ করুন।</div>
         {stats.catProfitRanked.slice(0,6).map(c=><div key={c.label} style={{marginBottom:7}}>
           <div style={{display:"flex",justifyContent:"space-between",fontSize:11,marginBottom:2}}>
             <span style={{fontWeight:600}}>{c.label} <span style={{color:"#aaa",fontSize:9}}>({c.count}টি)</span></span>
@@ -4698,24 +4994,80 @@ function Home({lastPageCrash,orders,expenses,woodLots,db,woodSettings,laborSetti
     {profitDetailOpen&&<div style={{position:"fixed",inset:0,background:"white",zIndex:200,overflowY:"auto"}}>
       <div style={{position:"sticky",top:0,background:"#166534",color:"white",padding:"14px 16px",display:"flex",alignItems:"center",gap:10,zIndex:1}}>
         <button onClick={()=>setProfitDetailOpen(false)} style={{background:"none",border:"none",color:"white",fontSize:20,padding:0}}>←</button>
-        <div style={{fontSize:15,fontWeight:800}}>💰 কোন ফার্নিচারে লাভ বেশি — বিস্তারিত</div>
+        <div style={{fontSize:15,fontWeight:800}}>💰 কোন ফার্নিচারে খরচ ও লাভ কত</div>
       </div>
       <div style={{padding:16}}>
-        <div style={{fontSize:10,color:"#999",marginBottom:14,lineHeight:1.5}}>শুধু ডেলিভারি হওয়া অর্ডার থেকে হিসাব করা — প্রতিটা ফার্নিচার ক্যাটাগরির মোট আয়, কাঠ ও শ্রম খরচ, আর তা থেকে লাভের হার।</div>
-        {(stats.catProfitRanked||[]).map(c=><div key={c.label} style={{background:"#fafafa",border:"1px solid #eee",borderRadius:10,padding:"12px 14px",marginBottom:10}}>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
-            <span style={{fontWeight:700,fontSize:13}}>{c.label}</span>
-            <span style={{fontWeight:800,fontSize:13,color:c.margin>=0?"#166534":RED}}>{c.margin.toFixed(0)}% লাভ</span>
-          </div>
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,fontSize:10.5}}>
-            <div style={{color:"#666"}}>অর্ডার সংখ্যা</div><div style={{textAlign:"right",fontWeight:600}}>{c.count}টি</div>
-            <div style={{color:"#666"}}>মোট আয়</div><div style={{textAlign:"right",fontWeight:600,color:"#166534"}}>{money(c.revenue)}</div>
-            <div style={{color:"#666"}}>কাঠের খরচ</div><div style={{textAlign:"right",fontWeight:600,color:"#92400e"}}>{money(c.woodCost)}</div>
-            <div style={{color:"#666"}}>শ্রম খরচ</div><div style={{textAlign:"right",fontWeight:600,color:"#92400e"}}>{money(c.labourCost)}</div>
-            <div style={{color:"#666",borderTop:"1px dashed #ddd",paddingTop:4}}>মোট খরচ</div><div style={{textAlign:"right",fontWeight:700,borderTop:"1px dashed #ddd",paddingTop:4}}>{money(c.cost)}</div>
-            <div style={{color:"#333",fontWeight:700}}>নিট লাভ</div><div style={{textAlign:"right",fontWeight:800,color:c.profit>=0?"#166534":RED}}>{money(c.profit)}</div>
-          </div>
-        </div>)}
+        {(()=>{
+          const ranked=stats.catProfitRanked||[];
+          const T=ranked.reduce((t,c)=>({revenue:t.revenue+c.revenue,wood:t.wood+c.woodCost,sal:t.sal+c.salaryCost,exp:t.exp+c.expenseCost,cost:t.cost+c.cost,cft:t.cft+c.cft,count:t.count+c.count}),{revenue:0,wood:0,sal:0,exp:0,cost:0,cft:0,count:0});
+          const tProfit=T.revenue-T.cost,tMargin=T.revenue>0?(tProfit/T.revenue)*100:0;
+          const row=(l,v,o)=><React.Fragment key={l}><div style={{color:o&&o.b?"#333":"#666",fontWeight:o&&o.b?700:400,borderTop:o&&o.line?"1px dashed #ddd":"none",paddingTop:o&&o.line?4:0}}>{l}</div><div style={{textAlign:"right",fontWeight:o&&o.b?800:600,color:(o&&o.c)||"#333",borderTop:o&&o.line?"1px dashed #ddd":"none",paddingTop:o&&o.line?4:0}}>{v}</div></React.Fragment>;
+          const pct=(x)=>toBnDigits(x.toFixed(0))+"%";
+          return<>
+            <div style={{background:"#f0fdf4",border:"1px solid #bbf7d0",borderRadius:10,padding:"10px 12px",fontSize:10,color:"#166534",lineHeight:1.65,marginBottom:12}}>
+              <div style={{fontWeight:800,marginBottom:3}}>হিসাব যেভাবে হয়েছে</div>
+              <div>• শুধু ডেলিভারি হওয়া অর্ডার। বিক্রি = দাম × পরিমাণ।</div>
+              <div>• কাঠ: অর্ডারে যত CFT কাঠ গেছে (পরিবহন বিভাগের তারিখে), অর্ডারের সময়ের কাঠের দামে।</div>
+              <div>• বেতন: ফার্নিচারটা যে মাসে তৈরি শেষ হয়েছে, সেই মাস আর আগের ২ মাসে কর্মীদের মোট বেতন ÷ ওই ৩ মাসে তৈরি শেষ হওয়া মোট CFT — এই হারে প্রতি CFT-তে বসানো।{stats.furnitureHasPayroll?"":" (পে-রোলে এখনো কোনো হাজিরা নেই, তাই সেটিংসের শ্রম-হার ধরা হয়েছে।)"}</div>
+              <div>• অন্যান্য খরচ: খরচের খাতার সব খরচ (বেতন বাদে) একইভাবে প্রতি CFT-তে ভাগ করে বসানো।</div>
+            </div>
+            {ranked.length>0&&<div style={{background:"white",border:"1.5px solid #166534",borderRadius:10,padding:"12px 14px",marginBottom:12}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+                <span style={{fontWeight:800,fontSize:13}}>সব ফার্নিচার মিলিয়ে</span>
+                <span style={{fontWeight:800,fontSize:13,color:tMargin>=0?"#166534":RED}}>{pct(tMargin)} লাভ</span>
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr auto",gap:5,fontSize:10.5}}>
+                {row(`বিক্রি (${toBnDigits(T.count)}টি ফার্নিচার)`,money(Math.round(T.revenue)),{c:"#166534"})}
+                {row(`কাঠ (${toBnDigits(T.cft.toFixed(1))} CFT)`,money(Math.round(T.wood)),{c:"#92400e"})}
+                {row("কর্মীদের বেতন",money(Math.round(T.sal)),{c:"#92400e"})}
+                {row("অন্যান্য খরচ",money(Math.round(T.exp)),{c:"#92400e"})}
+                {row("মোট খরচ",money(Math.round(T.cost)),{b:true,line:true})}
+                {row("নিট লাভ",money(Math.round(tProfit)),{b:true,c:tProfit>=0?"#166534":RED})}
+              </div>
+            </div>}
+            {ranked.map(c=>{const open=profitOpenCat===c.label;return<div key={c.label} style={{background:"#fafafa",border:"1px solid #eee",borderRadius:10,padding:"12px 14px",marginBottom:10}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8,gap:8}}>
+                <span style={{fontWeight:700,fontSize:13}}>{c.label} <span style={{color:"#999",fontSize:10,fontWeight:500}}>({toBnDigits(c.count)}টি · {toBnDigits(c.cft.toFixed(1))} CFT)</span></span>
+                <span style={{fontWeight:800,fontSize:13,color:c.margin>=0?"#166534":RED,flexShrink:0}}>{pct(c.margin)} লাভ</span>
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr auto",gap:5,fontSize:10.5}}>
+                {row("বিক্রি",money(Math.round(c.revenue)),{c:"#166534"})}
+                {row("কাঠ",money(Math.round(c.woodCost)),{c:"#92400e"})}
+                {row("কর্মীদের বেতন",money(Math.round(c.salaryCost)),{c:"#92400e"})}
+                {row("অন্যান্য খরচ",money(Math.round(c.expenseCost)),{c:"#92400e"})}
+                {row("মোট খরচ",money(Math.round(c.cost)),{b:true,line:true})}
+                {row("নিট লাভ",money(Math.round(c.profit)),{b:true,c:c.profit>=0?"#166534":RED})}
+              </div>
+              {c.cft>0&&<div style={{fontSize:9.5,color:"#777",marginTop:6}}>প্রতি CFT: বিক্রি {money(Math.round(c.revenue/c.cft))} · খরচ {money(Math.round(c.cost/c.cft))} · লাভ {money(Math.round(c.profit/c.cft))}</div>}
+              <button onClick={()=>setProfitOpenCat(open?null:c.label)} style={{width:"100%",marginTop:8,background:"white",border:"1px solid #ddd",borderRadius:8,padding:"7px",fontSize:11,fontWeight:600,color:"#166534"}}>{open?"▲ অর্ডারগুলো লুকান":`▼ ${toBnDigits(c.rows.length)}টা অর্ডারের আলাদা হিসাব দেখুন`}</button>
+              {open&&<div style={{marginTop:8}}>
+                {c.rows.map((r,i)=><div key={i} style={{background:"white",border:"1px solid #eee",borderRadius:8,padding:"7px 9px",marginBottom:6}}>
+                  <div style={{display:"flex",justifyContent:"space-between",gap:6,fontSize:10.5,fontWeight:700,color:"#333"}}><span style={{minWidth:0}}>🪵 {r.woodDate?fmtDate(r.woodDate):"—"} · {r.cust||"—"}</span><span style={{color:r.profit>=0?"#166534":RED,flexShrink:0}}>লাভ {money(Math.round(r.profit))}</span></div>
+                  <div style={{fontSize:9.5,color:"#777",margin:"2px 0 5px"}}>{r.model}{r.wood?` · ${r.wood}`:""} · {toBnDigits(r.cft.toFixed(2))} CFT কাঠ · অর্ডার {r.no}</div>
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:4,fontSize:9.5,textAlign:"center"}}>
+                    {[["বিক্রি",r.revenue],["কাঠ",r.woodCost],["বেতন",r.salaryCost],["খরচ",r.expenseCost]].map(([l,v])=><div key={l}><div style={{color:"#999"}}>{l}</div><div style={{fontWeight:600}}>{money(Math.round(v))}</div></div>)}
+                  </div>
+                  {r.salBasis==="setting"&&<div style={{fontSize:8.5,color:"#a16207",marginTop:3}}>বেতন: সেটিংসের শ্রম-হারে (তখনো পে-রোলে হাজিরা ছিল না)</div>}
+                </div>)}
+              </div>}
+            </div>})}
+            <div style={{marginTop:16}}>
+              <div style={{fontSize:12,fontWeight:800,color:"#333",marginBottom:3}}>📅 মাস অনুযায়ী প্রতি CFT-এর হার</div>
+              <div style={{fontSize:9.5,color:"#999",marginBottom:8,lineHeight:1.5}}>প্রতিটা মাসের হার = সেই মাস আর আগের ২ মাসের মোট ÷ ওই সময়ে তৈরি শেষ হওয়া CFT</div>
+              <div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",fontSize:9.5,minWidth:380}}>
+                <thead><tr style={{background:"#f3f4f6"}}>{["মাস","তৈরি শেষ (CFT)","বেতন","অন্যান্য খরচ","প্রতি CFT বেতন","প্রতি CFT খরচ"].map((h,i)=><th key={h} style={{padding:"6px 4px",textAlign:i===0?"left":"right",fontWeight:700,color:"#555"}}>{h}</th>)}</tr></thead>
+                <tbody>{[...(stats.furnitureMonths||[])].reverse().map(m=><tr key={m.key} style={{borderBottom:"1px solid #f0f0f0"}}>
+                  <td style={{padding:"5px 4px",fontWeight:600,whiteSpace:"nowrap"}}>{m.label}</td>
+                  <td style={{padding:"5px 4px",textAlign:"right"}}>{m.cft?toBnDigits(m.cft.toFixed(1)):"—"}</td>
+                  <td style={{padding:"5px 4px",textAlign:"right"}}>{m.salary?money(Math.round(m.salary)):"—"}</td>
+                  <td style={{padding:"5px 4px",textAlign:"right"}}>{m.expense?money(Math.round(m.expense)):"—"}</td>
+                  <td style={{padding:"5px 4px",textAlign:"right",fontWeight:600}}>{m.salPerCft!==null?money(Math.round(m.salPerCft)):"—"}</td>
+                  <td style={{padding:"5px 4px",textAlign:"right",fontWeight:600}}>{m.expPerCft!==null?money(Math.round(m.expPerCft)):"—"}</td>
+                </tr>)}</tbody>
+              </table></div>
+            </div>
+          </>;
+        })()}
       </div>
     </div>}
   </div>
@@ -6104,7 +6456,7 @@ function PayrollPage({workers,saveWorker,deleteWorker,payrollWeeks,savePayrollWe
 }
 
 /* ── MANAGE DB ── */
-function ManageDB({db,saveDb,galleries,saveGalleryEntry,onBack,navigate,goBack,replaceTop,curScreen,highlightNo,onRenameVariant,onMoveVariant,onRecodeVariant,onWoodChange,onMergeVariants}){
+function ManageDB({db,saveDb,galleries,saveGalleryEntry,onBack,navigate,goBack,replaceTop,curScreen,highlightNo,orders,onMergeMany,onRenameVariant,onMoveVariant,onRecodeVariant,onWoodChange,onMergeVariants}){
   // ── এই পেজের ভেতরের নেভিগেশন (তালিকা ↔ + ক্যাটাগরি ↔ + ভেরিয়েন্ট ↔ কাঠ সম্পাদনা ↔ ছবি) এখন
   // নিজের সাময়িক মেমোরিতে না — অ্যাপের মূল নেভিগেশন-স্ট্যাকে থাকে (Hist-এর ফিল্টারের মতোই),
   // যাতে ফোনের ব্যাক বাটন এক ধাপ করেই পেছাতে পারে, সরাসরি ড্যাশবোর্ডে চলে না যায় ──
@@ -6136,7 +6488,14 @@ function ManageDB({db,saveDb,galleries,saveGalleryEntry,onBack,navigate,goBack,r
 
   const addCategory=()=>{
     if(!newCat.key||!newCat.bn)return;
-    const nd={...db,[newCat.key]:{bn:newCat.bn,en:newCat.en||newCat.bn,variants:{}}};
+    // ── v4.52: একই চাবির ক্যাটাগরি থাকলে আগে পুরনোটা তার সব মডেলসহ নিঃশব্দে মুছে যেত; আর একই
+    // নামে দুটো ক্যাটাগরি থেকেই "অন্য ক্যাটাগরিতে একই মডেল" সমস্যার শুরু — দুটোই এখন আটকানো হয় ──
+    const nk=newCat.key.trim();
+    if(!nk||nk==="zz_deletedRecord"||/^__.*__$/.test(nk)){alert("⚠️ এই চাবিটা ব্যবহার করা যাবে না — অন্য চাবি দিন।");return}
+    if(db[nk]){alert(`⚠️ "${nk}" চাবির ক্যাটাগরি ("${(db[nk]&&db[nk].bn)||nk}") আগেই আছে — অন্য চাবি দিন।`);return}
+    const sameCat=dbCats(db).find(([,c])=>normModelName(c.bn)===normModelName(newCat.bn));
+    if(sameCat){alert(`⚠️ "${sameCat[1].bn}" নামে ক্যাটাগরি আগেই আছে — একই নামে দুটো ক্যাটাগরি রাখা হয় না।`);return}
+    const nd={...db,[nk]:{bn:newCat.bn,en:newCat.en||newCat.bn,variants:{}}};
     saveDb(nd);setNewCat({key:"",bn:"",en:""});goBack();
   };
   const addVariant=()=>{
@@ -6150,6 +6509,10 @@ function ManageDB({db,saveDb,galleries,saveGalleryEntry,onBack,navigate,goBack,r
       const clash=findCodeOwner(db,typed,null);
       if(clash){alert(`⚠️ "${typed}" কোডটা আগে থেকেই "${clash.varBn}" (${clash.catBn}) মডেলে আছে — অন্য কোড দিন, অথবা খালি রাখুন (তাহলে অটো তৈরি হবে)।`);return}
     }
+    // ── v4.52: এই ক্যাটাগরিতে একই নামের মডেল থাকলে জিজ্ঞেস করা হয় ──
+    const exVars=db[newVar.catKey].variants||{};
+    const sameVar=Object.keys(exVars).find(k=>normModelName(exVars[k]&&exVars[k].bn)===normModelName(newVar.bn));
+    if(sameVar&&!confirm(`"${exVars[sameVar].bn}" নামে মডেল এই ক্যাটাগরিতে আগেই আছে।\n\nতবুও আলাদা নতুন মডেল যোগ করবেন? (নাম হবে "${uniqueModelName(exVars,newVar.bn.trim())}")`))return;
     const code=typed||uniqueAutoCode(db,newVar.bn,Object.keys(db[newVar.catKey].variants||{}).length+1);
     const nd=JSON.parse(JSON.stringify(db));
     if(!nd[newVar.catKey].variants)nd[newVar.catKey].variants={};
@@ -6236,34 +6599,56 @@ function ManageDB({db,saveDb,galleries,saveGalleryEntry,onBack,navigate,goBack,r
   const[mergeSelectFirst,setMergeSelectFirst]=useState(null); // "catK|varK" — প্রথম যেটাতে 🔗 চাপা হয়েছে
   // ── একই মডেল দুই নামে সেভ হয়ে গেলে একত্র করা। কোন মডেলের কাঠের মাপ রাখা হবে তা প্রতিবার
   // জিজ্ঞেস করা হয় (দুটোতেই মাপ থাকলে), কারণ ভুল মাপ রেখে দিলে সব হিসাব ভুল হয়ে যাবে ──
+  // ── v4.52: মেশানোর মূল কাজ — এক বা একাধিক মডেল একটা মডেলে। সব অর্ডার, ছবি আর কাঠের মাপ এক
+  // জায়গায় আসে; ডেটাবেসের পুরো পরিবর্তন একটাই লেখায় যায়, তাই অর্ধেক-মেশানো অবস্থা কখনো হয় না।
+  // কাঠের মাপ: রাখা-মডেলে থাকলে সেটাই; না থাকলে অন্যগুলোর মধ্যে সবচেয়ে সাম্প্রতিকটা ──
+  const mergeModels=async(sources,toCat,toVar,opts)=>{
+    const dst=db[toCat]&&db[toCat].variants&&db[toCat].variants[toVar];
+    if(!dst)return 0;
+    const srcs=(sources||[]).filter(([c,v])=>!(c===toCat&&v===toVar)).map(([c,v])=>({c,v,m:db[c]&&db[c].variants&&db[c].variants[v]})).filter(x=>x.m);
+    if(!srcs.length)return 0;
+    let keptSections=dst.sections||[],woodChanged=false;
+    if(opts&&opts.keptSections){keptSections=opts.keptSections;woodChanged=true}
+    else if(isEmptyWood(dst)){
+      const withWood=srcs.filter(x=>!isEmptyWood(x.m)).sort((p,q)=>(q.m.woodUpdatedAt||0)-(p.m.woodUpdatedAt||0));
+      if(withWood.length){keptSections=withWood[0].m.sections||[];woodChanged=true}
+    }
+    const nd=JSON.parse(JSON.stringify(db));
+    nd[toCat].variants[toVar].sections=JSON.parse(JSON.stringify(keptSections));
+    if(woodChanged)nd[toCat].variants[toVar].woodUpdatedAt=Date.now();
+    srcs.forEach(({c,v})=>{
+      if(nd[c]&&nd[c].variants)delete nd[c].variants[v];
+      if(c==="zz_recovered"&&nd[c]&&Object.keys(nd[c].variants||{}).length===0)delete nd[c];
+    });
+    saveDb(nd,{intentional:true});
+    // ছবি একত্র — রাখা-মডেলে কভার না থাকলে অন্যটার কভার বসে যায়
+    const dstG=galleries&&galleries[`${toCat}__${toVar}`];
+    const gal=[...((dstG&&dstG.gallery)||[])];let cover=(dstG&&dstG.coverImage)||null,galChanged=false;
+    srcs.forEach(({c,v})=>{
+      const g=galleries&&galleries[`${c}__${v}`];if(!g)return;
+      (g.gallery||[]).forEach(img=>{if(!gal.includes(img)){gal.push(img);galChanged=true}});
+      if(!cover&&g.coverImage){cover=g.coverImage;galChanged=true}
+    });
+    if(galChanged&&saveGalleryEntry)saveGalleryEntry(toCat,toVar,{gallery:gal,coverImage:cover});
+    const kept=nd[toCat].variants[toVar];
+    if(onMergeMany)return await onMergeMany(srcs.map(x=>[x.c,x.v]),toCat,toVar,{bn:kept.bn,code:kept.code,sections:kept.sections});
+    return 0;
+  };
   const doMergeVariants=async(fromCat,fromVar,toKey)=>{
     const [toCat,toVar]=toKey.split("|");
-    if(!toCat||!toVar||!db[toCat]||!db[toCat].variants[toVar]){setMergeSelectFirst(null);return}
+    if(!toCat||!toVar||!db[toCat]||!(db[toCat].variants||{})[toVar]){setMergeSelectFirst(null);return}
     if(fromCat===toCat&&fromVar===toVar){setMergeSelectFirst(null);return}
-    const src=db[fromCat].variants[fromVar],dst=db[toCat].variants[toVar];
-    const srcHasWood=!isEmptyWood(src),dstHasWood=!isEmptyWood(dst);
-    let keptSections=dst.sections||[];
-    if(srcHasWood&&dstHasWood){
+    const src=((db[fromCat]&&db[fromCat].variants)||{})[fromVar],dst=db[toCat].variants[toVar];
+    if(!src){setMergeSelectFirst(null);return}
+    let keptSections=null;
+    if(!isEmptyWood(src)&&!isEmptyWood(dst)){
       const keepSource=confirm(`দুটো মডেলেই কাঠের মাপ বসানো আছে — কোনটা রাখবেন?\n\nOK চাপলে: "${src.bn}"-এর মাপ রাখা হবে\nCancel চাপলে: "${dst.bn}"-এর মাপ রাখা হবে`);
       keptSections=keepSource?(src.sections||[]):(dst.sections||[]);
-    }else if(srcHasWood&&!dstHasWood){
-      keptSections=src.sections||[];
     }
     if(!confirm(`"${src.bn}" মডেলটি "${dst.bn}"-এর সাথে একত্র করা হবে।\n\n• "${src.bn}" ব্যবহার করা সব অর্ডার "${dst.bn}"-এ যুক্ত হবে\n• ডেলিভারি হওয়া অর্ডারের কাঠের মাপ অপরিবর্তিত থাকবে\n• "${src.bn}" মডেলটি ডেটাবেস থেকে সরে যাবে\n\nএটা ফিরিয়ে আনা যাবে না। চালিয়ে যাবেন?`)){setMergeSelectFirst(null);return}
-    const nd=JSON.parse(JSON.stringify(db));
-    nd[toCat].variants[toVar].sections=keptSections;
-    delete nd[fromCat].variants[fromVar];
-    if(fromCat==="zz_recovered"&&Object.keys(nd[fromCat].variants).length===0)delete nd[fromCat];
-    saveDb(nd);
-    // ছবি একত্র — রাখা-মডেলে কভার না থাকলে সরানো-মডেলের কভার বসে যায়
-    const srcG=galleries&&galleries[`${fromCat}__${fromVar}`];
-    const dstG=galleries&&galleries[`${toCat}__${toVar}`];
-    if(srcG&&saveGalleryEntry){
-      const mergedGallery=[...((dstG&&dstG.gallery)||[]),...((srcG.gallery)||[])].filter((v,i,a)=>a.indexOf(v)===i);
-      saveGalleryEntry(toCat,toVar,{gallery:mergedGallery,coverImage:(dstG&&dstG.coverImage)||srcG.coverImage||null});
-    }
-    if(onMergeVariants)await onMergeVariants(fromCat,fromVar,toCat,toVar,{bn:nd[toCat].variants[toVar].bn,code:nd[toCat].variants[toVar].code,sections:keptSections});
     setMergeSelectFirst(null);
+    const n=await mergeModels([[fromCat,fromVar]],toCat,toVar,keptSections?{keptSections}:null);
+    alert(`✅ একত্র করা সম্পন্ন। ${toBnDigits(n)}টা অর্ডার "${dst.bn}"-এর সাথে যুক্ত হয়েছে।`);
   };
   const startRenameVar=(catK,varK)=>{setRenamingVar(catK+"|"+varK);setRenameVarVal(db[catK].variants[varK].bn)};
   // ── মডেল সরানো: একটা মডেলকে অন্য ক্যাটাগরিতে নিয়ে যাওয়া। কাঠের মাপ ও ছবি সব সাথে যায়,
@@ -6281,6 +6666,53 @@ function ManageDB({db,saveDb,galleries,saveGalleryEntry,onBack,navigate,goBack,r
     return g;
   },[db]);
   const dupCodeCount=Object.values(codeGroups).reduce((n,arr)=>n+(arr.length>1?arr.length:0),0);
+  // ── v4.52: "🧹 ডুপ্লিকেট" — সব ক্যাটাগরি মিলিয়ে একই নামের মডেল ("(১)", "(২)" আর ফাঁকা জায়গার
+  // পার্থক্য বাদ দিয়ে) আর একই মডেলের কপি (একই অভ্যন্তরীণ চাবি) এক গ্রুপে। কোনটা রাখবেন বেছে দিলে
+  // বাকিগুলো এক চাপে মিশে যায়। "এগুলো আলাদা" বললে সেই গ্রুপ আর দেখায় না ──
+  const[dupKeep,setDupKeep]=useState({});
+  const[dupDone,setDupDone]=useState(null);
+  const[dupBusy,setDupBusy]=useState(false);
+  const[dupIgnored,setDupIgnored]=useState(()=>S.get("rf_dup_ignored")||{});
+  const dupGroups=useMemo(()=>{
+    const baseOf=(nm)=>normModelName(String(nm||"").replace(/\s*\([০-৯0-9]+\)\s*$/,""));
+    const items=[];
+    dbCats(db).forEach(([ck,c])=>Object.entries(c.variants||{}).forEach(([vk,v])=>{if(v)items.push({ck,vk,v,catBn:c.bn||ck,base:baseOf(v.bn)})}));
+    const parent=items.map((_,i)=>i);
+    const find=(i)=>{while(parent[i]!==i){parent[i]=parent[parent[i]];i=parent[i]}return i};
+    const unite=(x,y)=>{x=find(x);y=find(y);if(x!==y)parent[y]=x};
+    const byBase={},byKey={};
+    items.forEach((it,i)=>{
+      if(it.base){if(byBase[it.base]!==undefined)unite(byBase[it.base],i);else byBase[it.base]=i}
+      if(byKey[it.vk]!==undefined)unite(byKey[it.vk],i);else byKey[it.vk]=i;
+    });
+    const orderCount={};
+    (orders||[]).forEach(o=>{if(!o||o.cancelled)return;const seen=new Set();(o.items||[]).forEach(it=>{const k=it.catKey+"|"+it.varKey;if(!seen.has(k)){seen.add(k);orderCount[k]=(orderCount[k]||0)+1}})});
+    const groups={};
+    items.forEach((it,i)=>{const r=find(i);(groups[r]=groups[r]||[]).push(it)});
+    const keyTs=(vk)=>{const m=/^var_(\d{10,})/.exec(vk);return m?+m[1]:0};
+    return Object.values(groups).filter(g=>g.length>1).map(g=>{
+      const members=g.map(it=>{const gk=`${it.ck}__${it.vk}`;return{...it,key:it.ck+"|"+it.vk,orders:orderCount[it.ck+"|"+it.vk]||0,hasWood:!isEmptyWood(it.v),photos:(galleries&&galleries[gk]&&(galleries[gk].gallery||[]).length)||0}});
+      const sig=members.map(m=>m.key).sort().join(",");
+      const sameKey=new Set(members.map(m=>m.vk)).size<members.length;
+      const sameCat=new Set(members.map(m=>m.ck)).size<members.length;
+      const best=[...members].sort((p,q)=>(q.orders-p.orders)||((q.hasWood?1:0)-(p.hasWood?1:0))||(q.photos-p.photos)||(keyTs(p.vk)-keyTs(q.vk)))[0];
+      return{sig,members,sameKey,sameCat,defaultKeep:best.key};
+    }).filter(g=>!dupIgnored[g.sig]).sort((p,q)=>((q.sameKey?2:0)+(q.sameCat?1:0))-((p.sameKey?2:0)+(p.sameCat?1:0))||(q.members.length-p.members.length));
+  },[db,orders,galleries,dupIgnored]);
+  const ignoreDupGroup=(sig)=>{const ig={...dupIgnored,[sig]:Date.now()};S.set("rf_dup_ignored",ig);setDupIgnored(ig)};
+  const mergeDupGroup=async(g,keepKey)=>{
+    const keepM=g.members.find(m=>m.key===keepKey)||g.members[0];
+    const others=g.members.filter(m=>m.key!==keepM.key);
+    if(!others.length||dupBusy)return;
+    const woodFrom=keepM.hasWood?keepM:([...others].filter(m=>m.hasWood).sort((p,q)=>(q.v.woodUpdatedAt||0)-(p.v.woodUpdatedAt||0))[0]||null);
+    const msg=`"${keepM.v.bn}" (${keepM.catBn}) রাখা হবে, বাকি ${toBnDigits(others.length)}টা এর সাথে মিশে যাবে:\n\n${others.map(m=>`• ${m.v.bn} (${m.catBn}) — অর্ডার ${toBnDigits(m.orders)}টি`).join("\n")}\n\nসব অর্ডার, ছবি এক জায়গায় আসবে। কাঠের মাপ থাকবে: ${woodFrom?`"${woodFrom.v.bn}" (${woodFrom.catBn})-এর`:"ফাঁকা (কোনোটাতেই মাপ নেই)"}\n\nএটা ফেরানো যাবে না। চালিয়ে যাবেন?`;
+    if(!confirm(msg))return;
+    setDupBusy(true);
+    try{
+      const n=await mergeModels(others.map(m=>[m.ck,m.vk]),keepM.ck,keepM.vk,woodFrom&&woodFrom.key!==keepM.key?{keptSections:woodFrom.v.sections||[]}:null);
+      setDupDone(`"${keepM.v.bn}"-এ ${toBnDigits(others.length)}টা মডেল মিশে গেছে — ${toBnDigits(n)}টা অর্ডার যুক্ত হয়েছে।`);
+    }finally{setDupBusy(false)}
+  };
   const startEditCode=(catK,varK)=>{
     const v=db[catK]&&db[catK].variants&&db[catK].variants[varK];
     setRenamingVar(null);setMovingVar(null);
@@ -6301,8 +6733,29 @@ function ManageDB({db,saveDb,galleries,saveGalleryEntry,onBack,navigate,goBack,r
     if(onRecodeVariant)onRecodeVariant(catK,varK,newCode);
     setEditingCode(null);
   };
-  const moveVariant=(fromCat,varK,toCat)=>{
+  const moveVariant=async(fromCat,varK,toCat)=>{
     if(!fromCat||!toCat||fromCat===toCat||!db[fromCat]||!db[toCat]){setMovingVar(null);return}
+    const mv=(db[fromCat].variants||{})[varK];
+    if(!mv){setMovingVar(null);return}
+    // ── v4.52: গন্তব্যে একই মডেলের কপি (একই চাবি) বা একই নামের মডেল থাকলে — সরিয়ে তারপর আলাদা
+    // করে মেশানোর বদলে এক চাপেই মিশিয়ে এক করার সুযোগ ──
+    const tv=db[toCat].variants||{};
+    const matchKey=tv[varK]?varK:Object.keys(tv).find(k=>normModelName(tv[k]&&tv[k].bn)===normModelName(mv.bn||""));
+    if(matchKey){
+      const other=tv[matchKey];
+      const altName=uniqueModelName(tv,mv.bn||"");
+      if(confirm(`"${db[toCat].bn}"-এ "${other.bn}" নামে একটা মডেল আগেই আছে।\n\nদুটো একই মডেল হলে মিশিয়ে এক করবেন?\n\nOK = মিশিয়ে এক করুন (অর্ডার, ছবি, কাঠের মাপ সব এক জায়গায় আসবে)\nCancel = আলাদা রাখুন (নাম হবে "${altName}")`)){
+        let keptSections=null;
+        if(!isEmptyWood(mv)&&!isEmptyWood(other)){
+          const keepMoved=confirm(`দুটো মডেলেই কাঠের মাপ বসানো আছে — কোনটা রাখবেন?\n\nOK চাপলে: সরানো মডেলের মাপ ("${db[fromCat].bn}" থেকে আসা)\nCancel চাপলে: "${db[toCat].bn}"-এ আগে থেকে থাকা মাপ`);
+          keptSections=keepMoved?(mv.sections||[]):(other.sections||[]);
+        }
+        setMovingVar(null);
+        const n=await mergeModels([[fromCat,varK]],toCat,matchKey,keptSections?{keptSections}:null);
+        alert(`✅ মিশিয়ে এক করা হয়েছে। ${toBnDigits(n)}টা অর্ডার "${other.bn}"-এর সাথে যুক্ত হয়েছে।`);
+        return;
+      }
+    }
     const nd=JSON.parse(JSON.stringify(db));
     const theVar=(nd[fromCat].variants||{})[varK];
     if(!theVar){setMovingVar(null);return}
@@ -6333,10 +6786,34 @@ function ManageDB({db,saveDb,galleries,saveGalleryEntry,onBack,navigate,goBack,r
       <span style={{fontWeight:700,fontSize:15}}>ফার্নিচার ডেটাবেস</span>
     </div>
     <div style={{background:"white",display:"flex",borderBottom:"1px solid #eee"}}>
-      {[{id:"list",l:"তালিকা"},{id:"addCat",l:"+ ক্যাটাগরি"},{id:"addVar",l:"+ ভেরিয়েন্ট"}].map(t=><button key={t.id} onClick={()=>openTab(t.id)} style={{flex:1,padding:"10px 6px",border:"none",background:"none",fontSize:12,fontWeight:tab===t.id?700:400,color:tab===t.id?"#6d28d9":"#888",borderBottom:tab===t.id?"3px solid #6d28d9":"3px solid transparent"}}>{t.l}</button>)}
+      {[{id:"list",l:"তালিকা"},{id:"addCat",l:"+ ক্যাটাগরি"},{id:"addVar",l:"+ ভেরিয়েন্ট"},{id:"dups",l:"🧹 ডুপ্লিকেট",n:dupGroups.length}].map(t=><button key={t.id} onClick={()=>openTab(t.id)} style={{flex:1,padding:"10px 4px",border:"none",background:"none",fontSize:11.5,fontWeight:tab===t.id?700:400,color:tab===t.id?"#6d28d9":"#888",borderBottom:tab===t.id?"3px solid #6d28d9":"3px solid transparent",lineHeight:1.3}}>{t.l}{t.n>0&&<span style={{marginLeft:3,background:"#dc2626",color:"white",borderRadius:9,padding:"0 5px",fontSize:9,fontWeight:700}}>{toBnDigits(t.n)}</span>}</button>)}
     </div>
     <div style={{padding:"14px",maxWidth:540,margin:"0 auto"}}>
+      {tab==="dups"&&<>
+        <div style={{fontSize:11,color:"#4c1d95",lineHeight:1.6,marginBottom:12,background:"#f5f3ff",border:"1px solid #ddd6fe",borderRadius:10,padding:"10px 12px"}}>সব ক্যাটাগরি মিলিয়ে একই নামের মডেল আর একই মডেলের কপিগুলো এখানে এক একটা গ্রুপে দেখানো হচ্ছে। কোনটা রাখবেন বেছে দিন — বাকিগুলো তার সাথে মিশে যাবে: সব অর্ডার, ছবি আর কাঠের মাপ এক জায়গায় আসবে। আসলেই আলাদা মডেল হলে "এগুলো আলাদা" চাপুন।</div>
+        {dupDone&&<div style={{background:"#f0fdf4",border:"1.5px solid #86efac",color:"#166534",borderRadius:10,padding:"9px 12px",marginBottom:12,fontSize:11.5,fontWeight:600}}>✅ {dupDone}</div>}
+        {dupGroups.length===0&&<div style={{textAlign:"center",color:"#166534",fontSize:13,fontWeight:700,padding:"30px 10px"}}>✅ কোনো ডুপ্লিকেট মডেল নেই</div>}
+        {dupGroups.map(g=>{
+          const keep=(dupKeep[g.sig]&&g.members.some(m=>m.key===dupKeep[g.sig]))?dupKeep[g.sig]:g.defaultKeep;
+          const keepM=g.members.find(m=>m.key===keep)||g.members[0];
+          return<div key={g.sig} style={{background:"white",borderRadius:11,padding:"11px 12px",marginBottom:12,boxShadow:"0 1px 4px rgba(0,0,0,.07)"}}>
+            <div style={{fontSize:11,fontWeight:800,color:g.sameKey?"#b91c1c":"#6d28d9",marginBottom:8}}>{g.sameKey?"🧬 একই মডেলের কপি":"📦 একই নামের মডেল"} — {toBnDigits(g.members.length)}টা</div>
+            {g.members.map(m=>{const on=m.key===keep;return<div key={m.key} onClick={()=>setDupKeep({...dupKeep,[g.sig]:m.key})} style={{display:"flex",alignItems:"center",gap:9,padding:"8px 9px",marginBottom:6,borderRadius:9,cursor:"pointer",border:on?"2px solid #6d28d9":"1px solid #eee",background:on?"#f5f3ff":"white"}}>
+              <span style={{width:16,height:16,borderRadius:"50%",border:"2px solid "+(on?"#6d28d9":"#ccc"),display:"inline-flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>{on&&<span style={{width:8,height:8,borderRadius:"50%",background:"#6d28d9"}}></span>}</span>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:12,fontWeight:700,color:"#222",wordBreak:"break-word"}}>{m.v.bn} <span style={{fontWeight:600,color:"#6d28d9",fontSize:10.5}}>· {m.catBn}</span></div>
+                <div style={{fontSize:9.5,color:"#777",marginTop:2,lineHeight:1.5}}>কোড {m.v.code||"—"} · অর্ডার {toBnDigits(m.orders)}টি · {m.hasWood?"কাঠের মাপ আছে":"কাঠের মাপ ফাঁকা"}{m.photos?` · ছবি ${toBnDigits(m.photos)}টি`:""}</div>
+              </div>
+              {on&&<span style={{fontSize:9,fontWeight:800,color:"white",background:"#6d28d9",borderRadius:6,padding:"2px 6px",flexShrink:0}}>রাখা হবে</span>}
+            </div>})}
+            <div style={{display:"flex",gap:6,marginTop:4}}>
+              <button onClick={()=>ignoreDupGroup(g.sig)} style={{flex:1,background:"white",border:"1px solid #ddd",borderRadius:8,padding:"9px 6px",fontSize:11,color:"#666"}}>এগুলো আলাদা</button>
+              <button disabled={dupBusy} onClick={()=>mergeDupGroup(g,keep)} style={{flex:2,background:dupBusy?"#a78bfa":"#6d28d9",color:"white",border:"none",borderRadius:8,padding:"9px 6px",fontSize:11.5,fontWeight:700}}>✅ বাকি {toBnDigits(g.members.length-1)}টা "{keepM.v.bn}"-এ মেশান</button>
+            </div>
+          </div>})}
+      </>}
       {tab==="list"&&<>
+        {dupGroups.length>0&&<div onClick={()=>openTab("dups")} style={{background:"#f5f3ff",border:"1.5px solid #c4b5fd",color:"#5b21b6",borderRadius:10,padding:"9px 12px",marginBottom:12,fontSize:11.5,fontWeight:600,lineHeight:1.55,cursor:"pointer"}}>🧹 {toBnDigits(dupGroups.length)}টা গ্রুপে একই রকম মডেল আছে — "ডুপ্লিকেট" ট্যাবে এক চাপে মেশাতে পারবেন ›</div>}
         {mergeSelectFirst&&(()=>{const[fc,fv]=mergeSelectFirst.split("|");const fName=db[fc]&&db[fc].variants[fv]&&db[fc].variants[fv].bn;return<div style={{position:"sticky",top:0,zIndex:5,background:"#b91c1c",color:"white",borderRadius:10,padding:"10px 14px",marginBottom:12,display:"flex",alignItems:"center",gap:8,boxShadow:"0 2px 8px rgba(0,0,0,.15)"}}>
           <span style={{flex:1,fontSize:12,fontWeight:600}}>🔗 "{fName}" নির্বাচিত — যে মডেলের সাথে মেশাবেন সেটাতে চাপুন</span>
           <button onClick={()=>setMergeSelectFirst(null)} style={{background:"rgba(255,255,255,.2)",border:"none",color:"white",borderRadius:6,padding:"5px 10px",fontSize:11,fontWeight:700,flexShrink:0}}>বাতিল</button>
