@@ -104,7 +104,7 @@ function compressImage(file,maxDim=1200,quality=0.82,maxBytes=110000){
 /* ── FULL-RESOLUTION LOCAL FOLDER STORAGE (desktop Chrome/Edge/Brave only) ──
    Original, uncompressed images are saved as real files in a folder you choose
    on your computer. Only a small compressed thumbnail syncs to the cloud/mobile. */
-const BUILD_TAG="4.41";
+const BUILD_TAG="4.45";
 const FS_SUPPORTED=typeof window!=="undefined"&&"showDirectoryPicker" in window;
 function idbOpen(){
   return new Promise((resolve,reject)=>{
@@ -276,6 +276,60 @@ const autoCode=(baseName,suffix)=>{
   const initials=words.map(w=>w[0]?.toUpperCase()||"").join("").slice(0,4);
   return`${initials}-${suffix||Math.floor(Math.random()*900+100)}`;
 };
+// ── v4.45: ফার্নিচার ডেটাবেস নথিতে ক্যাটাগরির পাশাপাশি একটা লুকানো "মুছে-ফেলার রেকর্ড"
+// (zz_deletedRecord) থাকে — এটা ক্যাটাগরি নয়। আগে ১০ সেকেন্ড পরের সার্ভার-রিফ্রেশে রেকর্ডটা
+// নামহীন ক্যাটাগরি হয়ে ঢুকে পড়ত, আর ডেটাবেস পাতা ক্র্যাশ করে পুরো অ্যাপ সাদা হয়ে যেত।
+// এখন তালিকা বানানোর সব জায়গায় শুধু আসল ক্যাটাগরিগুলো নেওয়া হয় ──
+const LEGACY_DEL_KEY="_"+"_deleted_"+"_";
+const isCatEntry=(k,c)=>k!=="zz_deletedRecord"&&k!==LEGACY_DEL_KEY&&!!c&&typeof c==="object"&&!Array.isArray(c)&&(typeof c.bn==="string"||(!!c.variants&&typeof c.variants==="object"));
+const dbCats=(db)=>Object.entries(db||{}).filter(([k,c])=>isCatEntry(k,c));
+// সার্ভার থেকে আসা ডেটাবেস নথি থেকে মুছে-ফেলার রেকর্ড আলাদা করা (লিসেনার যেভাবে করে, ঠিক সেভাবে)
+function splitDbDoc(data){
+  const slim=JSON.parse(JSON.stringify(data||{}));
+  const tomb={...(slim[LEGACY_DEL_KEY]||{}),...(slim.zz_deletedRecord||{})};
+  delete slim.zz_deletedRecord;delete slim[LEGACY_DEL_KEY];
+  Object.values(slim).forEach(c=>{if(c&&c.variants&&typeof c.variants==="object")Object.values(c.variants).forEach(v=>{if(v&&typeof v==="object"){delete v.gallery;delete v.coverImage}})});
+  return{slim,tomb};
+}
+const BN_DIGITS="০১২৩৪৫৬৭৮৯";
+const toBnDigits=(n)=>String(n).replace(/[0-9]/g,d=>BN_DIGITS[+d]);
+// ── মডেল কোড: ছোট/বড় হাতের অক্ষর ও ফাঁকা জায়গা বাদ দিয়ে তুলনা — "alm-2" আর "ALM-2" একই ধরা হয় ──
+const normCode=(c)=>String(c==null?"":c).replace(/\s+/g,"").toUpperCase();
+function findCodeOwner(db,code,skipKey){ // skipKey = "catK|varK" — নিজেকে বাদ দিতে
+  const n=normCode(code);if(!n)return null;
+  for(const[ck,c]of dbCats(db))for(const[vk,v]of Object.entries(c.variants||{})){
+    if(ck+"|"+vk===skipKey)continue;
+    if(v&&normCode(v.code)===n)return{catKey:ck,varKey:vk,varBn:v.bn||"",catBn:c.bn||""};
+  }
+  return null;
+}
+// নতুন মডেলের অটো-কোড — ডেটাবেসের অন্য কোনো মডেলের কোডের সাথে কখনো মিলবে না
+function uniqueAutoCode(db,baseName,firstSuffix){
+  const used=new Set();
+  dbCats(db).forEach(([,c])=>Object.values(c.variants||{}).forEach(v=>{const n=normCode(v&&v.code);if(n)used.add(n)}));
+  const first=autoCode(baseName,firstSuffix);
+  if(!used.has(normCode(first)))return first;
+  for(let i=0;i<400;i++){
+    const c=autoCode(baseName,i<200?String(Math.floor(Math.random()*900+100)):String(Math.floor(Math.random()*9000+1000)));
+    if(!used.has(normCode(c)))return c;
+  }
+  return autoCode(baseName,String(Date.now()).slice(-6));
+}
+// মডেলের নতুন অভ্যন্তরীণ চাবি — পুরো ডেটাবেসে কোথাও নেই এমন
+function newUniqueVarKey(db){
+  let k;
+  do{k="var_"+Date.now()+"_"+Math.random().toString(36).slice(2,6)}while(dbCats(db).some(([,c])=>c.variants&&c.variants[k]));
+  return k;
+}
+// ── একই ক্যাটাগরিতে একই নামের মডেল থাকলে নতুনটার নাম হয় "নাম (১)", সেটাও থাকলে "নাম (২)" … ──
+const normModelName=(s)=>String(s||"").replace(/\s+/g," ").trim().toLowerCase();
+function uniqueModelName(variants,name,skipKey){
+  const taken=new Set(Object.entries(variants||{}).filter(([k])=>k!==skipKey).map(([,v])=>normModelName(v&&v.bn)));
+  if(!taken.has(normModelName(name)))return name;
+  const base=String(name||"").replace(/\s*\([০-৯0-9]+\)\s*$/,"").trim()||String(name||"").trim();
+  for(let i=1;i<1000;i++){const cand=`${base} (${toBnDigits(i)})`;if(!taken.has(normModelName(cand)))return cand}
+  return `${base} (${toBnDigits(Date.now()%100000)})`;
+}
 const parseISO=(s)=>{const[y,m,d]=(s||"").split("-").map(Number);return new Date(Date.UTC(y||1970,(m||1)-1,d||1))};
 const toISO=(dt)=>`${dt.getUTCFullYear()}-${String(dt.getUTCMonth()+1).padStart(2,"0")}-${String(dt.getUTCDate()).padStart(2,"0")}`;
 const addDays=(dateStr,days)=>{const d=parseISO(dateStr);d.setUTCDate(d.getUTCDate()+days);return toISO(d)};
@@ -518,16 +572,16 @@ function FurnitureCategoryModelPicker({db,saveDb,galleries,catKey,varKey,onSelec
   const[dropdownOpen,setDropdownOpen]=useState(false);
 
   const fCat=catKey?db[catKey]:null;
-  const fVar=fCat&&varKey?fCat.variants[varKey]:null;
+  const fVar=fCat&&varKey?(fCat.variants||{})[varKey]:null;
   const inp={width:"100%",border:"1px solid #ddd",borderRadius:6,padding:"6px 8px",fontSize:10,marginBottom:6,boxSizing:"border-box"};
   const coverFor=(vk)=>(galleries&&galleries[`${catKey}__${vk}`]&&galleries[`${catKey}__${vk}`].coverImage)||null;
 
   const createNewCategory=()=>{
-    const catName=newCatName.trim()||`নতুন ফার্নিচার ${Object.keys(db).length+1}`;
+    const catName=newCatName.trim()||`নতুন ফার্নিচার ${dbCats(db).length+1}`;
     const varName=newCatVarName.trim()||"স্ট্যান্ডার্ড মডেল";
     const newCatKey="cat_"+Date.now();
     const newVarKey="var_"+Date.now();
-    const code=autoCode(catName+" "+varName,String(Math.floor(Math.random()*900+100)));
+    const code=uniqueAutoCode(db,catName+" "+varName,String(Math.floor(Math.random()*900+100)));
     const nd=JSON.parse(JSON.stringify(db));
     nd[newCatKey]={bn:catName,en:catName,variants:{[newVarKey]:{bn:varName,code,sections:[{name:"কাঠের তালিকা (পরে যোগ করুন)",pieces:[]}]}}};
     saveDb(nd);
@@ -535,10 +589,11 @@ function FurnitureCategoryModelPicker({db,saveDb,galleries,catKey,varKey,onSelec
     setNewCatMode(false);setNewCatName("");setNewCatVarName("");
   };
   const createNewModel=()=>{
-    const varName=newModelName.trim()||`নতুন মডেল ${Object.keys(fCat.variants).length+1}`;
+    const varName=uniqueModelName(fCat.variants,newModelName.trim()||`নতুন মডেল ${Object.keys(fCat.variants||{}).length+1}`);
     const newVarKey="var_"+Date.now();
-    const code=autoCode((fCat.bn||"")+" "+varName,String(Math.floor(Math.random()*900+100)));
+    const code=uniqueAutoCode(db,(fCat.bn||"")+" "+varName,String(Math.floor(Math.random()*900+100)));
     const nd=JSON.parse(JSON.stringify(db));
+    if(!nd[catKey].variants)nd[catKey].variants={};
     nd[catKey].variants[newVarKey]={bn:varName,code,sections:[{name:"কাঠের তালিকা (পরে যোগ করুন)",pieces:[]}]};
     saveDb(nd);
     onSelect(catKey,newVarKey);
@@ -549,7 +604,7 @@ function FurnitureCategoryModelPicker({db,saveDb,galleries,catKey,varKey,onSelec
     {!newCatMode&&<div style={{display:"flex",gap:6,marginBottom:6}}>
       <select value={catKey||""} onChange={e=>onSelect(e.target.value,"")} style={{...inp,marginBottom:0,flex:1}}>
         <option value="">-- ক্যাটাগরি নির্বাচন করুন --</option>
-        {Object.entries(db).map(([k,c])=><option key={k} value={k}>{c.bn}</option>)}
+        {dbCats(db).map(([k,c])=><option key={k} value={k}>{c.bn}</option>)}
       </select>
       <button type="button" onClick={()=>setNewCatMode(true)} style={{background:"#f5f3ff",border:"1px solid #ddd6fe",color:"#6d28d9",borderRadius:6,padding:"0 9px",fontSize:9,fontWeight:700,whiteSpace:"nowrap"}}>+ নতুন</button>
     </div>}
@@ -576,7 +631,7 @@ function FurnitureCategoryModelPicker({db,saveDb,galleries,catKey,varKey,onSelec
           <span style={{color:"#888"}}>▾</span>
         </button>
         {dropdownOpen&&<div style={{position:"absolute",top:"105%",left:0,right:0,background:"white",border:"1.5px solid #ddd",borderRadius:8,boxShadow:"0 4px 16px rgba(0,0,0,.12)",zIndex:20,maxHeight:220,overflowY:"auto"}}>
-          {Object.entries(fCat.variants).sort((a,b)=>(a[1].bn||"").localeCompare(b[1].bn||"","bn")).map(([k,v])=><div key={k} onClick={()=>{onSelect(catKey,k);setDropdownOpen(false)}} style={{display:"flex",alignItems:"center",gap:6,padding:"7px 9px",cursor:"pointer",borderBottom:"1px solid #f5f5f5"}}>
+          {Object.entries(fCat.variants||{}).sort((a,b)=>(a[1].bn||"").localeCompare(b[1].bn||"","bn")).map(([k,v])=><div key={k} onClick={()=>{onSelect(catKey,k);setDropdownOpen(false)}} style={{display:"flex",alignItems:"center",gap:6,padding:"7px 9px",cursor:"pointer",borderBottom:"1px solid #f5f5f5"}}>
             {coverFor(k)?<img src={coverFor(k)} style={{width:26,height:26,objectFit:"cover",borderRadius:5,flexShrink:0,border:"1px solid #eee"}} alt=""/>:<div style={{width:26,height:26,background:"#f3f4f6",borderRadius:5,flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,color:"#ccc"}}>🪑</div>}
             <span style={{fontSize:10,color:"#222"}}>{isEmptyWood(v)?"⚠️ ":""}[{v.code}] {v.bn}</span>
           </div>)}
@@ -760,11 +815,11 @@ function S2({order,onPrint,db,saveDb,galleries,onUpdateOrder,woodSettings,laborS
     onUpdateOrder({...order,items:newItems,cust:{...cust,total:recalcTotal(newItems)}});
   };
   const createNewCategoryInline=()=>{
-    const catName=newCatName.trim()||`নতুন ফার্নিচার ${Object.keys(db).length+1}`;
+    const catName=newCatName.trim()||`নতুন ফার্নিচার ${dbCats(db).length+1}`;
     const varName=newCatVarName.trim()||"স্ট্যান্ডার্ড মডেল";
     const catKey="cat_"+Date.now();
     const varKey="var_"+Date.now();
-    const code=autoCode(catName+" "+varName,String(Math.floor(Math.random()*900+100)));
+    const code=uniqueAutoCode(db,catName+" "+varName,String(Math.floor(Math.random()*900+100)));
     const nd=JSON.parse(JSON.stringify(db));
     nd[catKey]={bn:catName,en:catName,variants:{[varKey]:{bn:varName,code,sections:[{name:"কাঠের তালিকা (পরে যোগ করুন)",pieces:[]}]}}};
     saveDb(nd);
@@ -1536,6 +1591,33 @@ function ImageLightbox(){
     <div style={{position:"fixed",bottom:16,left:0,right:0,textAlign:"center",color:"rgba(255,255,255,.6)",fontSize:11}} className="no-print">{zoomed?"আবার ট্যাপ করুন — ছোট করতে":"ট্যাপ করুন — বড় করতে"}</div>
   </div>
 }
+/* ── v4.45 নিরাপত্তা-জাল: কোনো পাতা দেখাতে গিয়ে অপ্রত্যাশিত ত্রুটি হলে পুরো অ্যাপ আর সাদা হয়ে
+   যায় না। ত্রুটিটা এখানে ধরা পড়ে, অ্যাপ নিজে থেকেই আগের পাতায় ফিরে যায় (হোম পাতা হলে একবার
+   নিজে থেকেই আবার চেষ্টা করে)। কী হয়েছিল তা ⚙️ সিস্টেম অংশে লেখা থাকে ── */
+class PageErrorBoundary extends React.Component{
+  constructor(props){super(props);this.state={err:null}}
+  static getDerivedStateFromError(err){return{err}}
+  componentDidCatch(err,info){
+    try{this.props.onError&&this.props.onError(err,info)}catch(e){}
+    if(!this.props.canGoBack&&Date.now()-(this.lastRetryAt||0)>60000){
+      this.lastRetryAt=Date.now();
+      setTimeout(()=>{if(this.state.err)this.setState({err:null})},2500);
+    }
+  }
+  componentDidUpdate(prev){if(this.state.err&&prev.resetKey!==this.props.resetKey)this.setState({err:null})}
+  render(){
+    if(!this.state.err)return this.props.children;
+    if(this.props.canGoBack)return<div style={{padding:"60px 24px",textAlign:"center",color:"#64748b",fontSize:13}}>↩︎ আগের পাতায় ফেরা হচ্ছে…</div>;
+    return<div style={{padding:"40px 24px",textAlign:"center",maxWidth:420,margin:"40px auto"}}>
+      <div style={{fontSize:30,marginBottom:10}}>🛟</div>
+      <div style={{fontSize:14,fontWeight:700,color:"#334155",marginBottom:8}}>পাতাটা দেখাতে সমস্যা হয়েছে — কয়েক সেকেন্ডে নিজে থেকেই আবার চেষ্টা হবে</div>
+      <div style={{fontSize:10,color:"#94a3b8",marginBottom:16,wordBreak:"break-word",fontFamily:"monospace"}}>{String((this.state.err&&this.state.err.message)||this.state.err).slice(0,200)}</div>
+      <button onClick={()=>this.setState({err:null})} style={{background:"#6d28d9",color:"white",border:"none",borderRadius:9,padding:"11px 20px",fontSize:13,fontWeight:700,marginRight:8}}>আবার চেষ্টা করুন</button>
+      <button onClick={()=>window.location.reload()} style={{background:"white",color:"#6d28d9",border:"1.5px solid #6d28d9",borderRadius:9,padding:"11px 20px",fontSize:13,fontWeight:700}}>রিলোড</button>
+    </div>;
+  }
+}
+
 function Root(){
   const[config,setConfig]=useState(undefined); // undefined = checking, null = not set, object = ready
   useEffect(()=>{
@@ -1619,7 +1701,8 @@ function App({firebaseConfig,onResetConfig}){
   const curScreen=navStack[navStack.length-1];
   const page=curScreen.page;
   pageRef.current=page;
-  const[highlightNo,setHighlightNo]=useState(null); // ব্যাক করে ফিরলে যে অর্ডার/লট থেকে বের হলাম সেটা হালকা আকাশী রঙে হাইলাইট
+  const[highlightNo,setHighlightNo]=useState(null);
+  const[lastPageCrash,setLastPageCrash]=useState(()=>S.get("rf_last_page_crash")); // ব্যাক করে ফিরলে যে অর্ডার/লট থেকে বের হলাম সেটা হালকা আকাশী রঙে হাইলাইট
   const navigate=(screen)=>{
     setNavStack(prev=>[...prev,screen]);
     window.history.pushState({depth:navStack.length+1},"");
@@ -2371,7 +2454,7 @@ function App({firebaseConfig,onResetConfig}){
                 if(!merged[catKey]){
                   const cloned=JSON.parse(JSON.stringify(localCat));
                   // মুছে ফেলা মডেলগুলো বাদ দিয়ে ক্যাটাগরিটা যোগ করা হয়
-                  Object.keys(cloned.variants||{}).forEach(vk=>{if(tombstones[vk])delete cloned.variants[vk]});
+                  Object.keys(cloned.variants||{}).forEach(vk=>{if(tombstones[vk]||tombstones["mv:"+catKey+"|"+vk])delete cloned.variants[vk]});
                   merged[catKey]=cloned;
                   addedCats++;
                   return;
@@ -2379,6 +2462,7 @@ function App({firebaseConfig,onResetConfig}){
                 if(!merged[catKey].variants)merged[catKey].variants={};
                 Object.entries(localCat.variants||{}).forEach(([varKey,localVar])=>{
                   if(tombstones[varKey])return; // ইচ্ছাকৃতভাবে মুছে ফেলা — ফেরানো হবে না
+                  if(tombstones["mv:"+catKey+"|"+varKey])return; // v4.45: এই ক্যাটাগরি থেকে অন্যত্র সরানো — ফেরানো হবে না
                   const serverVar=merged[catKey].variants[varKey];
                   if(!serverVar){
                     merged[catKey].variants[varKey]=JSON.parse(JSON.stringify(localVar));
@@ -2404,9 +2488,10 @@ function App({firebaseConfig,onResetConfig}){
               // ধরে নয়)। কারণ এই ডিভাইসের কপি পুরনো বা দূষিত হলে সেটা ধরে ঠিক করতে গেলে
               // অর্ডারগুলো ভুল ক্যাটাগরিতে চলে যেতে পারত। সার্ভারই একমাত্র সত্য ──
               const varKeyLocation={};
+              const varKeyAmbiguous=new Set(); // একই চাবি একাধিক ক্যাটাগরিতে — কোনটা সঠিক বলা যায় না
               Object.entries(sv).forEach(([ck,c])=>{
-                if(!c||!c.variants)return;
-                Object.keys(c.variants).forEach(vk=>{varKeyLocation[vk]=ck});
+                if(!isCatEntry(ck,c)||!c.variants)return;
+                Object.keys(c.variants).forEach(vk=>{if(varKeyLocation[vk]&&varKeyLocation[vk]!==ck)varKeyAmbiguous.add(vk);varKeyLocation[vk]=ck});
               });
               let fixedOrderLinks=0;
               const ordersNeedingFix=[];
@@ -2415,6 +2500,12 @@ function App({firebaseConfig,onResetConfig}){
                 let needsFix=false;
                 const newItems=(o.items||[]).map(it=>{
                   if(!it.catKey||!it.varKey)return it;
+                  // ── v4.45: অর্ডারের সংযোগ ঠিক থাকলে (মডেলটা ঠিক ওই ক্যাটাগরিতেই আছে) কখনো বদলানো হয়
+                  // না। আগে একই মডেলের ভূত-কপি অন্য ক্যাটাগরিতে থাকলে প্রতি মিনিটে অর্ডারগুলো সেই ভুল
+                  // ক্যাটাগরিতে টেনে নেওয়া হতো — ড্যাশবোর্ডের ক্যাটাগরি-হিসাবও তাই ভুল দেখাত ──
+                  const curCatSv=sv[it.catKey];
+                  if(isCatEntry(it.catKey,curCatSv)&&curCatSv.variants&&curCatSv.variants[it.varKey])return it;
+                  if(varKeyAmbiguous.has(it.varKey))return it;
                   const correctCat=varKeyLocation[it.varKey];
                   if(!correctCat){
                     // সার্ভারের ডেটাবেসে এই মডেল একেবারেই নেই — শুধু তালিকাভুক্ত করা হয়,
@@ -2601,7 +2692,7 @@ function App({firebaseConfig,onResetConfig}){
           const map={};snap.docs.forEach(d=>{map[d.id]=d.data()});setPayrollWeeks(map);
         }),
         fs.collection("workers").get({source:"server"}).then(snap=>{setWorkers(snap.docs.map(d=>d.data()))}),
-        fs.doc("meta/db").get({source:"server"}).then(s=>{if(s.exists)setDb(s.data())}),
+        fs.doc("meta/db").get({source:"server"}).then(s=>{if(s.exists){const{slim,tomb}=splitDbDoc(s.data());deletedRecordRef.current={...(deletedRecordRef.current||{}),...tomb};setDb(slim)}}),
         fs.doc("meta/woodSettings").get({source:"server"}).then(s=>{setWoodSettings(s.exists?s.data():{})}),
         fs.doc("meta/laborSettings").get({source:"server"}).then(s=>{setLaborSettings(s.exists?s.data():{})}),
         fs.doc("meta/carpenters").get({source:"server"}).then(s=>{setCarpenters(s.exists?(s.data().list||[]):[])}),
@@ -2663,13 +2754,20 @@ function App({firebaseConfig,onResetConfig}){
     // সেটুকুই merge করে পাঠানো হয় — সাথে সাথে, অপেক্ষা ছাড়া। merge হওয়ায় অন্য ডিভাইসের
     // কোনো মডেল এতে স্পর্শও হয় না ──
     const payload={};      // যা যোগ/বদল হয়েছে (নেস্টেড merge)
-    const deletePaths=[];  // যা ইচ্ছাকৃতভাবে মুছতে হবে (ডট-পাথ)
-    const tombstones={...(deletedRecordRef.current||{})};
+    const deletePaths=[];  // যা ইচ্ছাকৃতভাবে মুছতে হবে — প্রতিটা পাথ আলাদা অংশে, যেমন [ক্যাটাগরি,"variants",মডেল]
+    const prevTomb=deletedRecordRef.current||{};
+    const tombstones={...prevTomb};
     let changeCount=0;
     Object.entries(newDb).forEach(([ck,cat])=>{
-      if(ck==="zz_deletedRecord")return;
+      if(!isCatEntry(ck,cat))return;
       const oldCat=oldDb[ck];
-      if(!oldCat){payload[ck]=JSON.parse(JSON.stringify(cat));changeCount++;return}
+      if(!oldCat){
+        payload[ck]=JSON.parse(JSON.stringify(cat));changeCount++;
+        // ক্যাটাগরিটা (আবার) যোগ হলো — এর আগের "মুছে ফেলা/সরিয়ে নেওয়া" চিহ্ন আর প্রযোজ্য নয়
+        delete tombstones["cat:"+ck];
+        Object.keys(cat.variants||{}).forEach(vk=>{delete tombstones["mv:"+ck+"|"+vk]});
+        return;
+      }
       const catPatch={};
       if(oldCat.bn!==cat.bn){catPatch.bn=cat.bn;changeCount++}
       if(oldCat.en!==cat.en){catPatch.en=cat.en;changeCount++}
@@ -2677,6 +2775,8 @@ function App({firebaseConfig,onResetConfig}){
       Object.entries(cat.variants||{}).forEach(([vk,v])=>{
         const oldV=(oldCat.variants||{})[vk];
         if(!oldV||JSON.stringify(oldV)!==JSON.stringify(v)){varPatch[vk]=JSON.parse(JSON.stringify(v));changeCount++}
+        // মডেলটা এই ক্যাটাগরিতে (আবার) এসেছে — "এখান থেকে সরানো হয়েছিল" চিহ্ন তুলে দেওয়া হয়
+        if(!oldV)delete tombstones["mv:"+ck+"|"+vk];
       });
       if(Object.keys(varPatch).length)catPatch.variants=varPatch;
       if(Object.keys(catPatch).length)payload[ck]=catPatch;
@@ -2684,14 +2784,21 @@ function App({firebaseConfig,onResetConfig}){
     // মুছে ফেলা শনাক্ত করা
     const pendingVarDeletes=[],pendingCatDeletes=[];
     Object.entries(oldDb).forEach(([ck,oldCat])=>{
-      if(ck==="zz_deletedRecord")return;
+      if(!isCatEntry(ck,oldCat))return;
       if(!newDb[ck]){pendingCatDeletes.push(ck);return}
       Object.keys(oldCat.variants||{}).forEach(vk=>{
         if(!((newDb[ck].variants)||{})[vk]){
-          const movedElsewhere=Object.entries(newDb).some(([ck2,c2])=>ck2!==ck&&(c2.variants||{})[vk]);
+          const movedElsewhere=Object.entries(newDb).some(([ck2,c2])=>ck2!==ck&&isCatEntry(ck2,c2)&&(c2.variants||{})[vk]);
           pendingVarDeletes.push({ck,vk,movedElsewhere});
         }
       });
+    });
+    // ── v4.45: অন্য ক্যাটাগরিতে সরানো মডেলের পুরনো জায়গা সবসময় মোছা হয়, সাথে "এই ক্যাটাগরি থেকে
+    // সরানো হয়েছে" চিহ্ন রাখা হয় — যাতে অন্য কোনো ডিভাইসের পুরনো কপি মডেলটাকে আগের ক্যাটাগরিতে
+    // আর ফিরিয়ে আনতে না পারে। আগে ঠিক এভাবেই একই মডেলের "ভূত-কপি" তৈরি হতো ──
+    pendingVarDeletes.filter(d=>d.movedElsewhere).forEach(({ck,vk})=>{
+      deletePaths.push([ck,"variants",vk]);
+      tombstones["mv:"+ck+"|"+vk]=Date.now();
     });
     // ── ভর-মুছে-ফেলার রক্ষাকবচ: একবারে ৩টার বেশি মুছে যাওয়ার কথা এলে মোছার অংশটা
     // বাতিল হয় (যোগ/সম্পাদনা ঠিকই সেভ হয়) ──
@@ -2699,28 +2806,33 @@ function App({firebaseConfig,onResetConfig}){
     if(realDeletes>3){
       alert(`🛡️ নিরাপত্তা: এই সেভে ${realDeletes}টা মডেল/ক্যাটাগরি মুছে যেত।\n\nএকবারে এতগুলো মোছা স্বাভাবিক নয় — সম্ভবত এই ডিভাইসের কপি পুরনো ছিল। মোছার অংশটা বাতিল করা হলো।\n\nআপনার যোগ/নাম-বদল/কাঠের মাপ ঠিকই সেভ হয়েছে।`);
     }else{
-      pendingVarDeletes.forEach(({ck,vk,movedElsewhere})=>{
-        deletePaths.push(`${ck}.variants.${vk}`);
-        if(!movedElsewhere)tombstones[vk]=Date.now();
+      pendingVarDeletes.filter(d=>!d.movedElsewhere).forEach(({ck,vk})=>{
+        deletePaths.push([ck,"variants",vk]);
+        tombstones[vk]=Date.now();
       });
       pendingCatDeletes.forEach(ck=>{
-        deletePaths.push(ck);
+        deletePaths.push([ck]);
         tombstones["cat:"+ck]=Date.now();
       });
     }
     deletedRecordRef.current=tombstones;
+    const tombChanged=Object.keys(tombstones).filter(k=>prevTomb[k]!==tombstones[k]);
+    const tombCleared=Object.keys(prevTomb).filter(k=>!(k in tombstones));
     const run=async()=>{
       try{
         if(Object.keys(payload).length){
           await withTimeout(fs.doc("meta/db").set(payload,{merge:true}),45000,"সময়সীমা পার");
         }
-        if(deletePaths.length){
-          const del={};
-          deletePaths.forEach(p=>{del[p]=firebase.firestore.FieldValue.delete()});
-          del.zz_deletedRecord=tombstones;
-          await withTimeout(fs.doc("meta/db").update(del),45000,"সময়সীমা পার");
-        }else if(Object.keys(payload).length){
-          await withTimeout(fs.doc("meta/db").set({zz_deletedRecord:tombstones},{merge:true}),45000,"সময়সীমা পার");
+        // ── মোছা আর মুছে-ফেলার রেকর্ড একসাথে এক লেখায়, প্রতিটা ঘর আলাদা FieldPath দিয়ে — নামে
+        // ডট (.) বা বিশেষ চিহ্ন থাকলেও ভুল জায়গায় লেখা বা লেখা ব্যর্থ হয় না, আর অন্য ডিভাইসের
+        // যোগ করা রেকর্ডও মুছে যায় না ──
+        const FP=firebase.firestore.FieldPath,FV=firebase.firestore.FieldValue;
+        const args=[];
+        deletePaths.forEach(segs=>{args.push(new FP(...segs),FV.delete())});
+        tombChanged.forEach(k=>{args.push(new FP("zz_deletedRecord",k),tombstones[k])});
+        tombCleared.forEach(k=>{args.push(new FP("zz_deletedRecord",k),FV.delete())});
+        if(args.length){
+          await withTimeout(fs.doc("meta/db").update(...args),45000,"সময়সীমা পার");
         }
       }catch(err){
         alert("⚠️ ক্লাউডে সেভ করতে সমস্যা হয়েছে: "+err.message+"\n\nপরিবর্তনটা এই ডিভাইসে আছে — অ্যাপ খোলা রাখলে স্বয়ংক্রিয়ভাবে আবার চেষ্টা হবে।");
@@ -2785,25 +2897,43 @@ function App({firebaseConfig,onResetConfig}){
     }
     alert(`✅ একত্র করা সম্পন্ন। ${affected.length}টা অর্ডার নতুন মডেলের সাথে যুক্ত হয়েছে।`);
   };
-  const propagateVariantMove=async(fromCat,toCat,varKey)=>{
+  const propagateVariantMove=async(fromCat,toCat,varKey,newVarKey,newName)=>{
+    // v4.45: সরানোর সময় চাবি বা নাম বদলালে (গন্তব্যে একই চাবি/নাম থাকলে) অর্ডারেও সেটাই বসে
+    const nk=newVarKey||varKey;
     const fs=fsRef.current;
-    const affected=(ordersRef.current||[]).filter(o=>(o.items||[]).some(it=>it.catKey===fromCat&&it.varKey===varKey));
-    setOrders(prev=>prev.map(o=>{
-      if(!(o.items||[]).some(it=>it.catKey===fromCat&&it.varKey===varKey))return o;
-      return{...o,items:o.items.map(it=>it.catKey===fromCat&&it.varKey===varKey?{...it,catKey:toCat}:it)};
-    }));
+    const hit=(it)=>it.catKey===fromCat&&it.varKey===varKey;
+    const remapItem=(it)=>hit(it)?{...it,catKey:toCat,varKey:nk,...(newName?{variantBn:newName}:{})}:it;
+    const affected=(ordersRef.current||[]).filter(o=>(o.items||[]).some(hit));
+    setOrders(prev=>prev.map(o=>(o.items||[]).some(hit)?{...o,items:o.items.map(remapItem)}:o));
     if(!fs||!affected.length)return;
     const chunks=[];
     for(let i=0;i<affected.length;i+=400)chunks.push(affected.slice(i,i+400));
     for(const chunk of chunks){
       try{
         const batch=fs.batch();
-        chunk.forEach(o=>{
-          const newItems=(o.items||[]).map(it=>it.catKey===fromCat&&it.varKey===varKey?{...it,catKey:toCat}:it);
-          batch.set(fs.collection("orders").doc(o.no),{items:newItems},{merge:true});
-        });
+        chunk.forEach(o=>batch.set(fs.collection("orders").doc(o.no),{items:(o.items||[]).map(remapItem)},{merge:true}));
         await withTimeout(batch.commit(),45000,"সময়সীমা পার");
       }catch(e){alert(`⚠️ কিছু অর্ডারে নতুন ক্যাটাগরি পাঠাতে সমস্যা হয়েছে (${e.message}) — অ্যাপ খোলা রাখলে স্বয়ংক্রিয়ভাবে আবার চেষ্টা হবে।`)}
+    }
+  };
+  // ── v4.45: মডেলের কোড বদলালে সেই মডেল ব্যবহার করা প্রতিটা অর্ডারেও কোডটা বদলে যায় (নাম
+  // বদলানোর মতোই) — প্রিন্ট শীট/রিসিপ্টে সবসময় ডেটাবেসের কোডই দেখাবে ──
+  const propagateVariantCode=async(catKey,varKey,newCode)=>{
+    const fs=fsRef.current;
+    const hit=(it)=>it.catKey===catKey&&it.varKey===varKey;
+    const affected=(ordersRef.current||[]).filter(o=>(o.items||[]).some(hit));
+    if(!affected.length)return;
+    const remapItem=(it)=>hit(it)?{...it,code:newCode}:it;
+    setOrders(prev=>prev.map(o=>(o.items||[]).some(hit)?{...o,items:o.items.map(remapItem)}:o));
+    if(!fs)return;
+    const chunks=[];
+    for(let i=0;i<affected.length;i+=400)chunks.push(affected.slice(i,i+400));
+    for(const chunk of chunks){
+      try{
+        const batch=fs.batch();
+        chunk.forEach(o=>batch.set(fs.collection("orders").doc(o.no),{items:(o.items||[]).map(remapItem)},{merge:true}));
+        await withTimeout(batch.commit(),45000,"সময়সীমা পার");
+      }catch(e){alert(`⚠️ কিছু অর্ডারে নতুন কোড পাঠাতে সমস্যা হয়েছে (${e.message}) — অ্যাপ খোলা রাখলে স্বয়ংক্রিয়ভাবে আবার চেষ্টা হবে।`)}
     }
   };
   const propagateVariantRename=async(catKey,varKey,newVariantBn)=>{
@@ -3088,19 +3218,30 @@ function App({firebaseConfig,onResetConfig}){
     </div>;
     return<div style={{padding:40,textAlign:"center"}}><div style={{fontSize:9,color:"#ccc",marginBottom:10}}>{BUILD_TAG}</div>সিঙ্ক হচ্ছে...</div>;
   }
+  // ── v4.45: কোনো পাতা ক্র্যাশ করলে — কী হয়েছিল তা জমা রাখা হয় (⚙️ সিস্টেম অংশে দেখা যায়),
+  // আর সম্ভব হলে নিজে থেকেই এক ধাপ পেছানো হয়; অ্যাপ কখনো সাদা হয়ে থেমে থাকে না ──
+  const onPageCrash=(err)=>{
+    const rec={at:new Date().toISOString(),page:page+(curScreen.tab?"/"+curScreen.tab:""),msg:String((err&&err.message)||err).slice(0,240)};
+    S.set("rf_last_page_crash",rec);
+    setLastPageCrash(rec);
+    if(navStack.length>1)setTimeout(()=>{try{window.history.back()}catch(e){}},0);
+  };
+  const renderPage=()=>{
   if(page==="preview")return<Preview order={viewed||draft} onBack={goBack} slip={slip} setSlip={setSlip} onUpdate={updateOrder} onAddPayment={addOrderPayment} onSetDelivered={setOrderDelivered} onDelete={deleteOrderPermanently} db={db} saveDb={saveDb} carpenters={carpenters} saveCarpenters={saveCarpenters} galleries={galleries} saveGalleryEntry={saveGalleryEntry} woodSettings={woodSettingsWithBands} laborSettings={laborSettings} workers={workers} allOrders={orders} rackSplits={rackSplits}/>;
   if(page==="form")return<Form onSave={saveOrder} onBack={goBack} db={db} saveDb={saveDb} galleries={galleries} woodSettings={woodSettings} laborSettings={laborSettings} orders={orders} getNextOrderNumber={getNextOrderNumber}/>;
   if(page==="history")return<Hist orders={orders} db={db} onBack={goBack} onView={o=>navigate({page:"preview",orderNo:o.no,slip:0})} highlightNo={highlightNo} q={curScreen.q||""} setQ={q=>replaceTop({...curScreen,q})} statusFilter={curScreen.statusFilter||"all"} setStatusFilter={statusFilter=>replaceTop({...curScreen,statusFilter})} catFilter={curScreen.catFilter||"all"} setCatFilter={catFilter=>replaceTop({...curScreen,catFilter})} sortMode={curScreen.sortMode||"recent"} setSortMode={sortMode=>replaceTop({...curScreen,sortMode})}/>;
-  if(page==="manage")return<ManageDB db={db} saveDb={saveDb} galleries={galleries} saveGalleryEntry={saveGalleryEntry} onBack={goBack} navigate={navigate} goBack={goBack} replaceTop={replaceTop} curScreen={curScreen} highlightNo={highlightNo} onRenameVariant={propagateVariantRename} onMoveVariant={propagateVariantMove} onWoodChange={propagateWoodChange} onMergeVariants={mergeVariantsAcrossOrders}/>;
+  if(page==="manage")return<ManageDB db={db} saveDb={saveDb} galleries={galleries} saveGalleryEntry={saveGalleryEntry} onBack={goBack} navigate={navigate} goBack={goBack} replaceTop={replaceTop} curScreen={curScreen} highlightNo={highlightNo} onRenameVariant={propagateVariantRename} onMoveVariant={propagateVariantMove} onRecodeVariant={propagateVariantCode} onWoodChange={propagateWoodChange} onMergeVariants={mergeVariantsAcrossOrders}/>;
   if(page==="woodstock")return<WoodStockPage woodLots={woodLots} saveWoodLots={saveWoodLots} addLotPayment={addLotPayment} woodSettings={woodSettingsWithBands} saveWoodSettings={saveWoodSettings} laborSettings={laborSettings} saveLaborSettings={saveLaborSettings} rackSplits={rackSplits} addRackSplit={addRackSplit} rackBands={rackBands} addRackBand={addRackBand} removeRackBand={removeRackBand} payrollWeeks={payrollWeeks} workers={workers} orders={orders} expenses={expenses} onBack={goBack} view={curScreen.view||"list"} lotId={curScreen.lotId||null} onOpenList={()=>navigate({page:"woodstock",view:"list"})} onOpenDetail={lotId=>navigate({page:"woodstock",view:"detail",lotId})} onOpenNew={()=>navigate({page:"woodstock",view:"new"})} onOpenRates={()=>navigate({page:"woodstock",view:"rates"})} onOpenUsage={()=>navigate({page:"woodstock",view:"usage"})} highlightNo={highlightNo}/>;
   if(page==="expense")return<ExpensePage expenses={expenses} onSave={saveExpense} onBack={goBack}/>;
   if(page==="payroll")return<PayrollPage workers={workers} saveWorker={saveWorker} deleteWorker={deleteWorker} payrollWeeks={payrollWeeks} savePayrollWeek={savePayrollWeek} updateAttendance={updateAttendance} addAdvanceEntry={addAdvanceEntry} removeAdvanceEntry={removeAdvanceEntry} onBack={goBack}/>;
   if(page==="plreport")return<PLReportPage orders={orders} expenses={expenses} workers={workers} payrollWeeks={payrollWeeks} woodLots={woodLots} woodSettings={woodSettings} laborSettings={laborSettings} onBack={goBack}/>;
-  return<Home orders={orders} expenses={expenses} woodLots={woodLots} db={db} woodSettings={woodSettings} laborSettings={laborSettings} workers={workers} payrollWeeks={payrollWeeks} alertSettings={alertSettings} saveAlertSettings={saveAlertSettings} backupFailed={backupFailed} lastSyncAt={lastSyncAt} onManualRefresh={manualRefresh} pendingWrites={pendingWrites} onCheckServerSync={checkServerSync} onAcceptServerVersion={acceptServerVersion} onUpdateOrder={updateOrder} onNew={()=>navigate({page:"form"})} onHist={()=>navigate({page:"history"})} onManage={()=>navigate({page:"manage"})} onExpense={()=>navigate({page:"expense"})} onWoodStock={()=>navigate({page:"woodstock",view:"list"})} onPayroll={()=>navigate({page:"payroll"})} onPLReport={()=>navigate({page:"plreport"})} onView={o=>navigate({page:"preview",orderNo:o.no,slip:0})} onViewDelivery={o=>navigate({page:"preview",orderNo:o.no,slip:5})} online={online} connError={connError} onResetConfig={onResetConfig} folderStatus={folderStatus} connectFolder={connectFolder} highlightNo={highlightNo} onBackupData={backupData} projectId={firebaseConfig?.projectId||""} appId={firebaseConfig?.appId||""} permanentSyncFailures={permanentSyncFailures} autoStuckStatus={autoStuckStatus} dbGaps={dbGaps} setDbGaps={setDbGaps} fsRef={fsRef}/>;
+  return<Home lastPageCrash={lastPageCrash} orders={orders} expenses={expenses} woodLots={woodLots} db={db} woodSettings={woodSettings} laborSettings={laborSettings} workers={workers} payrollWeeks={payrollWeeks} alertSettings={alertSettings} saveAlertSettings={saveAlertSettings} backupFailed={backupFailed} lastSyncAt={lastSyncAt} onManualRefresh={manualRefresh} pendingWrites={pendingWrites} onCheckServerSync={checkServerSync} onAcceptServerVersion={acceptServerVersion} onUpdateOrder={updateOrder} onNew={()=>navigate({page:"form"})} onHist={()=>navigate({page:"history"})} onManage={()=>navigate({page:"manage"})} onExpense={()=>navigate({page:"expense"})} onWoodStock={()=>navigate({page:"woodstock",view:"list"})} onPayroll={()=>navigate({page:"payroll"})} onPLReport={()=>navigate({page:"plreport"})} onView={o=>navigate({page:"preview",orderNo:o.no,slip:0})} onViewDelivery={o=>navigate({page:"preview",orderNo:o.no,slip:5})} online={online} connError={connError} onResetConfig={onResetConfig} folderStatus={folderStatus} connectFolder={connectFolder} highlightNo={highlightNo} onBackupData={backupData} projectId={firebaseConfig?.projectId||""} appId={firebaseConfig?.appId||""} permanentSyncFailures={permanentSyncFailures} autoStuckStatus={autoStuckStatus} dbGaps={dbGaps} setDbGaps={setDbGaps} fsRef={fsRef}/>;
+  };
+  return<PageErrorBoundary resetKey={navStack.length+"|"+page+"|"+(curScreen.tab||"")} canGoBack={navStack.length>1} onError={onPageCrash}>{renderPage()}</PageErrorBoundary>;
 }
 
 /* ── HOME / DASHBOARD ── */
-function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,payrollWeeks,alertSettings,saveAlertSettings,backupFailed,lastSyncAt,onManualRefresh,pendingWrites,onCheckServerSync,onAcceptServerVersion,onUpdateOrder,onNew,onHist,onManage,onExpense,onWoodStock,onPayroll,onPLReport,onView,onViewDelivery,online,connError,onResetConfig,folderStatus,connectFolder,highlightNo,onBackupData,projectId,appId,permanentSyncFailures,autoStuckStatus,dbGaps,setDbGaps,fsRef}){
+function Home({lastPageCrash,orders,expenses,woodLots,db,woodSettings,laborSettings,workers,payrollWeeks,alertSettings,saveAlertSettings,backupFailed,lastSyncAt,onManualRefresh,pendingWrites,onCheckServerSync,onAcceptServerVersion,onUpdateOrder,onNew,onHist,onManage,onExpense,onWoodStock,onPayroll,onPLReport,onView,onViewDelivery,online,connError,onResetConfig,folderStatus,connectFolder,highlightNo,onBackupData,projectId,appId,permanentSyncFailures,autoStuckStatus,dbGaps,setDbGaps,fsRef}){
   const now=new Date();
   const[showAllRunning,setShowAllRunning]=useState(false);
   const[showSystemZone,setShowSystemZone]=useState(false);
@@ -4469,6 +4610,11 @@ function Home({orders,expenses,woodLots,db,woodSettings,laborSettings,workers,pa
           <div style={{fontSize:9,color:"#92400e",marginBottom:2,fontWeight:600}}>App ID:</div>
           <div style={{fontFamily:"monospace",fontSize:12,fontWeight:700,color:"#92400e",background:"white",borderRadius:7,padding:"7px 10px",wordBreak:"break-all"}}>{appId||"(পাওয়া যায়নি)"}</div>
         </div>
+        {lastPageCrash&&<div style={{marginTop:12,background:"#f8fafc",border:"1px solid #e2e8f0",borderRadius:10,padding:"10px 12px",fontSize:10,color:"#475569",lineHeight:1.6}}>
+          <div style={{fontWeight:700,marginBottom:2}}>🛟 শেষ স্বয়ংক্রিয় পুনরুদ্ধার</div>
+          <div>{new Date(lastPageCrash.at).toLocaleString("bn-BD")} · পাতা: {lastPageCrash.page}</div>
+          <div style={{fontFamily:"monospace",fontSize:9,color:"#94a3b8",wordBreak:"break-word"}}>{lastPageCrash.msg}</div>
+        </div>}
 
         <div style={{marginTop:12,background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 14px"}}>
           <div style={{fontSize:12,fontWeight:700,color:"#444",marginBottom:3}}>🔍 সার্ভার-সিঙ্ক পরীক্ষা</div>
@@ -5958,7 +6104,7 @@ function PayrollPage({workers,saveWorker,deleteWorker,payrollWeeks,savePayrollWe
 }
 
 /* ── MANAGE DB ── */
-function ManageDB({db,saveDb,galleries,saveGalleryEntry,onBack,navigate,goBack,replaceTop,curScreen,highlightNo,onRenameVariant,onMoveVariant,onWoodChange,onMergeVariants}){
+function ManageDB({db,saveDb,galleries,saveGalleryEntry,onBack,navigate,goBack,replaceTop,curScreen,highlightNo,onRenameVariant,onMoveVariant,onRecodeVariant,onWoodChange,onMergeVariants}){
   // ── এই পেজের ভেতরের নেভিগেশন (তালিকা ↔ + ক্যাটাগরি ↔ + ভেরিয়েন্ট ↔ কাঠ সম্পাদনা ↔ ছবি) এখন
   // নিজের সাময়িক মেমোরিতে না — অ্যাপের মূল নেভিগেশন-স্ট্যাকে থাকে (Hist-এর ফিল্টারের মতোই),
   // যাতে ফোনের ব্যাক বাটন এক ধাপ করেই পেছাতে পারে, সরাসরি ড্যাশবোর্ডে চলে না যায় ──
@@ -5973,6 +6119,8 @@ function ManageDB({db,saveDb,galleries,saveGalleryEntry,onBack,navigate,goBack,r
   const[editSections,setEditSections]=useState(null);
   const[newPiece,setNewPiece]=useState({sectionIdx:0,bn:"",pc:"",h:"",l:"",w:""});
   const[expandedJointFor,setExpandedJointFor]=useState(null);
+  // v4.45: কাঠের তালিকায় কোন পিসটা এখন সম্পাদনায় আছে — {si,pi,bn,w,h,l,pc}
+  const[editingPiece,setEditingPiece]=useState(null);
   // ── এক মডেলের কাঠের তালিকা (সব সেকশনসহ) কপি করে আরেক মডেলে বসানোর জন্য — কাছাকাছি মডেলের
   // পুরো তালিকা কপি করে নতুন মডেলে পেস্ট করে শুধু যেখানে দরকার এডিট করা যায় ──
   const[copiedSections,setCopiedSections]=useState(null);
@@ -5980,8 +6128,9 @@ function ManageDB({db,saveDb,galleries,saveGalleryEntry,onBack,navigate,goBack,r
   // ── "কাঠ" ট্যাবে ঢোকার সময় (বা ভিন্ন মডেলে গেলে) সম্পাদনার কপিটা তাজা করে নেওয়া — useLayoutEffect
   // যাতে পুরনো মডেলের ডেটা এক ফ্রেমের জন্যও দেখা না যায় ──
   useLayoutEffect(()=>{
-    if(tab==="edit"&&selCat&&selVar&&db[selCat]&&db[selCat].variants[selVar]){
-      setEditSections(JSON.parse(JSON.stringify(db[selCat].variants[selVar].sections)));
+    setEditingPiece(null);
+    if(tab==="edit"&&selCat&&selVar&&db[selCat]&&db[selCat].variants&&db[selCat].variants[selVar]){
+      setEditSections(JSON.parse(JSON.stringify(db[selCat].variants[selVar].sections||[])));
     }
   },[tab,selCat,selVar]);
 
@@ -5991,18 +6140,47 @@ function ManageDB({db,saveDb,galleries,saveGalleryEntry,onBack,navigate,goBack,r
     saveDb(nd);setNewCat({key:"",bn:"",en:""});goBack();
   };
   const addVariant=()=>{
-    if(!newVar.catKey||!newVar.bn)return;
-    const vKey=newVar.key||newVar.bn.replace(/\s+/g,"_").toLowerCase().slice(0,12);
-    const code=newVar.code||autoCode(newVar.bn,Object.keys(db[newVar.catKey].variants).length+1);
+    if(!newVar.catKey||!newVar.bn||!newVar.bn.trim()||!db[newVar.catKey])return;
+    // ── v4.45: চাবি আর নাম থেকে বানানো হয় না। আগে নামের প্রথম কয়েক অক্ষর থেকে চাবি হতো, ফলে
+    // "স্ট্যান্ডার্ড খাট" আর "স্ট্যান্ডার্ড বক্স খাট" একই চাবি পেত — একই ক্যাটাগরিতে যোগ করলে
+    // পুরনো মডেলটা (কাঠের মাপসহ) নিঃশব্দে মুছে যেত ──
+    const vKey=newVar.key&&!(db[newVar.catKey].variants||{})[newVar.key]?newVar.key:newUniqueVarKey(db);
+    const typed=(newVar.code||"").trim();
+    if(typed){
+      const clash=findCodeOwner(db,typed,null);
+      if(clash){alert(`⚠️ "${typed}" কোডটা আগে থেকেই "${clash.varBn}" (${clash.catBn}) মডেলে আছে — অন্য কোড দিন, অথবা খালি রাখুন (তাহলে অটো তৈরি হবে)।`);return}
+    }
+    const code=typed||uniqueAutoCode(db,newVar.bn,Object.keys(db[newVar.catKey].variants||{}).length+1);
     const nd=JSON.parse(JSON.stringify(db));
-    nd[newVar.catKey].variants[vKey]={bn:newVar.bn,code,sections:[{name:"কাঠের তালিকা",pieces:[]}]};
+    if(!nd[newVar.catKey].variants)nd[newVar.catKey].variants={};
+    const name=uniqueModelName(nd[newVar.catKey].variants,newVar.bn.trim());
+    nd[newVar.catKey].variants[vKey]={bn:name,code,sections:[{name:"কাঠের তালিকা",pieces:[]}]};
     saveDb(nd);setNewVar({catKey:"",key:"",bn:"",code:""});goBack();
   };
   const openEdit=(catK,varK)=>{navigate({page:"manage",tab:"edit",selCat:catK,selVar:varK})};
-  const saveEdit=()=>{const nd=JSON.parse(JSON.stringify(db));nd[selCat].variants[selVar].sections=editSections;nd[selCat].variants[selVar].woodUpdatedAt=Date.now();saveDb(nd);if(onWoodChange)onWoodChange(selCat,selVar,editSections);goBack()};
+  // v4.45: কোনো পিসের সম্পাদনা খোলা রেখেই "সংরক্ষণ করুন" চাপলে সেই পরিবর্তনও সাথে সেভ হয় — হারায় না
+  const saveEdit=()=>{const secs=applyPieceEdit(editSections,editingPiece);setEditingPiece(null);const nd=JSON.parse(JSON.stringify(db));nd[selCat].variants[selVar].sections=secs;nd[selCat].variants[selVar].woodUpdatedAt=Date.now();saveDb(nd);if(onWoodChange)onWoodChange(selCat,selVar,secs);goBack()};
   const addSection=()=>setEditSections(prev=>[...prev,{name:"নতুন সেকশন",pieces:[]}]);
   const addPiece=()=>{const ns=JSON.parse(JSON.stringify(editSections));ns[newPiece.sectionIdx].pieces.push({bn:newPiece.bn,pc:parseInt(newPiece.pc)||1,h:parseFloat(newPiece.h)||72,l:parseFloat(newPiece.l)||24,w:parseFloat(newPiece.w)||1});setEditSections(ns);setNewPiece({...newPiece,bn:""})};
-  const removePiece=(si,pi)=>{const ns=JSON.parse(JSON.stringify(editSections));ns[si].pieces.splice(pi,1);setEditSections(ns)};
+  const removePiece=(si,pi)=>{const ns=JSON.parse(JSON.stringify(editSections));ns[si].pieces.splice(pi,1);setEditSections(ns);setEditingPiece(null)};
+  // ── v4.45: আগে বসানো কোনো পিসের নাম আর মাপ (W/H/L/পিস) বদলানো — কেটে নতুন করে বসাতে হয় না ──
+  const startPieceEdit=(si,pi)=>{
+    const p=editSections&&editSections[si]&&editSections[si].pieces[pi];
+    if(!p)return;
+    const str=(v)=>(v===undefined||v===null)?"":String(v);
+    setEditingPiece({si,pi,bn:p.bn||"",w:str(p.w),h:str(p.h),l:str(p.l),pc:str(p.pc)});
+  };
+  const applyPieceEdit=(sections,ep)=>{
+    if(!ep||!sections)return sections;
+    const ns=JSON.parse(JSON.stringify(sections));
+    const old=ns[ep.si]&&ns[ep.si].pieces[ep.pi];
+    if(!old)return sections;
+    // খালি বা ভুল সংখ্যা রাখলে আগের মাপটাই থেকে যায়
+    const num=(v,prev,isInt)=>{const n=isInt?parseInt(v,10):parseFloat(v);return isFinite(n)&&n>0?n:prev};
+    ns[ep.si].pieces[ep.pi]={...old,bn:(ep.bn||"").trim()||old.bn,w:num(ep.w,old.w),h:num(ep.h,old.h),l:num(ep.l,old.l),pc:num(ep.pc,old.pc,true)};
+    return ns;
+  };
+  const savePieceEdit=()=>{if(!editingPiece)return;setEditSections(applyPieceEdit(editSections,editingPiece));setEditingPiece(null)};
   const resetDb=()=>{
     const typed=window.prompt("⚠️ এটি আপনার তৈরি করা সব ফার্নিচার মডেল, কাঠের পিস তালিকা ও কাঠ-নির্ধারণ (woodOverride) স্থায়ীভাবে মুছে দেবে — এটি ফিরিয়ে আনা যাবে না।\n\nনিশ্চিত হলে নিচে ইংরেজিতে RESET লিখুন:");
     if(!typed||typed.trim().toUpperCase()!=="RESET")return;
@@ -6091,26 +6269,59 @@ function ManageDB({db,saveDb,galleries,saveGalleryEntry,onBack,navigate,goBack,r
   // ── মডেল সরানো: একটা মডেলকে অন্য ক্যাটাগরিতে নিয়ে যাওয়া। কাঠের মাপ ও ছবি সব সাথে যায়,
   // আর এই মডেল ব্যবহার করা প্রতিটা অর্ডারের সংযোগও (catKey) আপডেট হয়, যাতে কিছু ছিঁড়ে না যায় ──
   const[movingVar,setMovingVar]=useState(null); // "catK|varK"
+  // ── v4.45: মডেলের কোড বদলানো, আর একই কোড একাধিক মডেলে থাকলে লাল চিহ্ন ──
+  const[editingCode,setEditingCode]=useState(null); // "catK|varK"
+  const[codeVal,setCodeVal]=useState("");
+  const codeGroups=useMemo(()=>{
+    const g={};
+    dbCats(db).forEach(([ck,c])=>Object.entries(c.variants||{}).forEach(([vk,v])=>{
+      const n=normCode(v&&v.code);if(!n)return;
+      (g[n]=g[n]||[]).push({ck,vk,bn:(v&&v.bn)||"",catBn:c.bn||""});
+    }));
+    return g;
+  },[db]);
+  const dupCodeCount=Object.values(codeGroups).reduce((n,arr)=>n+(arr.length>1?arr.length:0),0);
+  const startEditCode=(catK,varK)=>{
+    const v=db[catK]&&db[catK].variants&&db[catK].variants[varK];
+    setRenamingVar(null);setMovingVar(null);
+    setEditingCode(catK+"|"+varK);setCodeVal((v&&v.code)||"");
+  };
+  const saveCode=(catK,varK)=>{
+    const cur=db[catK]&&db[catK].variants&&db[catK].variants[varK];
+    if(!cur){setEditingCode(null);return}
+    const newCode=(codeVal||"").trim();
+    if(!newCode){alert("⚠️ কোড খালি রাখা যাবে না।");return}
+    if(newCode===(cur.code||"")){setEditingCode(null);return}
+    // পুরো ডেটাবেসের সব ক্যাটাগরির সব মডেলের সাথে মেলানো (ছোট/বড় হাতের অক্ষর আলাদা ধরা হয় না)
+    const clash=findCodeOwner(db,newCode,catK+"|"+varK);
+    if(clash){alert(`⚠️ "${newCode}" কোডটা আগে থেকেই "${clash.varBn}" (${clash.catBn}) মডেলে আছে — অন্য কোড দিন।`);return}
+    const nd=JSON.parse(JSON.stringify(db));
+    nd[catK].variants[varK].code=newCode;
+    saveDb(nd);
+    if(onRecodeVariant)onRecodeVariant(catK,varK,newCode);
+    setEditingCode(null);
+  };
   const moveVariant=(fromCat,varK,toCat)=>{
     if(!fromCat||!toCat||fromCat===toCat||!db[fromCat]||!db[toCat]){setMovingVar(null);return}
     const nd=JSON.parse(JSON.stringify(db));
-    const theVar=nd[fromCat].variants[varK];
+    const theVar=(nd[fromCat].variants||{})[varK];
     if(!theVar){setMovingVar(null);return}
-    if(nd[toCat].variants&&nd[toCat].variants[varK]){
-      alert("⚠️ এই ক্যাটাগরিতে একই কোডের মডেল আগেই আছে — সরানো হলো না।");
-      setMovingVar(null);return;
-    }
     if(!nd[toCat].variants)nd[toCat].variants={};
-    nd[toCat].variants[varK]=theVar;
+    // ── v4.45: গন্তব্যে একই অভ্যন্তরীণ চাবির মডেল থাকলে আর আটকানো হয় না — সরানো মডেলটা নতুন একটা
+    // চাবি পায়। আর একই নামের মডেল থাকলে নাম হয় "নাম (১)", সেটাও থাকলে "(২)" … — পরে দুটো মিলিয়ে
+    // দেখে একই হলে 🔗 মেশান দিয়ে একত্র করা যায় ──
+    const newKey=nd[toCat].variants[varK]?newUniqueVarKey(nd):varK;
+    const oldName=theVar.bn||"";
+    const newName=uniqueModelName(nd[toCat].variants,oldName);
+    nd[toCat].variants[newKey]={...theVar,bn:newName};
     delete nd[fromCat].variants[varK];
     // পুনরুদ্ধার-ক্যাটাগরি ফাঁকা হয়ে গেলে সেটাও সরিয়ে দেওয়া হয়
     if(fromCat==="zz_recovered"&&Object.keys(nd[fromCat].variants).length===0)delete nd[fromCat];
     saveDb(nd);
-    // ছবি সরানো — গ্যালারির চাবি ক্যাটাগরি ধরে বানানো, তাই নতুন চাবিতে কপি করতে হয়
-    const oldKey=`${fromCat}__${varK}`,newKey=`${toCat}__${varK}`;
-    const g=galleries&&galleries[oldKey];
-    if(g&&saveGalleryEntry)saveGalleryEntry(toCat,varK,{gallery:g.gallery||[],coverImage:g.coverImage||null});
-    if(onMoveVariant)onMoveVariant(fromCat,toCat,varK);
+    // ছবি সরানো — গ্যালারির চাবি ক্যাটাগরি ও মডেল ধরে বানানো, তাই নতুন চাবিতে কপি করতে হয়
+    const g=galleries&&galleries[`${fromCat}__${varK}`];
+    if(g&&saveGalleryEntry)saveGalleryEntry(toCat,newKey,{gallery:g.gallery||[],coverImage:g.coverImage||null});
+    if(onMoveVariant)onMoveVariant(fromCat,toCat,varK,newKey,newName!==oldName?newName:null);
     setMovingVar(null);
   };
   const saveRenameVar=(catK,varK)=>{const nd=JSON.parse(JSON.stringify(db));const newName=renameVarVal.trim()||nd[catK].variants[varK].bn;nd[catK].variants[varK].bn=newName;saveDb(nd);if(onRenameVariant)onRenameVariant(catK,varK,newName);setRenamingVar(null)};
@@ -6130,7 +6341,8 @@ function ManageDB({db,saveDb,galleries,saveGalleryEntry,onBack,navigate,goBack,r
           <span style={{flex:1,fontSize:12,fontWeight:600}}>🔗 "{fName}" নির্বাচিত — যে মডেলের সাথে মেশাবেন সেটাতে চাপুন</span>
           <button onClick={()=>setMergeSelectFirst(null)} style={{background:"rgba(255,255,255,.2)",border:"none",color:"white",borderRadius:6,padding:"5px 10px",fontSize:11,fontWeight:700,flexShrink:0}}>বাতিল</button>
         </div>;})()}
-        {Object.entries(db).map(([catK,cat])=><div key={catK} style={{background:"white",borderRadius:10,marginBottom:12,overflow:"hidden",boxShadow:"0 1px 4px rgba(0,0,0,.07)"}}>
+        {dupCodeCount>0&&<div style={{background:"#fef2f2",border:"1.5px solid #fca5a5",color:"#b91c1c",borderRadius:10,padding:"9px 12px",marginBottom:12,fontSize:11.5,fontWeight:600,lineHeight:1.55}}>⚠️ {toBnDigits(dupCodeCount)}টা মডেলের কোড অন্য মডেলের সাথে মিলে গেছে — নিচে লাল করে দেখানো আছে। "🏷️ কোড" চেপে বদলে দিন।</div>}
+        {dbCats(db).map(([catK,cat])=><div key={catK} style={{background:"white",borderRadius:10,marginBottom:12,overflow:"hidden",boxShadow:"0 1px 4px rgba(0,0,0,.07)"}}>
           <div style={{background:"#6d28d9",color:"white",padding:"8px 12px",display:"flex",justifyContent:"space-between",alignItems:"center",gap:8}}>
             {renamingCat===catK?<>
               <input value={renameVal} onChange={e=>setRenameVal(e.target.value)} style={{flex:1,border:"none",borderRadius:6,padding:"5px 8px",fontSize:12,outline:"none"}} autoFocus/>
@@ -6148,25 +6360,31 @@ function ManageDB({db,saveDb,galleries,saveGalleryEntry,onBack,navigate,goBack,r
               }} style={{background:"rgba(255,255,255,.2)",border:"none",color:"white",borderRadius:6,padding:"4px 9px",fontSize:11}}>🗑️ মুছুন</button>}
             </>}
           </div>
-          {Object.entries(cat.variants).sort((a,b)=>(a[1].bn||"").localeCompare(b[1].bn||"","bn")).map(([vK,v])=>{
+          {Object.entries(cat.variants||{}).sort((a,b)=>(a[1].bn||"").localeCompare(b[1].bn||"","bn")).map(([vK,v])=>{
             const thisKey=catK+"|"+vK;
+            const dupOthers=(codeGroups[normCode(v&&v.code)]||[]).filter(d=>!(d.ck===catK&&d.vk===vK));
             const isSelectedForMerge=mergeSelectFirst===thisKey;
             return<div key={vK} style={{padding:"8px 12px",borderBottom:"1px solid #f0f0f0",background:isSelectedForMerge?"#fef2f2":highlightNo===("variant:"+catK+"__"+vK)?"#e0f2fe":"transparent",border:isSelectedForMerge?"2px solid #fca5a5":"none",borderRadius:isSelectedForMerge?8:0,transition:"background .4s"}}>
             {movingVar===thisKey?<div style={{display:"flex",alignItems:"center",gap:6}}>
               <div style={{flex:1,fontSize:11,fontWeight:600,color:"#6d28d9"}}>কোন ক্যাটাগরিতে সরাবেন?</div>
               <select onChange={e=>{if(e.target.value)moveVariant(catK,vK,e.target.value)}} defaultValue="" style={{flex:1,border:"1px solid #ddd",borderRadius:6,padding:"5px 6px",fontSize:11}} autoFocus>
                 <option value="">-- বাছুন --</option>
-                {Object.entries(db).filter(([k])=>k!==catK).map(([k,c])=><option key={k} value={k}>{c.bn}</option>)}
+                {dbCats(db).filter(([k])=>k!==catK).map(([k,c])=><option key={k} value={k}>{c.bn}</option>)}
               </select>
               <button onClick={()=>setMovingVar(null)} style={{background:"#f3f4f6",border:"none",borderRadius:6,padding:"5px 9px",fontSize:11}}>✕</button>
             </div>:renamingVar===thisKey?<div style={{display:"flex",alignItems:"center",gap:6}}>
               <input value={renameVarVal} onChange={e=>setRenameVarVal(e.target.value)} style={{flex:1,border:"1px solid #ddd",borderRadius:6,padding:"5px 8px",fontSize:12,outline:"none"}} autoFocus/>
               <button onClick={()=>saveRenameVar(catK,vK)} style={{background:"#6d28d9",color:"white",border:"none",borderRadius:6,padding:"5px 9px",fontSize:11,fontWeight:700}}>✓</button>
               <button onClick={()=>setRenamingVar(null)} style={{background:"#f3f4f6",border:"none",borderRadius:6,padding:"5px 9px",fontSize:11}}>✕</button>
+            </div>:editingCode===thisKey?<div style={{display:"flex",alignItems:"center",gap:6}}>
+              <span style={{fontSize:10,fontWeight:700,color:"#6d28d9",flexShrink:0}}>🏷️ কোড:</span>
+              <input value={codeVal} onChange={e=>setCodeVal(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")saveCode(catK,vK)}} placeholder="যেমন: KHT-01" style={{flex:1,minWidth:0,border:"1px solid #ddd",borderRadius:6,padding:"5px 8px",fontSize:12,outline:"none",fontFamily:"monospace"}} autoFocus/>
+              <button onClick={()=>saveCode(catK,vK)} style={{background:"#6d28d9",color:"white",border:"none",borderRadius:6,padding:"5px 9px",fontSize:11,fontWeight:700}}>✓</button>
+              <button onClick={()=>setEditingCode(null)} style={{background:"#f3f4f6",border:"none",borderRadius:6,padding:"5px 9px",fontSize:11}}>✕</button>
             </div>:<div style={{display:"flex",alignItems:"stretch",gap:8}}>
               <div style={{flex:1,display:"flex",gap:6,alignItems:"flex-start",minWidth:0}}>
                 {galleries&&galleries[`${catK}__${vK}`]&&galleries[`${catK}__${vK}`].coverImage&&<img src={galleries[`${catK}__${vK}`].coverImage} onClick={e=>{e.stopPropagation();openLightbox(galleries[`${catK}__${vK}`].coverImage)}} style={{width:32,height:32,objectFit:"cover",borderRadius:6,border:"1px solid #eee",flexShrink:0,cursor:"pointer"}} alt=""/>}
-                <div style={{minWidth:0}}><div style={{fontSize:12,fontWeight:600,wordBreak:"break-word"}}>{isEmptyWood(v)?"⚠️ ":""}{v.bn}</div><div style={{fontSize:10,color:"#888",fontFamily:"monospace"}}>Code: {v.code}{isEmptyWood(v)?" — কাঠের মাপ ফাঁকা":""}{galleries&&galleries[`${catK}__${vK}`]&&galleries[`${catK}__${vK}`].gallery&&galleries[`${catK}__${vK}`].gallery.length?` · ${galleries[`${catK}__${vK}`].gallery.length} ছবি`:""}</div></div>
+                <div style={{minWidth:0}}><div style={{fontSize:12,fontWeight:600,wordBreak:"break-word"}}>{isEmptyWood(v)?"⚠️ ":""}{v.bn}</div><div style={{fontSize:10,color:"#888",fontFamily:"monospace"}}>Code: <span style={dupOthers.length?{color:"#dc2626",fontWeight:700}:undefined}>{v.code||"—"}</span>{isEmptyWood(v)?" — কাঠের মাপ ফাঁকা":""}{galleries&&galleries[`${catK}__${vK}`]&&galleries[`${catK}__${vK}`].gallery&&galleries[`${catK}__${vK}`].gallery.length?` · ${galleries[`${catK}__${vK}`].gallery.length} ছবি`:""}</div>{dupOthers.length>0&&<div style={{fontSize:9.5,color:"#dc2626",fontWeight:600,marginTop:2,lineHeight:1.45,wordBreak:"break-word"}}>⚠️ একই কোড: {dupOthers.map(d=>`${d.bn} (${d.catBn})`).join(", ")}</div>}</div>
               </div>
               <div style={{flex:1,display:"flex",flexDirection:"column",gap:4}}>
                 <div style={{display:"flex",gap:4}}>
@@ -6181,6 +6399,7 @@ function ManageDB({db,saveDb,galleries,saveGalleryEntry,onBack,navigate,goBack,r
                     else{const[fc,fv]=mergeSelectFirst.split("|");doMergeVariants(fc,fv,thisKey)}
                   }} style={{flex:1,background:isSelectedForMerge?"#b91c1c":"#fef2f2",border:"none",borderRadius:6,padding:"5px 4px",color:isSelectedForMerge?"white":"#b91c1c",fontSize:10,fontWeight:600}}>{isSelectedForMerge?"✓ নির্বাচিত":"🔗 মেশান"}</button>
                   <button onClick={()=>setMovingVar(thisKey)} style={{flex:1,background:"#ecfdf5",border:"none",borderRadius:6,padding:"5px 4px",color:"#047857",fontSize:10,fontWeight:600}}>📁 সরান</button>
+                  <button onClick={()=>startEditCode(catK,vK)} style={{flex:1,background:dupOthers.length?"#fee2e2":"#eff6ff",border:"none",borderRadius:6,padding:"5px 4px",color:dupOthers.length?"#b91c1c":"#1d4ed8",fontSize:10,fontWeight:600}}>🏷️ কোড</button>
                 </div>
               </div>
             </div>}
@@ -6200,7 +6419,7 @@ function ManageDB({db,saveDb,galleries,saveGalleryEntry,onBack,navigate,goBack,r
         <div style={{marginBottom:10}}><div style={{fontSize:11,fontWeight:600,color:"#555",marginBottom:4}}>ক্যাটাগরি *</div>
           <select value={newVar.catKey} onChange={e=>setNewVar({...newVar,catKey:e.target.value})} style={inp}>
             <option value="">-- নির্বাচন করুন --</option>
-            {Object.entries(db).map(([k,c])=><option key={k} value={k}>{c.bn}</option>)}
+            {dbCats(db).map(([k,c])=><option key={k} value={k}>{c.bn}</option>)}
           </select></div>
         {[{l:"বাংলা নাম *",k:"bn",p:"যেমন: ৩ পাল্লার শোকেস"},{l:"কোড (খালি রাখলে অটো তৈরি হবে)",k:"code",p:"যেমন: SKC-3D"}].map(f=><div key={f.k} style={{marginBottom:10}}><div style={{fontSize:11,fontWeight:600,color:"#555",marginBottom:4}}>{f.l}</div><input value={newVar[f.k]} onChange={e=>setNewVar({...newVar,[f.k]:e.target.value})} placeholder={f.p} style={inp}/></div>)}
         <button onClick={addVariant} style={{width:"100%",background:"#6d28d9",color:"white",border:"none",borderRadius:9,padding:"12px",fontSize:13,fontWeight:700}}>ভেরিয়েন্ট যোগ করুন</button>
@@ -6212,7 +6431,7 @@ function ManageDB({db,saveDb,galleries,saveGalleryEntry,onBack,navigate,goBack,r
           <button onClick={()=>{setCopiedSections(JSON.parse(JSON.stringify(editSections)));setCopiedFromName(db[selCat]?.variants[selVar]?.bn||"")}} style={{background:"#e0e7ff",color:"#3730a3",border:"none",borderRadius:8,padding:"6px 10px",fontSize:11,fontWeight:700}}>📋 এই তালিকা কপি করুন</button>
           {copiedSections&&<button onClick={()=>{
             if(!window.confirm(`"${copiedFromName}"-এর পুরো কাঠের তালিকা এখানে বসাতে চান? বর্তমান তালিকা মুছে প্রতিস্থাপিত হবে (এখনো সংরক্ষণ করা হয়নি — বাতিল করতে চাইলে সংরক্ষণ না করেই বেরিয়ে যান)।`))return;
-            setEditSections(JSON.parse(JSON.stringify(copiedSections)));
+            setEditSections(JSON.parse(JSON.stringify(copiedSections)));setEditingPiece(null);
           }} style={{background:"#dcfce7",color:"#166534",border:"none",borderRadius:8,padding:"6px 10px",fontSize:11,fontWeight:700}}>📥 "{copiedFromName}" থেকে বসান</button>}
         </div>
         {editSections.map((sec,si)=>{
@@ -6235,12 +6454,25 @@ function ManageDB({db,saveDb,galleries,saveGalleryEntry,onBack,navigate,goBack,r
               const jr=p.jointRules||{};
               const hasAnyJoint=Object.values(jr).some(v=>parseInt(v)>1);
               return<div key={pi}>
-                <div style={{display:"flex",gap:4,alignItems:"center",marginBottom:4,fontSize:10}}>
+                {editingPiece&&editingPiece.si===si&&editingPiece.pi===pi?<div style={{background:"#f5f3ff",border:"1.5px solid #c4b5fd",borderRadius:8,padding:8,marginBottom:6}}>
+                  <input value={editingPiece.bn} onChange={e=>setEditingPiece({...editingPiece,bn:e.target.value})} placeholder="কাঠের নাম" style={{...inp,padding:"6px 8px",fontSize:11,marginBottom:6}}/>
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:4}}>
+                    {[{k:"w",p:"W\""},{k:"h",p:"H\""},{k:"l",p:"L\""},{k:"pc",p:"পিস"}].map(f=><div key={f.k}>
+                      <div style={{fontSize:8.5,color:"#6d28d9",fontWeight:700,marginBottom:2,textAlign:"center"}}>{f.p}</div>
+                      <input type="number" step={f.k==="pc"?"1":"0.25"} value={editingPiece[f.k]} onChange={e=>setEditingPiece({...editingPiece,[f.k]:e.target.value})} style={{...inp,padding:"6px 4px",fontSize:11,textAlign:"center"}}/>
+                    </div>)}
+                  </div>
+                  <div style={{display:"flex",gap:5,marginTop:7}}>
+                    <button onClick={()=>setEditingPiece(null)} style={{flex:1,background:"white",border:"1px solid #ddd",borderRadius:6,padding:"7px",fontSize:11}}>বাতিল</button>
+                    <button onClick={savePieceEdit} style={{flex:2,background:"#6d28d9",color:"white",border:"none",borderRadius:6,padding:"7px",fontSize:11,fontWeight:700}}>✓ ঠিক আছে</button>
+                  </div>
+                </div>:<div style={{display:"flex",gap:4,alignItems:"center",marginBottom:4,fontSize:10}}>
                   <span style={{flex:2,color:"#333"}}>{p.bn}</span>
                   <span style={{fontFamily:"monospace",color:"#555",flexShrink:0}}>{p.w}×{p.h}×{p.l} × {p.pc}pc</span>
+                  <button onClick={()=>startPieceEdit(si,pi)} title="নাম/মাপ বদলান" style={{background:"#f5f3ff",border:"none",borderRadius:4,padding:"2px 6px",color:"#6d28d9",fontSize:10,cursor:"pointer",flexShrink:0}}>✏️</button>
                   <button onClick={()=>setExpandedJointFor(isJointOpen?null:jointKey)} title="জোড়ার নিয়ম" style={{background:hasAnyJoint?"#ede9fe":"#f3f4f6",border:"none",borderRadius:4,padding:"2px 6px",color:hasAnyJoint?"#6d28d9":"#999",fontSize:10,cursor:"pointer",flexShrink:0}}>🔗</button>
                   <button onClick={()=>removePiece(si,pi)} style={{background:"#fee2e2",border:"none",borderRadius:4,padding:"2px 6px",color:RED,fontSize:10,cursor:"pointer",flexShrink:0}}>✕</button>
-                </div>
+                </div>}
                 {isJointOpen&&<div style={{background:"#faf5ff",borderRadius:6,padding:"7px 8px",marginBottom:6}}>
                   <div style={{fontSize:8,color:"#6d28d9",marginBottom:5,lineHeight:1.4}}>কাঠভেদে এই মাপে জোড়া দেওয়ার সর্বোচ্চ (ম্যাক্সিমাম) পিস সংখ্যা (১ = জোড়া ছাড়া, একটাই টুকরা):</div>
                   <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
@@ -6417,11 +6649,11 @@ function Form({onSave,onBack,db,saveDb,galleries,woodSettings,laborSettings,orde
   };
 
   const createNewCategory=()=>{
-    const catName=newCatName.trim()||`নতুন ফার্নিচার ${Object.keys(db).length+1}`;
+    const catName=newCatName.trim()||`নতুন ফার্নিচার ${dbCats(db).length+1}`;
     const varName=newCatVarName.trim()||"স্ট্যান্ডার্ড মডেল";
     const catKey="cat_"+Date.now();
     const varKey="var_"+Date.now();
-    const code=autoCode(catName+" "+varName,String(Math.floor(Math.random()*900+100)));
+    const code=uniqueAutoCode(db,catName+" "+varName,String(Math.floor(Math.random()*900+100)));
     const nd=JSON.parse(JSON.stringify(db));
     nd[catKey]={bn:catName,en:catName,variants:{[varKey]:{bn:varName,code,sections:[{name:"কাঠের তালিকা (পরে যোগ করুন)",pieces:[]}]}}};
     saveDb(nd);
@@ -6430,10 +6662,11 @@ function Form({onSave,onBack,db,saveDb,galleries,woodSettings,laborSettings,orde
   };
 
   const createNewModel=()=>{
-    const varName=newModelName.trim()||`নতুন মডেল ${Object.keys(fCat.variants).length+1}`;
+    const varName=uniqueModelName(fCat.variants,newModelName.trim()||`নতুন মডেল ${Object.keys(fCat.variants||{}).length+1}`);
     const varKey="var_"+Date.now();
-    const code=autoCode((fCat.bn||"")+" "+varName,String(Math.floor(Math.random()*900+100)));
+    const code=uniqueAutoCode(db,(fCat.bn||"")+" "+varName,String(Math.floor(Math.random()*900+100)));
     const nd=JSON.parse(JSON.stringify(db));
+    if(!nd[ni.catKey].variants)nd[ni.catKey].variants={};
     nd[ni.catKey].variants[varKey]={bn:varName,code,sections:[{name:"কাঠের তালিকা (পরে যোগ করুন)",pieces:[]}]};
     saveDb(nd);
     setNi({...ni,varKey});
