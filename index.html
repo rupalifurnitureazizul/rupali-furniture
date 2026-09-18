@@ -104,7 +104,7 @@ function compressImage(file,maxDim=1200,quality=0.82,maxBytes=110000){
 /* ── FULL-RESOLUTION LOCAL FOLDER STORAGE (desktop Chrome/Edge/Brave only) ──
    Original, uncompressed images are saved as real files in a folder you choose
    on your computer. Only a small compressed thumbnail syncs to the cloud/mobile. */
-const BUILD_TAG="4.38";
+const BUILD_TAG="4.41";
 const FS_SUPPORTED=typeof window!=="undefined"&&"showDirectoryPicker" in window;
 function idbOpen(){
   return new Promise((resolve,reject)=>{
@@ -2144,9 +2144,16 @@ function App({firebaseConfig,onResetConfig}){
           const slim=JSON.parse(JSON.stringify(data));
           // ── মুছে-ফেলার রেকর্ড (tombstone) আলাদা করে রাখা হয় — এটা ক্যাটাগরির তালিকার অংশ
           // নয়, তাই ডেটাবেস পাতায় কখনো দেখাবে না। স্বয়ংক্রিয় সিঙ্ক এটা দেখে বোঝে কোন মডেল
-          // আপনি ইচ্ছাকৃতভাবে মুছেছেন, যাতে অন্য ডিভাইস সেটা আবার ফিরিয়ে না আনে ──
-          deletedRecordRef.current=slim.__deleted__||{};
-          delete slim.__deleted__;
+          // আপনি ইচ্ছাকৃতভাবে মুছেছেন, যাতে অন্য ডিভাইস সেটা আবার ফিরিয়ে না আনে।
+          // পুরনো নামটা (দুই দিকে আন্ডারস্কোর) Firestore-এ নিষিদ্ধ ছিল — তাই লেখা ব্যর্থ হতো।
+          // কোনো নথিতে সেটা থেকে গেলে এখানে তুলে এনে নতুন নামে ব্যবহার করা হয়, আর পুরনো
+          // ফিল্ডটা মুছে দেওয়ার জন্য চিহ্নিত করা হয় — না হলে প্রতিটা update() ব্যর্থ হতেই থাকবে ──
+          const LEGACY_DEL_FIELD="_"+"_deleted_"+"_";
+          const legacyDeleted=data[LEGACY_DEL_FIELD]||{};
+          const hadLegacyDelField=Object.prototype.hasOwnProperty.call(data,LEGACY_DEL_FIELD);
+          deletedRecordRef.current={...legacyDeleted,...(slim.zz_deletedRecord||{})};
+          delete slim.zz_deletedRecord;
+          delete slim[LEGACY_DEL_FIELD];
           Object.entries(slim).forEach(([catKey,cat])=>{
             if(!cat.variants)return;
             Object.entries(cat.variants).forEach(([varKey,v])=>{
@@ -2158,8 +2165,12 @@ function App({firebaseConfig,onResetConfig}){
             });
           });
           setDb(slim);
-          if(hadLegacyImages){
-            firestore.doc("meta/db").set({...slim,__deleted__:deletedRecordRef.current}).catch(err=>alert("⚠️ ডেটাবেস পরিষ্কার করতে সমস্যা হয়েছে: "+err.message));
+          // ── নথিতে পুরনো নিষিদ্ধ ফিল্ডটা থেকে গেলে সেটা একবারেই সরিয়ে দেওয়া হয়। এটা না
+          // করলে এই নথিতে প্রতিটা update() চিরকাল ব্যর্থ হতে থাকবে — merge আর "সরান" কখনোই
+          // কাজ করবে না। set() পুরো নথি বসায়, তাই নিষিদ্ধ ফিল্ডটা এভাবে বাদ দেওয়া নিরাপদ ──
+          if(hadLegacyImages||hadLegacyDelField){
+            firestore.doc("meta/db").set({...slim,zz_deletedRecord:deletedRecordRef.current})
+              .catch(err=>alert("⚠️ ডেটাবেস পরিষ্কার করতে সমস্যা হয়েছে: "+err.message));
           }
         }
         else{
@@ -2345,14 +2356,16 @@ function App({firebaseConfig,onResetConfig}){
             const dbSnap=await withTimeout(fs2.doc("meta/db").get({source:"server"}),60000,"সময়সীমা পার");
             if(dbSnap.exists&&!(dbSnap.metadata&&dbSnap.metadata.fromCache)){
               const sv=dbSnap.data()||{};
-              const tombstones=sv.__deleted__||{};
+              const LEGACY_DEL="_"+"_deleted_"+"_";
+              const tombstones={...(sv[LEGACY_DEL]||{}),...(sv.zz_deletedRecord||{})};
               const localDb=dbRef.current||{};
               const merged=JSON.parse(JSON.stringify(sv));
-              delete merged.__deleted__;
+              delete merged.zz_deletedRecord;
+              delete merged[LEGACY_DEL];
               let addedCats=0,addedVars=0,filledWood=0;
               Object.entries(localDb).forEach(([catKey,localCat])=>{
                 if(!localCat||typeof localCat!=="object")return;
-                if(catKey==="__deleted__")return;
+                if(catKey==="zz_deletedRecord")return;
                 // আপনি এই ক্যাটাগরি ইচ্ছাকৃতভাবে মুছেছেন — ফিরিয়ে আনা হবে না
                 if(tombstones["cat:"+catKey])return;
                 if(!merged[catKey]){
@@ -2445,7 +2458,7 @@ function App({firebaseConfig,onResetConfig}){
               // ফিরিয়ে আনে না। ফলে যে ডিভাইসেই কাজ করুন, সব ডিভাইসে একই তথ্য থাকবে ──
               if(needsPush){
                 try{
-                  await withTimeout(fs2.doc("meta/db").set({...merged,__deleted__:tombstones}),45000,"সময়সীমা পার");
+                  await withTimeout(fs2.doc("meta/db").set({...merged,zz_deletedRecord:tombstones}),45000,"সময়সীমা পার");
                 }catch(e6){}
               }
               const gapParts=[];
@@ -2458,11 +2471,11 @@ function App({firebaseConfig,onResetConfig}){
               // একই সার্ভার পড়ছে (সমস্যা স্থানীয়), আলাদা হলে তারা ভিন্ন জায়গায় কথা বলছে ──
               let svCatCount=0,svVarCount=0,svEmptyWood=0;
               Object.entries(sv).forEach(([ck,c])=>{
-                if(ck==="__deleted__"||!c||!c.variants)return;
+                if(ck==="zz_deletedRecord"||!c||!c.variants)return;
                 svCatCount++;
                 Object.values(c.variants).forEach(v=>{svVarCount++;if(isEmptyWood(v))svEmptyWood++});
               });
-              const localVarCount=Object.entries(localDb).reduce((s,[ck,c])=>ck==="__deleted__"?s:s+Object.keys((c&&c.variants)||{}).length,0);
+              const localVarCount=Object.entries(localDb).reduce((s,[ck,c])=>ck==="zz_deletedRecord"?s:s+Object.keys((c&&c.variants)||{}).length,0);
               otherSyncStatus.dbCounts=`সার্ভারে: ${svCatCount}টা ক্যাটাগরি, ${svVarCount}টা মডেল (${svEmptyWood}টায় কাঠের মাপ নেই) · এই ডিভাইসে: ${localVarCount}টা মডেল`;
               otherSyncStatus.db=gapParts.length?gapParts.join(", "):"মিলে আছে";
             }
@@ -2654,7 +2667,7 @@ function App({firebaseConfig,onResetConfig}){
     const tombstones={...(deletedRecordRef.current||{})};
     let changeCount=0;
     Object.entries(newDb).forEach(([ck,cat])=>{
-      if(ck==="__deleted__")return;
+      if(ck==="zz_deletedRecord")return;
       const oldCat=oldDb[ck];
       if(!oldCat){payload[ck]=JSON.parse(JSON.stringify(cat));changeCount++;return}
       const catPatch={};
@@ -2671,7 +2684,7 @@ function App({firebaseConfig,onResetConfig}){
     // মুছে ফেলা শনাক্ত করা
     const pendingVarDeletes=[],pendingCatDeletes=[];
     Object.entries(oldDb).forEach(([ck,oldCat])=>{
-      if(ck==="__deleted__")return;
+      if(ck==="zz_deletedRecord")return;
       if(!newDb[ck]){pendingCatDeletes.push(ck);return}
       Object.keys(oldCat.variants||{}).forEach(vk=>{
         if(!((newDb[ck].variants)||{})[vk]){
@@ -2704,10 +2717,10 @@ function App({firebaseConfig,onResetConfig}){
         if(deletePaths.length){
           const del={};
           deletePaths.forEach(p=>{del[p]=firebase.firestore.FieldValue.delete()});
-          del.__deleted__=tombstones;
+          del.zz_deletedRecord=tombstones;
           await withTimeout(fs.doc("meta/db").update(del),45000,"সময়সীমা পার");
         }else if(Object.keys(payload).length){
-          await withTimeout(fs.doc("meta/db").set({__deleted__:tombstones},{merge:true}),45000,"সময়সীমা পার");
+          await withTimeout(fs.doc("meta/db").set({zz_deletedRecord:tombstones},{merge:true}),45000,"সময়সীমা পার");
         }
       }catch(err){
         alert("⚠️ ক্লাউডে সেভ করতে সমস্যা হয়েছে: "+err.message+"\n\nপরিবর্তনটা এই ডিভাইসে আছে — অ্যাপ খোলা রাখলে স্বয়ংক্রিয়ভাবে আবার চেষ্টা হবে।");
@@ -2916,10 +2929,18 @@ function App({firebaseConfig,onResetConfig}){
     setDraft(null);
     goBack();
   };
+  // ── খরচ যোগ/সম্পাদনা — আগে এখানে স্থানীয় অবস্থা হালনাগাদই হতো না, তাই সার্ভার থেকে ফিরে
+  // আসা পর্যন্ত নতুন খরচ স্ক্রিনে দেখাত না। দুর্বল সংযোগে মনে হতো "সেভ হয়নি", আবার যোগ করলে
+  // একই খরচ দুইবার বসে যেত। এখন সাথে সাথে দেখায়, আর লেখাটা পাশাপাশি চলে যায় ──
   const saveExpense=(exp)=>{
     const id=exp.id||("exp_"+Date.now());
     const withId={...exp,id};
-    if(fsRef.current)fsRef.current.collection("expenses").doc(id).set(withId).catch(err=>alert("⚠️ খরচ সিঙ্ক করতে সমস্যা হয়েছে: "+err.message));
+    setExpenses(prev=>{
+      const exists=(prev||[]).some(e=>e.id===id);
+      const next=exists?(prev||[]).map(e=>e.id===id?withId:e):[...(prev||[]),withId];
+      return next.sort((a,b)=>new Date(b.at||b.date||0)-new Date(a.at||a.date||0));
+    });
+    if(fsRef.current)fsRef.current.collection("expenses").doc(id).set(withId).catch(err=>alert("⚠️ খরচ সিঙ্ক করতে সমস্যা হয়েছে: "+err.message+"\n\nখরচটা এই ডিভাইসে আছে — অ্যাপ খোলা রাখলে স্বয়ংক্রিয়ভাবে আবার চেষ্টা হবে।"));
   };
   const saveCarpenters=(list)=>{
     setCarpenters(list);
@@ -6054,7 +6075,7 @@ function ManageDB({db,saveDb,galleries,saveGalleryEntry,onBack,navigate,goBack,r
     const nd=JSON.parse(JSON.stringify(db));
     nd[toCat].variants[toVar].sections=keptSections;
     delete nd[fromCat].variants[fromVar];
-    if(fromCat==="__recovered__"&&Object.keys(nd[fromCat].variants).length===0)delete nd[fromCat];
+    if(fromCat==="zz_recovered"&&Object.keys(nd[fromCat].variants).length===0)delete nd[fromCat];
     saveDb(nd);
     // ছবি একত্র — রাখা-মডেলে কভার না থাকলে সরানো-মডেলের কভার বসে যায়
     const srcG=galleries&&galleries[`${fromCat}__${fromVar}`];
@@ -6083,7 +6104,7 @@ function ManageDB({db,saveDb,galleries,saveGalleryEntry,onBack,navigate,goBack,r
     nd[toCat].variants[varK]=theVar;
     delete nd[fromCat].variants[varK];
     // পুনরুদ্ধার-ক্যাটাগরি ফাঁকা হয়ে গেলে সেটাও সরিয়ে দেওয়া হয়
-    if(fromCat==="__recovered__"&&Object.keys(nd[fromCat].variants).length===0)delete nd[fromCat];
+    if(fromCat==="zz_recovered"&&Object.keys(nd[fromCat].variants).length===0)delete nd[fromCat];
     saveDb(nd);
     // ছবি সরানো — গ্যালারির চাবি ক্যাটাগরি ধরে বানানো, তাই নতুন চাবিতে কপি করতে হয়
     const oldKey=`${fromCat}__${varK}`,newKey=`${toCat}__${varK}`;
