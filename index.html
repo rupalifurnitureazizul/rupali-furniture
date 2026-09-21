@@ -104,7 +104,7 @@ function compressImage(file,maxDim=1200,quality=0.82,maxBytes=110000){
 /* ── FULL-RESOLUTION LOCAL FOLDER STORAGE (desktop Chrome/Edge/Brave only) ──
    Original, uncompressed images are saved as real files in a folder you choose
    on your computer. Only a small compressed thumbnail syncs to the cloud/mobile. */
-const BUILD_TAG="4.52";
+const BUILD_TAG="4.61";
 const FS_SUPPORTED=typeof window!=="undefined"&&"showDirectoryPicker" in window;
 function idbOpen(){
   return new Promise((resolve,reject)=>{
@@ -295,6 +295,78 @@ const BN_DIGITS="০১২৩৪৫৬৭৮৯";
 // v4.52: ধীর নেটে শুধু "সময়সীমা পার" মানে লেখাটা বাতিল হয়নি — ফোনের সারিতে আছে, নেট পেলেই নিজে পৌঁছাবে।
 // তাই এমন ক্ষেত্রে আর কোনো সতর্কবার্তা দেখানো হয় না; শুধু আসল ত্রুটিতে জানানো হয়
 const isTimeoutErr=(e)=>/সময়সীমা পার/.test(String((e&&e.message)||e||""));
+// ── v4.53: "সার্ভারের সাথে মেলানো" বলতে এই সব তালিকা সার্ভার থেকে নিশ্চিত হয়ে আসা বোঝায় ──
+const SYNC_TRACKED=["orders","expenses","woodlots","workers","payrollWeeks","db"];
+// ── v4.53: দুই কপির তুলনা করে শুধু বদলে যাওয়া ঘরগুলো। আগে পুরো নথি লেখা হতো — ফলে যে ডিভাইসে তথ্য
+// পুরনো, সেখান থেকে একটা স্লিপ প্রিন্ট করলেও অন্য ডিভাইসে নেওয়া পেমেন্ট/ডেলিভারি সার্ভার থেকে মুছে যেত ──
+function topLevelPatch(oldObj,newObj,skip){
+  const patch={};
+  const keys=new Set([...Object.keys(oldObj||{}),...Object.keys(newObj||{})]);
+  keys.forEach(k=>{
+    if(skip&&skip.includes(k))return;
+    const a=newObj?newObj[k]:undefined,b=oldObj?oldObj[k]:undefined;
+    if(JSON.stringify(a)===JSON.stringify(b))return;
+    patch[k]=a===undefined?firebase.firestore.FieldValue.delete():JSON.parse(JSON.stringify(a));
+  });
+  return patch;
+}
+const listKey=(p)=>(p&&p.id)?("id:"+p.id):("j:"+JSON.stringify(p));
+// ── টাকার তালিকা (পেমেন্ট, স'মিল বিল): পুরো তালিকা কখনো লেখা হয় না — শুধু যে এন্ট্রি যোগ/বাদ/বদল হয়েছে
+// সেটুকু (arrayUnion/arrayRemove)। অফলাইনেও কাজ করে, আর অন্য ডিভাইসে যোগ হওয়া এন্ট্রি কখনো মোছে না ──
+async function applyListDiff(ref,field,oldList,newList){
+  const FV=firebase.firestore.FieldValue;
+  const oldBy={},newBy={};
+  (oldList||[]).forEach(p=>{oldBy[listKey(p)]=p});
+  (newList||[]).forEach(p=>{newBy[listKey(p)]=p});
+  const removed=[],added=[];
+  Object.keys(oldBy).forEach(k=>{if(!newBy[k])removed.push(oldBy[k]);else if(JSON.stringify(oldBy[k])!==JSON.stringify(newBy[k])){removed.push(oldBy[k]);added.push(newBy[k])}});
+  Object.keys(newBy).forEach(k=>{if(!oldBy[k])added.push(newBy[k])});
+  const clean=(x)=>JSON.parse(JSON.stringify(x));
+  if(removed.length)await ref.set({[field]:FV.arrayRemove(...removed.map(clean))},{merge:true});
+  if(added.length)await ref.set({[field]:FV.arrayUnion(...added.map(clean))},{merge:true});
+}
+// ── ক্রম গুরুত্বপূর্ণ এমন তালিকা (কাঠের গুড়ি — ক্রমিক নম্বর তালিকার অবস্থান থেকেই আসে): সার্ভারের
+// সর্বশেষ তালিকা পড়ে id ধরে যোগ/বাদ/জায়গামতো বদল (transaction)। নেট না থাকলে আগের মতো পুরো তালিকা ──
+async function applyOrderedListDiff(fs,ref,field,oldList,newList){
+  const oldBy={},newBy={};
+  (oldList||[]).forEach(p=>{oldBy[listKey(p)]=p});
+  (newList||[]).forEach(p=>{newBy[listKey(p)]=p});
+  const removedK=Object.keys(oldBy).filter(k=>!newBy[k]);
+  const changed=Object.keys(newBy).filter(k=>oldBy[k]&&JSON.stringify(oldBy[k])!==JSON.stringify(newBy[k]));
+  const addedK=Object.keys(newBy).filter(k=>!oldBy[k]);
+  if(!removedK.length&&!changed.length&&!addedK.length)return;
+  const clean=(x)=>JSON.parse(JSON.stringify(x));
+  try{
+    await fs.runTransaction(async tx=>{
+      const d=await tx.get(ref);
+      let cur=((d.exists&&d.data()[field])||[]).filter(p=>!removedK.includes(listKey(p)));
+      cur=cur.map(p=>changed.includes(listKey(p))?clean(newBy[listKey(p)]):p);
+      addedK.forEach(k=>{if(!cur.some(p=>listKey(p)===k))cur.push(clean(newBy[k]))});
+      tx.set(ref,{[field]:cur},{merge:true});
+    });
+  }catch(e){
+    await ref.set({[field]:clean(newList||[])},{merge:true});
+  }
+}
+// ── এই ডিভাইসের পরিচয় (যুক্ত ডিভাইসের তালিকার জন্য) ──
+const deviceLabel=()=>{
+  const ua=navigator.userAgent||"";
+  const os=/Android/i.test(ua)?"Android":/iPhone/i.test(ua)?"iPhone":/iPad/i.test(ua)?"iPad":/Windows/i.test(ua)?"Windows কম্পিউটার":/Macintosh|Mac OS/i.test(ua)?"Mac কম্পিউটার":/Linux/i.test(ua)?"Linux":"অজানা ডিভাইস";
+  const br=/Edg\//.test(ua)?"Edge":/SamsungBrowser/i.test(ua)?"Samsung Browser":/Firefox\//.test(ua)?"Firefox":/CriOS|Chrome\//.test(ua)?"Chrome":/Safari\//.test(ua)?"Safari":"ব্রাউজার";
+  return os+" · "+br;
+};
+const cmpVersion=(a,b)=>{const x=parseFloat(a)||0,y=parseFloat(b)||0;return x>y?1:x<y?-1:0};
+// ── সার্ভারের সাথে মেলানোর অবস্থা — ছোট একটা চিহ্ন, সবসময় সত্যি কথা বলে ──
+function SyncChip({info,online,compact}){
+  const now=Date.now();
+  let bg,fg,txt;
+  if(!online){bg="#fef2f2";fg="#991b1b";txt="📴 অফলাইন — দেখানো তথ্য পুরনো হতে পারে"}
+  else if(info&&info.fresh&&!info.pending){bg="#f0fdf4";fg="#166534";txt="✓ সার্ভারের সাথে মেলানো"}
+  else if(info&&info.fresh&&info.pending){bg="#eff6ff";fg="#1d4ed8";txt="↑ পরিবর্তন সার্ভারে যাচ্ছে…"}
+  else if(info&&now-(info.staleSince||now)<30000){bg="#fffbeb";fg="#92400e";txt="⏳ সার্ভারের সাথে মেলানো হচ্ছে…"}
+  else{bg="#fef2f2";fg="#991b1b";txt="⚠️ সার্ভারের সাথে মেলানো যায়নি — তথ্য পুরনো হতে পারে"}
+  return<span style={{display:"inline-flex",alignItems:"center",gap:5,background:bg,color:fg,borderRadius:20,padding:compact?"3px 10px":"5px 12px",fontSize:compact?10:11,fontWeight:700,lineHeight:1.35,textAlign:"center"}}>{txt}</span>;
+}
 const toBnDigits=(n)=>String(n).replace(/[0-9]/g,d=>BN_DIGITS[+d]);
 // ── মডেল কোড: ছোট/বড় হাতের অক্ষর ও ফাঁকা জায়গা বাদ দিয়ে তুলনা — "alm-2" আর "ALM-2" একই ধরা হয় ──
 const normCode=(c)=>String(c==null?"":c).replace(/\s+/g,"").toUpperCase();
@@ -355,6 +427,30 @@ const tierBn=(tierId)=>{const t=COMPLEXITY_TIERS.find(t=>t.id===tierId);return t
 
 // ── ঐতিহাসিক ব্যয় নীতি: অর্ডারের তারিখে যে কাঠের দাম চালু ছিল সেটাই ব্যবহার হবে ──
 // অগ্রাধিকার: (১) অর্ডারে সংরক্ষিত স্ন্যাপশট → (২) তারিখভিত্তিক দামের ইতিহাস → (৩) বর্তমান চূড়ান্ত দাম
+// ── v4.61: লট থেকে হিসাব করা প্রকৃত দাম (কেনা দাম + কাটাই + পরিবহন, অপচয় বাদ দিয়ে ব্যবহারযোগ্য CFT-এ)।
+// "কাঠের গড় দাম নির্ধারণ" পাতায় চূড়ান্ত দাম বসানো না থাকলে এটাই ধরা হয় (আগে ০ ধরা হতো) ──
+let SUGGESTED_WOOD_RATES={};
+function computeSuggestedWoodRates(woodLots,woodSettings){
+  const out={};
+  const byType={};
+  (woodLots||[]).forEach(l=>{if(l&&l.woodType)(byType[l.woodType]=byType[l.woodType]||[]).push(l)});
+  Object.entries(byType).forEach(([wt,lots])=>{
+    const wast=parseFloat(((woodSettings||{})[wt]||{}).wastagePercent)||0;
+    let usableSum=0,costSum=0;
+    lots.forEach(l=>{
+      const logs=l.logs||[];
+      const raw=logs.filter(g=>g.cut&&!g.sold).reduce((a,g)=>a+(parseFloat(g.cft)||0),0);
+      const usable=raw*(1-wast/100);
+      if(raw<=0||usable<=0)return;
+      const totalCftL=logs.reduce((a,g)=>a+(parseFloat(g.cft)||0),0);
+      const purchase=totalCftL>0?(raw/totalCftL)*totalCftL*(parseFloat(l.ratePerCft)||0):0;
+      const extra=(l.millingEntries||[]).reduce((a,m)=>a+(parseFloat(m.billAmount)||0),0)+(parseFloat(l.transportCost)||0)+(parseFloat(l.otherCost)||0);
+      usableSum+=usable;costSum+=purchase+extra;
+    });
+    if(usableSum>0)out[wt]=costSum/usableSum;
+  });
+  return out;
+}
 function woodRateOn(woodSettings,species,dateStr){
   const s=(woodSettings&&woodSettings[species])||{};
   const hist=(s.rateHistory||[]).filter(h=>h.from&&parseFloat(h.rate)>0).sort((a,b)=>a.from.localeCompare(b.from));
@@ -364,7 +460,7 @@ function woodRateOn(woodSettings,species,dateStr){
     if(picked)return parseFloat(picked.rate)||0;
     return parseFloat(hist[0].rate)||0; // অর্ডার সবচেয়ে পুরনো এন্ট্রির আগের হলে প্রথমটাই ধরা হবে
   }
-  return parseFloat(s.finalAvgRate)||0;
+  return parseFloat(s.finalAvgRate)||(SUGGESTED_WOOD_RATES[species]||0);
 }
 function itemWoodRate(item,order,woodSettings){
   if(item.woodRateSnapshot&&parseFloat(item.woodRateSnapshot)>0)return parseFloat(item.woodRateSnapshot);
@@ -488,6 +584,19 @@ const toIntlPhone=(phone)=>{
   if(digits.startsWith("0"))return"880"+digits.slice(1);
   return digits;
 };
+// v4.61: অর্ডারের কোনো ফার্নিচারে কাঠের তালিকা ফাঁকা কিনা
+const itemWoodEmpty=(it)=>!it||!it.sections||it.sections.length===0||it.sections.every(s=>!s.pieces||s.pieces.length===0);
+// ── v4.61: গুড়ির স্থায়ী কোড — একবার দেওয়া কোড আর কখনো বদলায় না বা আবার দেওয়া হয় না। অক্ষর থাকলে
+// (যেমন RH) একই অক্ষরের সব লট মিলিয়ে নম্বর এগোয়; অক্ষর না থাকলে লটের ভেতরে নম্বর ──
+const makeLogCode=(prefix,n)=>prefix?`${prefix}-${String(n).padStart(2,"0")}`:String(n);
+function nextLogNumber(lot,allLots){
+  const p=String((lot&&lot.codePrefix)||"").trim();
+  const nums=[0];
+  const scan=(l)=>{nums.push(parseInt(l.logCounter,10)||0);(l.logs||[]).forEach(g=>{const c=String(g.code||"");if(p){if(c.startsWith(p+"-")){const n=parseInt(c.slice(p.length+1),10);if(n)nums.push(n)}}else if(/^\d+$/.test(c))nums.push(parseInt(c,10))})};
+  if(p)(allLots||[]).filter(l=>String(l.codePrefix||"").trim()===p).forEach(scan);
+  scan(lot||{});
+  return Math.max(...nums)+1;
+}
 const isEmptyWood=(variant)=>!variant||!variant.sections||variant.sections.length===0||variant.sections.every(s=>!s.pieces||s.pieces.length===0);
 const monthName=(idx)=>["জানু","ফেব্রু","মার্চ","এপ্রিল","মে","জুন","জুলাই","আগস্ট","সেপ্ট","অক্টো","নভে","ডিসে"][idx];
 
@@ -1202,7 +1311,7 @@ function S4({order,onPrint,db,saveDb,onUpdateOrder}){
 
   return<div style={{fontSize:10}}>
     <div className="no-print" style={{padding:"8px 14px",background:"#fff",borderBottom:"1px solid #eee",display:"flex",justifyContent:"flex-end",color:"#92400e"}}><PrintBtn onPrint={()=>onPrint("s4")}/></div>
-    <Hdr title="কার্পেন্টারের কপি" sub="Carpenter Copy" no={no} bg="#92400e"/>
+    <Hdr title="কার্পেন্টারের কপি" sub="Carpenter Copy" no={no} bg="#92400e"/>{(order.items||[]).some(it=>it.woodFilledAt)&&<div style={{margin:"6px 14px 0",background:"#f1f5f9",color:"#475569",borderRadius:6,padding:"5px 8px",fontSize:8.5,lineHeight:1.5}}>ℹ️ কিছু ফার্নিচারের কাঠের মাপ ডেলিভারির পরে ডেটাবেস থেকে বসানো ({fmtDate((order.items.find(it=>it.woodFilledAt)||{}).woodFilledAt)}) — তৈরির সময়ের মাপ থেকে সামান্য আলাদা হতে পারে</div>}
     <div style={{padding:"10px 14px"}}>
       <div style={{background:"#fef3c7",borderRadius:7,padding:"8px",marginBottom:10}}><IR l="গ্রাহক" v={cust.name}/><IR l="ডেলিভারি" v={fmtDate(cust.delivery)}/></div>
       {images.length>0&&<div style={{marginBottom:10}}>
@@ -1266,7 +1375,7 @@ function S5({order,onPrint,woodSettings,rackSplits}){
   const tot=list.reduce((s,w)=>s+w.cv,0);
   return<div style={{fontSize:10}}>
     <div className="no-print" style={{padding:"8px 14px",background:"#fff",borderBottom:"1px solid #eee",display:"flex",justifyContent:"flex-end",color:"#065f46"}}><PrintBtn onPrint={()=>onPrint("s5")}/></div>
-    <Hdr title="ট্রান্সপোর্ট কপি — কাঠের তালিকা" sub="Transport Wood List" no={no} bg="#065f46"/>
+    <Hdr title="ট্রান্সপোর্ট কপি — কাঠের তালিকা" sub="Transport Wood List" no={no} bg="#065f46"/>{(order.items||[]).some(it=>it.woodFilledAt)&&<div style={{margin:"6px 14px 0",background:"#f1f5f9",color:"#475569",borderRadius:6,padding:"5px 8px",fontSize:8.5,lineHeight:1.5}}>ℹ️ কিছু ফার্নিচারের কাঠের মাপ ডেলিভারির পরে ডেটাবেস থেকে বসানো ({fmtDate((order.items.find(it=>it.woodFilledAt)||{}).woodFilledAt)}) — তৈরির সময়ের মাপ থেকে সামান্য আলাদা হতে পারে</div>}
     <div style={{padding:"10px 14px"}}>
       <div style={{background:"#f0fdf4",borderRadius:7,padding:"8px",marginBottom:10}}>
         <IR l="গ্রাহক" v={cust.name}/><IR l="তারিখ" v={fmtDate(cust.date)}/>
@@ -1382,16 +1491,17 @@ function S6({order,onPrint,onUpdateOrder,onSetDelivered,onPhotoChange,onRemovePh
 const PAY_DEPT_SHORT={"ছুতার":"ছুতার","কারিগর":"নকশা","বার্নিশ":"বার্নিশ","পরিবহন":"পরিবহন","অন্যান্য":"অন্যান্য"};
 const SALARY_SEGS=[
   {id:"ছুতার",bn:"ছুতার",color:CHART_SOFT_BLUE},
-  {id:"কারিগর",bn:"নকশা",color:CHART_SOFT_GREEN},
-  {id:"বার্নিশ",bn:"বার্নিশ",color:CHART_SOFT_ORANGE},
-  {id:"পরিবহন",bn:"পরিবহন",color:CHART_SOFT_PURPLE},
+  {id:"কারিগর",bn:"নকশা",color:CHART_SOFT_ORANGE},
+  {id:"বার্নিশ",bn:"বার্নিশ",color:CHART_SOFT_GREEN},
+  {id:"পরিবহন",bn:"পরিবহন",color:"#e4dcf5"},
   {id:"অন্যান্য",bn:"অন্যান্য",color:CHART_SOFT_GREY},
   {id:"__exp",bn:"খরচের খাতায় লেখা বেতন",color:CHART_SOFT_PINK}
 ];
+// কলামে নিচ থেকে উপরে: বেতন → কাঠ → খরচ
 const SPEND_SEGS=[
-  {id:"expense",bn:"খরচ",color:CHART_SOFT_TEAL},
   {id:"salary",bn:"বেতন",color:CHART_SOFT_BLUE},
-  {id:"wood",bn:"কাঠ",color:CHART_SOFT_ORANGE}
+  {id:"wood",bn:"কাঠ",color:CHART_SOFT_ORANGE},
+  {id:"expense",bn:"খরচ",color:CHART_SOFT_TEAL}
 ];
 function buildSpendLedger(expenses,payrollWeeks,workers,woodLots){
   const out=[];
@@ -1468,69 +1578,121 @@ function itemWoodDate(o,it,idx,ip){
   const t=(((ip||effectiveItemProgress(o))[it.itemId||`idx_${idx}`])||{}).transport;
   return String((t&&(t.end||t.start))||(o.cust&&o.cust.date)||"").slice(0,10)||null;
 }
-/* ── v4.52: কোন ফার্নিচারে খরচ ও লাভ কত — পূর্ণ খরচ ধরে ──
+/* ── v4.61: কোন ফার্নিচারে খরচ ও লাভ কত — প্রতিটা ফার্নিচারের আসল তৈরির সময় ধরে ──
    বিক্রি: ডেলিভারি হওয়া অর্ডারের দাম × পরিমাণ
-   কাঠ: অর্ডারে যত CFT কাঠ গেছে × অর্ডারের সময়ের কাঠের দাম (আগের মতোই স্ন্যাপশট)
-   বেতন ও অন্যান্য খরচ: ফার্নিচারটা যে মাসে তৈরি শেষ, সেই মাস + আগের ২ মাসের মোট বেতন (বা খরচ) ÷ ওই
-   ৩ মাসে তৈরি শেষ হওয়া মোট CFT — এই হারে প্রতি CFT-তে বসানো। ৩ মাসের জানালা, কারণ কাজ চলে কয়েক
-   সপ্তাহ ধরে, আর কোনো মাসে কম জিনিস শেষ হলে এক মাসের হার অস্বাভাবিক লাফ দিত। পে-রোলে হাজিরা
-   শুরুর আগের অর্ডারে সেটিংসের শ্রম-হার ধরা হয়; খরচের খাতা শুরুর আগের অর্ডারে সামগ্রিক গড় ── */
+   কাঠ: অর্ডারে যত CFT কাঠ গেছে × অর্ডারের সময়ের কাঠের দাম (অপচয় ধরা চূড়ান্ত দাম)
+   বেতন ও অন্যান্য খরচ: ফার্নিচারের তৈরির সময়কাল = প্রথম বিভাগে কাজ শুরুর দিন থেকে শেষ বিভাগের শেষ দিন।
+   শেষের তারিখ না থাকলে ডেলিভারির তারিখ; শুরুর তারিখ না থাকলে ট্র্যাক করা ফার্নিচারের গড় তৈরির সময়।
+   প্রতিটা সপ্তাহের (শুক্র–বৃহস্পতি) বেতন আর খরচ সেই সপ্তাহে যেসব ফার্নিচারে কাজ চলছিল তাদের মধ্যে
+   CFT অনুযায়ী ভাগ হয় (একটা ফার্নিচারের CFT তার পুরো সময়কাল জুড়ে সমানভাবে ছড়ানো)। যে সপ্তাহে কোনো
+   ফার্নিচারে কাজ চলেনি, সেই বেতন/খরচ "কোনো ফার্নিচারে না বসা" হিসেবে আলাদা থাকে। পে-রোল শুরুর আগের
+   অংশে সেটিংসের শ্রম-হার, খরচের খাতা শুরুর আগের অংশে গড় খরচ/CFT ধরা হয় ── */
 function furnitureCosting(orders,ledger,woodSettings,laborSettings,db,bottleneckDeptId){
-  const mk=(ds)=>{const d=parseISO(ds);return d.getUTCFullYear()*12+d.getUTCMonth()};
+  const today=todayStr();
   const active=(orders||[]).filter(o=>o&&!o.cancelled);
   const ipCache=new Map();const ipOf=(o)=>{if(!ipCache.has(o))ipCache.set(o,effectiveItemProgress(o));return ipCache.get(o)};
-  const cftM={},salM={},expM={};
-  active.forEach(o=>(o.items||[]).forEach((it,idx)=>{const dd=itemDoneDate(o,it,idx,ipOf(o));if(!dd)return;const c=totalCft(it.sections||[])*(parseFloat(it.qty)||1);if(c>0){const k=mk(dd);cftM[k]=(cftM[k]||0)+c}}));
-  (ledger||[]).forEach(e=>{if(!e.date)return;const k=mk(e.date);if(e.kind==="salary")salM[k]=(salM[k]||0)+e.amount;else if(e.kind==="expense")expM[k]=(expM[k]||0)+e.amount});
-  const ks=(m)=>Object.keys(m).map(Number);
-  const salStart=ks(salM).length?Math.min(...ks(salM)):null;
-  const expStart=ks(expM).length?Math.min(...ks(expM)):null;
-  const sumR=(m,a,b)=>{let t=0;for(let k=a;k<=b;k++)t+=m[k]||0;return t};
-  const avgSince=(m,start)=>{if(start===null)return null;let c=0,t=0;ks(cftM).forEach(k=>{if(k>=start)c+=cftM[k]});ks(m).forEach(k=>{t+=m[k]});return c>0?t/c:null};
-  const salAvg=avgSince(salM,salStart),expAvg=avgSince(expM,expStart);
-  const rateFor=(ds)=>{
-    const k=ds?mk(ds):null;
-    let sal=null,basis="setting";
-    if(k!==null&&salStart!==null&&k>=salStart){const c=sumR(cftM,k-2,k);if(c>0){sal=sumR(salM,k-2,k)/c;basis="window"}else if(salAvg!==null){sal=salAvg;basis="avg"}}
-    let exp=expAvg||0;
-    if(k!==null&&expStart!==null&&k>=expStart){const c=sumR(cftM,k-2,k);if(c>0)exp=sumR(expM,k-2,k)/c}
-    return{sal,basis,exp};
-  };
-  const cats={};
-  active.filter(o=>o.delivered).forEach(o=>{
-    const ip=ipOf(o);
-    const lRate=orderLabourRate(o,laborSettings);
-    (o.items||[]).forEach((it,idx)=>{
-      const qty=parseFloat(it.qty)||1;
-      const revenue=(parseFloat(it.price)||0)*qty;
-      if(revenue<=0)return;
-      const catLabel=(db&&it.catKey&&db[it.catKey]&&db[it.catKey].bn)?db[it.catKey].bn:(((it.variantBn||"").split(" ")[0])||it.code||"অন্যান্য");
-      const itCft=totalCft(it.sections||[])*qty;
-      const woodCost=itemWoodCost(it,o,woodSettings);
-      const doneDate=itemDoneDate(o,it,idx,ip);
-      const r=rateFor(doneDate);
-      const salaryCost=itCft*(r.sal!==null?r.sal:lRate);
-      const expenseCost=itCft*r.exp;
-      const cost=woodCost+salaryCost+expenseCost;
-      const c=cats[catLabel]||(cats[catLabel]={label:catLabel,revenue:0,cft:0,woodCost:0,salaryCost:0,expenseCost:0,cost:0,count:0,rows:[],bottleneckDays:0,bnSamples:0});
-      c.revenue+=revenue;c.cft+=itCft;c.woodCost+=woodCost;c.salaryCost+=salaryCost;c.expenseCost+=expenseCost;c.cost+=cost;c.count+=1;
-      c.rows.push({no:o.no,cust:(o.cust&&o.cust.name)||"",model:it.variantBn||"",wood:it.woodBn||"",woodDate:itemWoodDate(o,it,idx,ip),doneDate,cft:itCft,woodCost,salaryCost,expenseCost,revenue,profit:revenue-cost,salBasis:r.basis});
-      // থ্রুপুট অ্যাকাউন্টিং (Goldratt): এই আইটেম বাধা-বিভাগে কত দিন দখল করেছিল
-      if(bottleneckDeptId){
-        const bn=(ip[it.itemId||`idx_${idx}`]||{})[bottleneckDeptId];
-        if(bn&&bn.start&&bn.end){const dd=daysBetween(bn.start,bn.end);if(dd>=0){c.bottleneckDays+=Math.max(dd,0.5);c.bnSamples+=1}}
-      }
+  // ১) প্রতিটা ফার্নিচারের তৈরির সময়কাল
+  const all=[];
+  active.forEach(o=>{const ip=ipOf(o);(o.items||[]).forEach((it,idx)=>{
+    const qty=parseFloat(it.qty)||1;
+    const cft=totalCft(it.sections||[])*qty;
+    const prog=ip[it.itemId||`idx_${idx}`]||{};
+    const starts=DEPTS.map(d=>prog[d.id]&&prog[d.id].start).filter(Boolean).map(x=>String(x).slice(0,10)).sort();
+    const ends=DEPTS.map(d=>prog[d.id]&&prog[d.id].end).filter(Boolean);
+    const tracked=ends.length===DEPTS.length&&DEPTS.every(d=>((prog[d.id]&&prog[d.id].pct)||0)>=100);
+    const done=itemDoneDate(o,it,idx,ip);
+    let start=starts[0]||null,end=done||null,inProgress=false,startAssumed=false;
+    const endIsDelivery=!!(done&&!tracked);
+    if(!end&&start){end=today;inProgress=true}
+    if(start&&end&&start>end)start=end;
+    all.push({o,it,idx,ip,qty,cft,start,end,inProgress,startAssumed,endIsDelivery,tracked});
+  })});
+  const durs=all.filter(x=>x.start&&x.end&&x.tracked).map(x=>daysBetween(x.start,x.end)).filter(d=>d>=0&&d<=365);
+  const avgDur=durs.length?Math.max(1,Math.round(durs.reduce((a,b)=>a+b,0)/durs.length)):21;
+  all.forEach(x=>{if(x.end&&!x.start){x.start=addDays(x.end,-avgDur);x.startAssumed=true}});
+  // ২) প্রতি সপ্তাহে কোন ফার্নিচারে কতটা কাজ
+  const weekW={};
+  all.forEach(x=>{
+    x.weeks={};
+    if(!(x.cft>0)||!x.start||!x.end)return;
+    const total=daysBetween(x.start,x.end)+1;
+    let d=x.start,guard=0;
+    while(d<=x.end&&guard++<400){
+      const w=thursdayOf(d);
+      const segEnd=w<x.end?w:x.end;
+      const days=daysBetween(d,segEnd)+1;
+      const wt=x.cft*days/total;
+      x.weeks[w]=(x.weeks[w]||0)+wt;
+      weekW[w]=(weekW[w]||0)+wt;
+      d=addDays(segEnd,1);
+    }
+  });
+  // ৩) প্রতি সপ্তাহের বেতন ও অন্যান্য খরচ
+  const salW={},expW={};
+  (ledger||[]).forEach(e=>{if(!e.date)return;const w=thursdayOf(e.date);if(e.kind==="salary")salW[w]=(salW[w]||0)+e.amount;else if(e.kind==="expense")expW[w]=(expW[w]||0)+e.amount});
+  const firstKey=(m)=>{const k=Object.keys(m).sort();return k.length?k[0]:null};
+  const salStart=firstKey(salW),expStart=firstKey(expW);
+  let expSum=0,wSum=0;Object.keys(weekW).forEach(w=>{if(expStart&&w>=expStart&&w<=thursdayOf(today)){wSum+=weekW[w];expSum+=(expW[w]||0)}});
+  const expAvg=wSum>0?expSum/wSum:0;
+  // ৪) ভাগ বসানো
+  all.forEach(x=>{
+    x.woodCost=itemWoodCost(x.it,x.o,woodSettings);
+    x.revenue=(parseFloat(x.it.price)||0)*x.qty;
+    // কাজই শুরু হয়নি (শুরু বা শেষ কোনো তারিখ নেই, ডেলিভারিও হয়নি) — এখনো কোনো বেতন/খরচ বসে না
+    if(!x.start||!x.end){x.salary=0;x.expense=0;x.salBasis="none";return}
+    let sal=0,exp=0,covS=0,covE=0;
+    Object.entries(x.weeks).forEach(([w,wt])=>{
+      const W=weekW[w]||0;if(W<=0)return;
+      if(salStart&&w>=salStart){sal+=(salW[w]||0)*wt/W;covS+=wt}
+      if(expStart&&w>=expStart){exp+=(expW[w]||0)*wt/W;covE+=wt}
     });
+    const lRate=orderLabourRate(x.o,laborSettings);
+    const unS=Math.max(0,x.cft-covS),unE=Math.max(0,x.cft-covE);
+    x.salary=sal+unS*lRate;
+    x.expense=exp+unE*expAvg;
+    x.salBasis=covS<=0.0001?"setting":(unS>0.001?"mixed":"weeks");
+  });
+  // ৫) কোনো ফার্নিচারে না বসা সপ্তাহ
+  const idle={};
+  new Set([...Object.keys(salW),...Object.keys(expW)]).forEach(w=>{if(!(weekW[w]>0))idle[w]={salary:salW[w]||0,expense:expW[w]||0}});
+  // ৬) ডেলিভারি হওয়া ফার্নিচার — ক্যাটাগরি অনুযায়ী
+  const cats={};
+  all.filter(x=>x.o.delivered&&x.revenue>0).forEach(x=>{
+    const o=x.o,it=x.it;
+    const catLabel=(db&&it.catKey&&db[it.catKey]&&db[it.catKey].bn)?db[it.catKey].bn:(((it.variantBn||"").split(" ")[0])||it.code||"অন্যান্য");
+    const cost=x.woodCost+x.salary+x.expense;
+    const c=cats[catLabel]||(cats[catLabel]={label:catLabel,revenue:0,cft:0,woodCost:0,salaryCost:0,expenseCost:0,cost:0,count:0,rows:[],bottleneckDays:0,bnSamples:0});
+    c.revenue+=x.revenue;c.cft+=x.cft;c.woodCost+=x.woodCost;c.salaryCost+=x.salary;c.expenseCost+=x.expense;c.cost+=cost;c.count+=1;
+    c.rows.push({no:o.no,cust:(o.cust&&o.cust.name)||"",model:it.variantBn||"",wood:it.woodBn||"",woodDate:itemWoodDate(o,it,x.idx,x.ip),start:x.start,end:x.end,startAssumed:x.startAssumed,endIsDelivery:x.endIsDelivery,cft:x.cft,woodRate:x.cft>0?x.woodCost/x.cft:0,woodCost:x.woodCost,salaryCost:x.salary,expenseCost:x.expense,revenue:x.revenue,profit:x.revenue-cost,salBasis:x.salBasis,woodFilledAt:it.woodFilledAt||null});
+    if(bottleneckDeptId){
+      const bn=(x.ip[it.itemId||`idx_${x.idx}`]||{})[bottleneckDeptId];
+      if(bn&&bn.start&&bn.end){const dd=daysBetween(bn.start,bn.end);if(dd>=0){c.bottleneckDays+=Math.max(dd,0.5);c.bnSamples+=1}}
+    }
   });
   const ranked=Object.values(cats).map(c=>({...c,labourCost:c.salaryCost,profit:c.revenue-c.cost,margin:c.revenue>0?((c.revenue-c.cost)/c.revenue)*100:0,profitPerBnDay:c.bottleneckDays>0?(c.revenue-c.cost)/c.bottleneckDays:null})).sort((a,b)=>b.margin-a.margin);
-  ranked.forEach(c=>c.rows.sort((a,b)=>String(b.woodDate||"").localeCompare(String(a.woodDate||""))));
-  const nowK=mk(todayStr());
+  ranked.forEach(c=>c.rows.sort((a,b)=>String(b.end||"").localeCompare(String(a.end||""))));
+  // ৭) মাস অনুযায়ী সারাংশ (শেষ ১২ মাস)
+  const mAgg={};
+  const addM=(w,key,val)=>{const m=w.slice(0,7);const r=(mAgg[m]=mAgg[m]||{cft:0,salary:0,expense:0,idleSalary:0,idleExpense:0});r[key]+=val};
+  Object.entries(weekW).forEach(([w,v])=>addM(w,"cft",v));
+  Object.entries(salW).forEach(([w,v])=>addM(w,"salary",v));
+  Object.entries(expW).forEach(([w,v])=>addM(w,"expense",v));
+  Object.entries(idle).forEach(([w,v])=>{addM(w,"idleSalary",v.salary);addM(w,"idleExpense",v.expense)});
+  const nowD=parseISO(today);
   const months=[];
-  for(let k=nowK-11;k<=nowK;k++){
-    const c3=sumR(cftM,k-2,k);
-    months.push({key:k,label:`${monthName(((k%12)+12)%12)} ${toBnDigits(String(Math.floor(k/12)).slice(2))}`,cft:cftM[k]||0,salary:salM[k]||0,expense:expM[k]||0,salPerCft:c3>0&&salStart!==null&&k>=salStart?sumR(salM,k-2,k)/c3:null,expPerCft:c3>0&&expStart!==null&&k>=expStart?sumR(expM,k-2,k)/c3:null});
+  for(let i=11;i>=0;i--){
+    const key=toISO(new Date(Date.UTC(nowD.getUTCFullYear(),nowD.getUTCMonth()-i,1))).slice(0,7);
+    const r=mAgg[key]||{cft:0,salary:0,expense:0,idleSalary:0,idleExpense:0};
+    months.push({key,label:`${monthName(+key.slice(5,7)-1)} ${toBnDigits(key.slice(2,4))}`,...r,
+      salPerCft:r.cft>0?(r.salary-r.idleSalary)/r.cft:null,expPerCft:r.cft>0?(r.expense-r.idleExpense)/r.cft:null});
   }
-  return{ranked,months,hasPayroll:salStart!==null};
+  // ৮) সাম্প্রতিক হার (নতুন অর্ডারের দামের পরামর্শে): শেষ ১২টা পূর্ণ সপ্তাহ
+  const curW=thursdayOf(today);let rs=0,re=0,rw=0;
+  for(let i=1;i<=12;i++){const w=addDays(curW,-7*i);if(weekW[w]>0){rw+=weekW[w];rs+=salW[w]||0;re+=expW[w]||0}}
+  const recent={salPerCft:rw>0?rs/rw:null,expPerCft:rw>0?re/rw:null};
+  // ৯) লাভ-ক্ষতি রিপোর্টের জন্য প্রতিটা ফার্নিচারের সারাংশ
+  const items=all.map(x=>({no:x.o.no,cust:(x.o.cust&&x.o.cust.name)||"",model:x.it.variantBn||"",delivered:!!x.o.delivered,deliveredAt:String(x.o.deliveredAt||"").slice(0,10),revenue:x.revenue,cft:x.cft,woodCost:x.woodCost,salary:x.salary,expense:x.expense,start:x.start,end:x.end,inProgress:x.inProgress,startAssumed:x.startAssumed,endIsDelivery:x.endIsDelivery,woodFilledAt:x.it.woodFilledAt||null}));
+  return{ranked,months,hasPayroll:salStart!==null,idle,recent,avgDur,items};
 }
 // ── স্তূপ-কলাম চার্ট: প্রতিটা কলাম একটা সময় (সপ্তাহ/মাস/বছর), ভেতরে ভাগগুলো রঙে রঙে ──
 function StackedBars({bars,segs,height=140,selectedKey,onSelect}){
@@ -1892,7 +2054,10 @@ function Root(){
   if(config===undefined)return<div style={{padding:40,textAlign:"center"}}>লোড হচ্ছে...</div>;
   if(config===null)return<FirebaseSetup onSaved={(c)=>setConfig(c)}/>;
   return<>
-    <App firebaseConfig={config} onResetConfig={()=>{localStorage.removeItem("rf_firebase_config");setConfig(null)}}/>
+    {/* v4.61: অ্যাপের ভেতরে যেকোনো জায়গায় অপ্রত্যাশিত ত্রুটি হলেও পাতা সাদা হবে না */}
+    <PageErrorBoundary resetKey="app" canGoBack={false} onError={(err)=>{try{S.set("rf_last_page_crash",{at:new Date().toISOString(),page:"app",msg:String((err&&err.message)||err).slice(0,240)})}catch(x){}}}>
+      <App firebaseConfig={config} onResetConfig={()=>{localStorage.removeItem("rf_firebase_config");setConfig(null)}}/>
+    </PageErrorBoundary>
     <ImageLightbox/>
   </>;
 }
@@ -1928,9 +2093,126 @@ function App({firebaseConfig,onResetConfig}){
     return()=>window.removeEventListener("storage",onStorage);
   },[]);
   // নিষ্ক্রিয় হয়ে গেলে সার্ভার-সংযোগ ছেড়ে দেওয়া হয়, যাতে এই ট্যাব আর কোনো পড়ার হিসাব না খায়
+  // ── v4.53: আগে নিষ্ক্রিয় ট্যাব শুধু নেট বন্ধ করত — তাতে সেই ট্যাবে জমে থাকা লেখা কখনো যেত না, আর
+  // পরে খুললে দিন কয়েক পুরনো লেখা হঠাৎ সার্ভারে গিয়ে নতুন তথ্য মুছে দিতে পারত। এখন আগে বাকি সব লেখা
+  // পাঠানো হয়, তারপর এই ট্যাবের সংযোগ পুরোপুরি বন্ধ ──
   useEffect(()=>{
-    if(!tabActive&&fsRef.current){try{fsRef.current.disableNetwork()}catch(e){}}
+    if(tabActive||!fsRef.current)return;
+    const f=fsRef.current;
+    (async()=>{
+      try{await Promise.race([f.waitForPendingWrites(),new Promise(r=>setTimeout(r,120000))])}catch(e){}
+      try{await f.terminate()}catch(e){}
+      if(fsRef.current===f)fsRef.current=null;
+    })();
   },[tabActive]);
+  // ── v4.53: আটকে গেলে নিজে নিজে সারানো — ইন্টারনেট আছে অথচ সার্ভারের সাথে মেলানো যাচ্ছে না:
+  //   ৪৫ সেকেন্ড → সংযোগ নতুন করে চালু · ৩ মিনিট → পাতা নতুন করে লোড (১৫ মিনিটে একবারের বেশি নয়)
+  //   ৬ মিনিট → এই ডিভাইসের পুরনো ক্যাশ মুছে একদম নতুন করে (তবে শুধু যদি পাঠানোর মতো কোনো লেখা বাকি না থাকে) ──
+  // ── v4.53: প্রতিটা ডিভাইস নিজের দেখা সংখ্যাগুলো সার্ভারে জানায় (শুরুতে আর প্রতি ৫ মিনিটে) ──
+  useEffect(()=>{
+    const beat=()=>{
+      const f=fsRef.current;if(!f||!tabActiveRef.current)return;
+      const t=syncTrackRef.current,d=latestDataRef.current||{};
+      const os=(d.orders||[]).filter(o=>o&&!o.cancelled);
+      const due=os.reduce((sum,o)=>{const tot=parseFloat(o.cust&&o.cust.total)||0;const paid=(o.payments||[]).reduce((a,p)=>a+(parseFloat(p.amount)||0),0);return sum+Math.max(0,tot-paid)},0);
+      const rec={id:deviceIdRef.current,label:deviceLabel(),version:BUILD_TAG,origin:location.protocol==="file:"?"ডাউনলোড করা ফাইল":location.host+location.pathname,lastSeen:new Date().toISOString(),lastServerAt:t.lastServerAt?new Date(t.lastServerAt).toISOString():null,fresh:!!t.fresh,
+        counts:{orders:(d.orders||[]).length,running:os.filter(o=>!o.delivered).length,due:Math.round(due),expenses:(d.expenses||[]).length,woodlots:(d.woodLots||[]).length,workers:(d.workers||[]).length,payrollWeeks:Object.keys(d.payrollWeeks||{}).length,models:dbCats(d.db||{}).reduce((n,[,c])=>n+Object.keys(c.variants||{}).length,0)}};
+      f.collection("devices").doc(deviceIdRef.current).set(rec).catch(()=>{});
+    };
+    const first=setTimeout(beat,20000);
+    const iv=setInterval(beat,5*60000);
+    return()=>{clearTimeout(first);clearInterval(iv)};
+  },[]);
+  // ── v4.61: ডেলিভারি হওয়া অর্ডারের যে ফার্নিচারে কাঠের তালিকা ফাঁকা, সেখানে ডেটাবেসের মাপ (জোড়ার নিয়মসহ)
+  // একবারই বসানো হয়, "পরে বসানো মাপ" চিহ্নসহ — তারপর আর কখনো বদলায় না (ডেলিভারড ফার্নিচারের হিসাব স্থির
+  // থাকে)। শুধু সার্ভারের সাথে মেলানো অবস্থায় চলে, আর প্রতিটা অর্ডার সার্ভারের সর্বশেষ কপি পড়ে লেখা হয় ──
+  const backfillBusyRef=useRef(false);
+  const backfillDeliveredWood=async(override)=>{
+    const fs=fsRef.current;
+    if(!fs||!syncTrackRef.current.fresh||backfillBusyRef.current)return 0;
+    backfillBusyRef.current=true;
+    let n=0;
+    try{
+      const dbNow=dbRef.current||{};
+      const modelSecs=(it)=>{
+        const k=it.catKey+"|"+it.varKey;
+        if(override&&override[k])return itemWoodEmpty({sections:override[k]})?null:override[k];
+        if(override)return null;
+        const c=dbNow[it.catKey];const v=c&&c.variants&&c.variants[it.varKey];
+        return v&&!isEmptyWood(v)?v.sections:null;
+      };
+      const targets=(ordersRef.current||[]).filter(o=>o&&o.delivered&&!o.cancelled&&(o.items||[]).some(it=>itemWoodEmpty(it)&&modelSecs(it)));
+      for(const o of targets.slice(0,150)){
+        const ref=fs.collection("orders").doc(o.no);
+        try{
+          await fs.runTransaction(async tx=>{
+            const d=await tx.get(ref);if(!d.exists)return;
+            const cur=d.data();if(!cur.delivered||cur.cancelled)return;
+            let changed=false;
+            const items=(cur.items||[]).map(it=>{
+              if(!itemWoodEmpty(it))return it;
+              const secs=modelSecs(it);if(!secs)return it;
+              changed=true;
+              return{...it,sections:JSON.parse(JSON.stringify(secs)),woodFilledAt:todayStr()};
+            });
+            if(changed)tx.set(ref,{items},{merge:true});
+          });
+          n++;
+        }catch(e){}
+      }
+    }finally{backfillBusyRef.current=false}
+    return n;
+  };
+  // ── v4.61: আগের লটের গুড়িগুলোর স্থায়ী কোড = এখনকার ক্রমিক নম্বর (গায়ে যা লেখা আছে), একবারই ──
+  const migrateLogCodes=()=>{
+    const lots=woodLotsRef.current||[];
+    let touched=false;
+    const next=lots.map(l=>{
+      if(!(l.logs||[]).some(g=>!g.code))return l;
+      touched=true;
+      const logs=l.logs.map((g,i)=>g.code?g:{...g,code:String(i+1)});
+      return{...l,logs,logCounter:Math.max(parseInt(l.logCounter,10)||0,logs.length)};
+    });
+    if(touched)saveWoodLots(next);
+  };
+  const syncChoresDoneRef=useRef(false);
+  const recoverRef=useRef({stage:0});
+  useEffect(()=>{
+    const iv=setInterval(async()=>{
+      const t=syncTrackRef.current;
+      if(!t.fresh)setSyncTick(x=>x+1);
+      const f=fsRef.current;
+      if(!f||!tabActiveRef.current||!navigator.onLine)return;
+      if(t.fresh){recoverRef.current={stage:0};return}
+      const staleFor=Date.now()-(t.staleSince||Date.now());
+      const rc=recoverRef.current;
+      if(staleFor>45000&&rc.stage<1){
+        rc.stage=1;
+        try{await f.disableNetwork();await new Promise(r=>setTimeout(r,800));await f.enableNetwork()}catch(e){}
+        return;
+      }
+      if(staleFor>180000&&rc.stage<2){
+        rc.stage=2;
+        const last=+(localStorage.getItem("rf_recover_reload_at")||0);
+        if(Date.now()-last>15*60000){localStorage.setItem("rf_recover_reload_at",String(Date.now()));window.location.reload();return}
+      }
+      if(staleFor>360000&&rc.stage<3){
+        rc.stage=3;
+        const last=+(localStorage.getItem("rf_recover_clear_at")||0);
+        if(Date.now()-last>60*60000){
+          let flushed=false;
+          try{await Promise.race([f.waitForPendingWrites().then(()=>{flushed=true}),new Promise(r=>setTimeout(r,8000))])}catch(e){}
+          if(flushed){
+            localStorage.setItem("rf_recover_clear_at",String(Date.now()));
+            try{await f.terminate()}catch(e){}
+            try{await f.clearPersistence()}catch(e){}
+            window.location.reload();
+          }
+        }
+      }
+    },15000);
+    return()=>clearInterval(iv);
+  },[]);
   useEffect(()=>{
     const checkVersion=async()=>{
       try{
@@ -2035,6 +2317,36 @@ function App({firebaseConfig,onResetConfig}){
   // v4.52: এই ডিভাইস থেকে ফার্নিচার ডেটাবেসের কতগুলো লেখা এখনো সার্ভারে পৌঁছায়নি — এগুলো পৌঁছানোর
   // আগে সার্ভারের (পুরনো) কপি দিয়ে স্ক্রিন বা সার্ভার কোনোটাই আর ওভাররাইট করা হয় না
   const dbPendingRef=useRef(0);
+  // ── v4.53: এই ডিভাইস সত্যিই সার্ভারের সাথে মেলানো কিনা — প্রতিটা প্রধান লিসেনার নিজেই জানায়
+  // (fromCache=false মানে তথ্যটা সার্ভার নিশ্চিত করেছে)। আগে শুধু "ইন্টারনেট আছে কিনা" দেখে
+  // "সিঙ্ক সক্রিয়" লেখা দেখাত — আটকে থাকা ডিভাইসও তাই সঠিক দাবি করত ──
+  const syncTrackRef=useRef({lst:{},fresh:false,pending:false,staleSince:Date.now(),lastServerAt:0});
+  const[syncInfo,setSyncInfo]=useState({fresh:false,pending:false,lastServerAt:0,staleSince:Date.now()});
+  const[syncTick,setSyncTick]=useState(0);
+  const pendingOrderNosRef=useRef(new Set());
+  // ── v4.53: এই ডেটাবেসে যুক্ত সব ডিভাইস আর তারা কী দেখছে — পার্থক্য এক নজরে ধরা পড়ে ──
+  const[devices,setDevices]=useState([]);
+  const deviceIdRef=useRef((()=>{try{let id=localStorage.getItem("rf_device_id");if(!id){id="dev_"+Date.now()+"_"+Math.random().toString(36).slice(2,7);localStorage.setItem("rf_device_id",id)}return id}catch(e){return"dev_tmp"}})());
+  // ── v4.53: এই কপিটা পুরনো সংস্করণ হলে এখান থেকে আর কিছু লেখা হবে না ──
+  const[verBlock,setVerBlock]=useState(null);
+  const trackSync=(name,snap)=>{
+    const t=syncTrackRef.current;
+    const md=(snap&&snap.metadata)||{};
+    t.lst[name]={fromCache:!!md.fromCache,pending:!!md.hasPendingWrites,at:Date.now()};
+    const fresh=SYNC_TRACKED.every(n=>t.lst[n]&&t.lst[n].fromCache===false);
+    const pending=Object.keys(t.lst).some(n=>t.lst[n].pending);
+    if(fresh)t.lastServerAt=Date.now();
+    if(fresh!==t.fresh){t.fresh=fresh;if(!fresh)t.staleSince=Date.now()}
+    t.pending=pending;
+    setSyncInfo(prev=>(prev.fresh===t.fresh&&prev.pending===t.pending&&(!t.fresh||Date.now()-prev.lastServerAt<30000))?prev:{fresh:t.fresh,pending:t.pending,lastServerAt:t.lastServerAt,staleSince:t.staleSince});
+  };
+  // v4.61: সার্ভারের সাথে মেলানো নিশ্চিত হলে একবারই: আগের গুড়ির স্থায়ী কোড + ডেলিভারড অর্ডারের ফাঁকা কাঠের মাপ ভরাট
+  useEffect(()=>{
+    if(!syncInfo.fresh||syncChoresDoneRef.current)return;
+    syncChoresDoneRef.current=true;
+    const t=setTimeout(()=>{try{migrateLogCodes()}catch(e){}backfillDeliveredWood(null)},8000);
+    return()=>clearTimeout(t);
+  },[syncInfo.fresh]);
   otherDataRef.current={expenses,woodLots,workers,payrollWeeks,db};
   const[carpenters,setCarpenters]=useState([]);
   const[draft,setDraft]=useState(null);
@@ -2066,10 +2378,10 @@ function App({firebaseConfig,onResetConfig}){
   const pendingWritesRef=useRef(pendingWrites);
   pendingWritesRef.current=pendingWrites;
   const persistPending=(list)=>{localStorage.setItem("rf_pending_writes",JSON.stringify(list));setPendingWrites(list)};
-  const queuePendingWrite=(item)=>{
-    const list=[...pendingWritesRef.current,{...item,id:Date.now()+"_"+Math.random().toString(36).slice(2,7),addedAt:new Date().toISOString()}];
-    persistPending(list);
-  };
+  // ── v4.53: এই পুরনো "আবার চেষ্টা" সারি বন্ধ। এটা লেখার সময়কার পুরো কপি জমিয়ে রেখে দিন কয়েক পরেও আবার
+  // লিখে দিত — তখন অন্য ডিভাইসে হওয়া নতুন পরিবর্তন (ডেলিভারি, পেমেন্ট) মুছে যেত। এই ডিভাইসের লেখা
+  // পৌঁছে দেওয়ার কাজ Firestore নিজেই করে ──
+  const queuePendingWrite=(item)=>{};
   // ── ডকুমেন্ট সাইজ সীমা (Firestore-এ প্রতি অর্ডারের সর্বোচ্চ ~1MB) পার হয়ে যাওয়া লেখা চেনার জন্য —
   // সাধারণত একটা অর্ডারে অনেকগুলো/বড় ছবি (রেফারেন্স বা ডেলিভারির) যোগ হলে এটা ঘটে। ধরা পড়লে
   // এখন কাউকে কিছু জানতে/করতে হয় না — এখানেই স্বয়ংক্রিয়ভাবে সেই অর্ডারের ছবিগুলো ধাপে ধাপে আরও
@@ -2134,8 +2446,8 @@ function App({firebaseConfig,onResetConfig}){
       current=await shrinkOrderImages(current,target);
       try{
         await withTimeout(fs.collection("orders").doc(orderNo).set(current,merge?{merge:true}:{}),45000);
-        setOrders(prev=>prev.map(o=>o.no===orderNo?current:o));
-        setDraft(d=>d&&d.no===orderNo?current:d);
+        setOrders(prev=>prev.map(o=>o.no===orderNo?{...o,...current}:o));
+        setDraft(d=>d&&d.no===orderNo?{...d,...current}:d);
         clearPermanentSyncFailure(orderNo);
         return true;
       }catch(e){
@@ -2146,11 +2458,11 @@ function App({firebaseConfig,onResetConfig}){
         }
       }
     }
-    const noImages={...current,refImgs:[],deliveryImgs:[],refImg:undefined,imagesDroppedDueToSize:true};
+    const noImages=JSON.parse(JSON.stringify({...current,refImgs:[],deliveryImgs:[],refImg:undefined,imagesDroppedDueToSize:true}));
     try{
       await withTimeout(fs.collection("orders").doc(orderNo).set(noImages,merge?{merge:true}:{}),45000);
-      setOrders(prev=>prev.map(o=>o.no===orderNo?noImages:o));
-      setDraft(d=>d&&d.no===orderNo?noImages:d);
+      setOrders(prev=>prev.map(o=>o.no===orderNo?{...o,...noImages}:o));
+      setDraft(d=>d&&d.no===orderNo?{...d,...noImages}:d);
       markPermanentSyncFailure(orderNo,"ছবি অনেক ছোট করার পরও পাঠানো যায়নি, তাই ছবি ছাড়া অর্ডারের তথ্য সংরক্ষণ করা হয়েছে — অর্ডারটা নিরাপদ আছে, শুধু ছবিগুলো আবার যোগ করে দিতে হবে");
       return true;
     }catch(e){
@@ -2176,22 +2488,19 @@ function App({firebaseConfig,onResetConfig}){
     savePermanentSyncFailures(list);setPermanentSyncFailures(list);
   };
   const retryPendingWrites=async()=>{
+    // ── v4.53: আগের সংস্করণের জমে থাকা সারি একবারই নিরাপদে খালি করা হয়: শুধু যে নতুন অর্ডার কখনো
+    // সার্ভারে পৌঁছায়নি (সার্ভারে নথিই নেই) সেটা তৈরি করা হয়; বাকি সব (পুরনো কপি) ফেলে দেওয়া হয় ──
     const fs=fsRef.current;
     if(!fs||pendingWritesRef.current.length===0)return;
-    const remaining=[];
+    const keep=[];
     for(const item of pendingWritesRef.current){
+      if(item.kind!=="order"||item.merge||!item.orderNo||!item.data)continue;
       try{
-        if(item.kind==="order")await fs.collection("orders").doc(item.orderNo).set(item.data,item.merge?{merge:true}:{});
-        else if(item.kind==="doc")await fs.doc(item.path).set(item.data,item.merge?{merge:true}:{});
-        else if(item.kind==="collectionDoc")await fs.collection(item.collection).doc(item.docId).set(item.data,item.merge?{merge:true}:{});
-      }catch(e){
-        if(item.kind==="order"&&isLikelyTooLargeError(e)){
-          const ok=await autoResolveTooLarge(item.orderNo,item.merge,item.data);
-          if(!ok)remaining.push(item); // অত্যন্ত বিরল — সর্বোচ্চ কমপ্রেশনেও ফিট হয়নি, পরের চক্রে নিরবে আবার চেষ্টা হবে
-        }else remaining.push(item);
-      }
+        const ref=fs.collection("orders").doc(item.orderNo);
+        await fs.runTransaction(async tx=>{const d=await tx.get(ref);if(!d.exists)tx.set(ref,JSON.parse(JSON.stringify(item.data)))});
+      }catch(e){keep.push(item)}
     }
-    if(remaining.length!==pendingWritesRef.current.length)persistPending(remaining);
+    persistPending(keep);
   };
   // ── v4.40-এ যেসব অর্ডার "স্থায়ীভাবে ব্যর্থ" হিসেবে আলাদা তালিকায় জমা হয়েছিল (এবং ম্যানুয়াল
   // পদক্ষেপ চাইত), সেগুলো এখন একবারই স্বয়ংক্রিয়ভাবে সমাধানের চেষ্টা হয় — নতুন কোড চালু হওয়ার
@@ -2344,6 +2653,8 @@ function App({firebaseConfig,onResetConfig}){
   };
   const latestDataRef=useRef({});
   latestDataRef.current={orders,expenses,woodLots,workers,payrollWeeks,db,carpenters,woodSettings,laborSettings};
+  // v4.61: লট থেকে হিসাব করা প্রকৃত কাঠের দাম (চূড়ান্ত দাম বসানো না থাকলে এটাই ধরা হয়)
+  useMemo(()=>{SUGGESTED_WOOD_RATES=computeSuggestedWoodRates(woodLots,woodSettings)},[woodLots,woodSettings]);
 
   const buildBackupSnapshot=(auto)=>{
     const d=latestDataRef.current;
@@ -2446,12 +2757,20 @@ function App({firebaseConfig,onResetConfig}){
       //         আর "সার্ভারে পৌঁছায়নি এমন কিছু থাকলে আবার পাঠানো" জালটাও চালু আছে
       // synchronizeTabs ইচ্ছাকৃতভাবে বাদ — একাধিক ট্যাবের ওই ব্যবস্থাটাই আগের অনেক
       // লেখা-আটকে-যাওয়ার সমস্যার সাথে জড়িত ছিল।
+      // ── v4.53: Firestore সাধারণত একটা লম্বা খোলা সংযোগে (স্ট্রিম) তথ্য আনা-নেওয়া করে। অনেক মোবাইল
+      // নেটওয়ার্ক, প্রক্সি আর কম্পিউটারের অ্যান্টিভাইরাস এই স্ট্রিম আটকে রাখে — তখন ডিভাইস "অনলাইন" দেখায়,
+      // অথচ সার্ভারের কোনো নতুন তথ্য আসে না আর নিজের লেখাও যায় না; শুধু নিজের পুরনো কপি দেখায়। তিন
+      // ডিভাইসে তিন রকম তথ্যের মূল কারণ এটাই। এখন সবসময় "লং-পোলিং" (ছোট ছোট সাধারণ অনুরোধ) — এটা
+      // সব নেটওয়ার্কে কাজ করে। এটা অবশ্যই অন্য যেকোনো Firestore কাজের আগে বসাতে হয় ──
+      try{firestore.settings({experimentalForceLongPolling:true,experimentalAutoDetectLongPolling:false,merge:true})}catch(e){console.warn("firestore settings",e)}
       try{firestore.enablePersistence().catch(()=>{})}catch(e){}
       fsRef.current=firestore;
       migrateLegacyPermanentFailures();
 
       const unsubOrders=firestore.collection("orders").onSnapshot({includeMetadataChanges:true},snap=>{
         clearTimeout(timer);setTimedOut(false);
+        trackSync("orders",snap);
+        pendingOrderNosRef.current=new Set(snap.docs.filter(d=>d.metadata&&d.metadata.hasPendingWrites).map(d=>d.id));
         // ── এই লিসেনারই এখন অর্ডার তালিকার একমাত্র উৎস। Firestore নিজেই এখানে স্থানীয়
         // পরিবর্তন সাথে সাথে দেখায় এবং সার্ভার নিশ্চিত করলে আবার পাঠায় — অন্য ডিভাইসের
         // পরিবর্তনও এখান দিয়েই আসে। আগে এর পাশাপাশি পর্যায়ক্রমিক মিলকরণ কোডও তালিকা বসাত,
@@ -2463,21 +2782,25 @@ function App({firebaseConfig,onResetConfig}){
       },err=>{clearTimeout(timer);setConnError(err.message)});
 
       const unsubExpenses=firestore.collection("expenses").onSnapshot({includeMetadataChanges:true},snap=>{
+        trackSync("expenses",snap);
         const list=snap.docs.map(d=>d.data()).sort((a,b)=>new Date(b.at||b.date||0)-new Date(a.at||a.date||0));
         setExpenses(list);
       },err=>setConnError(err.message));
 
       const unsubLots=firestore.collection("woodlots").onSnapshot({includeMetadataChanges:true},snap=>{
+        trackSync("woodlots",snap);
         const list=snap.docs.map(d=>d.data()).sort((a,b)=>new Date(b.date||0)-new Date(a.date||0));
         setWoodLots(list);
       },err=>setConnError(err.message));
 
       const unsubWorkers=firestore.collection("workers").onSnapshot({includeMetadataChanges:true},snap=>{
+        trackSync("workers",snap);
         const list=snap.docs.map(d=>d.data());
         setWorkers(list);
       },err=>{});
 
       const unsubPayroll=firestore.collection("payrollWeeks").onSnapshot({includeMetadataChanges:true},snap=>{
+        trackSync("payrollWeeks",snap);
         const map={};
         snap.docs.forEach(d=>{map[d.id]=d.data()});
         setPayrollWeeks(map);
@@ -2485,6 +2808,7 @@ function App({firebaseConfig,onResetConfig}){
 
       const unsubDb=firestore.doc("meta/db").onSnapshot({includeMetadataChanges:true},snap=>{
         clearTimeout(timer);setTimedOut(false);
+        trackSync("db",snap);
         if(snap.exists){
           const data=snap.data();
           // Migration: strip any legacy gallery/coverImage fields out of the main db doc
@@ -2564,6 +2888,28 @@ function App({firebaseConfig,onResetConfig}){
         setRackSplits(snap.exists?(snap.data().list||[]):[]);
       },err=>{});
 
+      // ── v4.53: সর্বনিম্ন সংস্করণ — ওয়েবসাইটে নতুন সংস্করণ চালু হলেই পুরনো ট্যাব/ডাউনলোড করা পুরনো কপি
+      // আর লিখতে পারে না (পুরনো কোডের ভুল থেকে যেন কারো তথ্য নষ্ট না হয়)। ওয়েবসাইট থেকে খোলা হলে
+      // নিজে থেকেই সর্বশেষ সংস্করণ নতুন করে আনে; ফাইল থেকে খোলা পুরনো কপিতে শুধু একটা নোটিশ দেখায় ──
+      const unsubVer=firestore.doc("meta/appVersion").onSnapshot(snap=>{
+        if(snap.metadata&&snap.metadata.fromCache)return;
+        const d=snap.exists?snap.data():{};
+        const min=String(d.min||"0");
+        const cmp=cmpVersion(BUILD_TAG,min);
+        const isSite=/^https?:$/.test(location.protocol)&&!/^(localhost|127\.|192\.168\.)/.test(location.hostname);
+        if(cmp<0){
+          let n=0;try{n=+(sessionStorage.getItem("rf_ver_reloads")||0)}catch(e){}
+          if(isSite&&n<2){try{sessionStorage.setItem("rf_ver_reloads",String(n+1))}catch(e){}window.location.replace(location.pathname+"?v="+Date.now());return}
+          setVerBlock({min,url:d.url||""});
+          try{firestore.terminate()}catch(e){}
+          if(fsRef.current===firestore)fsRef.current=null;
+          return;
+        }
+        try{sessionStorage.removeItem("rf_ver_reloads")}catch(e){}
+        if(isSite&&(cmp>0||!d.url))firestore.doc("meta/appVersion").set({min:cmp>0?BUILD_TAG:min,url:location.origin+location.pathname,at:new Date().toISOString()},{merge:true}).catch(()=>{});
+      },()=>{});
+      const unsubDevices=firestore.collection("devices").onSnapshot(snap=>{setDevices(snap.docs.map(d=>d.data()))},()=>{});
+
       const unsubCarp=firestore.doc("meta/carpenters").onSnapshot(snap=>{
         setCarpenters(snap.exists?(snap.data().list||[]):[]);
       },err=>setConnError(err.message));
@@ -2572,8 +2918,8 @@ function App({firebaseConfig,onResetConfig}){
       (async()=>{
         if(localStorage.getItem("rf_migrated_to_cloud"))return;
         try{
-          const existing=await firestore.collection("orders").limit(1).get();
-          if(existing.empty){
+          const existing=await firestore.collection("orders").limit(1).get({source:"server"});
+          if(existing.empty&&!(existing.metadata&&existing.metadata.fromCache)){
             const localOrders=S.get("rf_orders_v5")||[];
             const localDb=S.get("rf_db_v5");
             const localExpenses=S.get("rf_expenses_v1")||[];
@@ -2626,49 +2972,15 @@ function App({firebaseConfig,onResetConfig}){
           // এটাই ছিল। সার্ভারের পরিবর্তন আনার কাজটা রিয়েল-টাইম লিসেনার এমনিতেই করে (সেটাই
           // তার কাজ), তাই এই অংশটা শুধু ক্ষতিই করছিল। এখন শুধু "সার্ভারে পৌঁছায়নি এমন কিছু
           // থাকলে পাঠিয়ে দেওয়া" — এই একমুখী কাজটুকুই থাকে ──
-          const missingOnServer=(ordersRef.current||[]).filter(o=>o&&o.no&&!serverIds.has(o.no)).map(o=>o.no);
-          // ── এই ডিভাইসে "ডেলিভারড" হিসেবে চিহ্নিত কিন্তু সার্ভারে এখনো তা প্রতিফলিত হয়নি —
-          // এটা প্রায় নিশ্চিতভাবেই মানে সেই লেখাটা (হয়তো অনেক আগে, পুরনো কোনো বাগের কারণে)
-          // কখনো সার্ভারে পৌঁছায়নি। তাই আবার পাঠানো নিরাপদ — এটা একমুখী (শুধু সার্ভারকে
-          // "ডেলিভারড" দিকে এগিয়ে নেয়, কখনো উল্টো দিকে না), তাই সদ্য করা কোনো পরিবর্তন
-          // এতে হারানোর ঝুঁকি নেই ──
-          const deliveredNotSynced=(ordersRef.current||[]).filter(o=>{
-            if(!o||!o.no||!o.delivered)return false;
-            const sv=serverById[o.no];
-            return !sv||!sv.delivered;
-          }).map(o=>o.no);
-          const missingOnServer2=[...new Set([...missingOnServer,...deliveredNotSynced])];
-          const toResolve=[];
-          missingOnServer2.forEach(no=>{
-            // ── আগে একবার চেষ্টা হলেই স্থায়ীভাবে "চেষ্টা হয়ে গেছে" চিহ্ন বসে যেত, তাই আর
-            // কখনো দ্বিতীয়বার চেষ্টা হতো না। এখন ১ মিনিট পরই আবার চেষ্টা করা যাবে ──
-            const lastTry=autoResolveAttemptedRef.current[no]||0;
-            if(Date.now()-lastTry>60000){
-              autoResolveAttemptedRef.current[no]=Date.now();
-              toResolve.push(no);
-            }
-          });
-          // সার্ভারে পৌঁছে গেছে এমন অর্ডারের চিহ্ন সাফ করা
-          Object.keys(autoResolveAttemptedRef.current).forEach(no=>{
-            if(serverIds.has(no)&&!deliveredNotSynced.includes(no))delete autoResolveAttemptedRef.current[no];
-          });
-          setAutoStuckStatus(prev=>({...(prev||{}),totalDocs:serverIds.size,foundPendingCount:missingOnServer2.length,queuedThisRun:toResolve.length,resolvedThisRun:0,failedThisRun:0,lastAttemptDetail:[]}));
-          if(missingOnServer2.length)safetyBackupStuck(missingOnServer2);
-          // ── একসাথে অনেকগুলো চালালে ফোন ধীর হয়ে যেতে পারে (ছবি ছোট করা + নেটওয়ার্ক, দুটোই
-          // ভারী কাজ) — তাই একটার পর একটা, ধারাবাহিকভাবে সমাধানের চেষ্টা হয় ──
-          for(const no of toResolve){
-            const order=ordersRef.current.find(o=>o.no===no);
-            if(!order){
-              setAutoStuckStatus(prev=>({...prev,lastAttemptDetail:[...(prev.lastAttemptDetail||[]),{no,ok:false,reason:"এই ডিভাইসের তালিকায় এই নম্বরটাই নেই"}]}));
-              continue;
-            }
-            try{
-              const ok=await autoResolveTooLarge(no,false,order);
-              setAutoStuckStatus(prev=>({...prev,resolvedThisRun:(prev.resolvedThisRun||0)+(ok?1:0),failedThisRun:(prev.failedThisRun||0)+(ok?0:1),lastAttemptDetail:[...(prev.lastAttemptDetail||[]),{no,ok}]}));
-            }catch(e2){
-              setAutoStuckStatus(prev=>({...prev,failedThisRun:(prev.failedThisRun||0)+1,lastAttemptDetail:[...(prev.lastAttemptDetail||[]),{no,ok:false,reason:e2.message}]}));
-            }
-          }
+          // ── v4.53: এখান থেকে আর কোনো অর্ডার সার্ভারে "আবার পাঠানো" হয় না ──
+          // আগে এই ডিভাইসে আছে কিন্তু সার্ভারে নেই এমন অর্ডার (বা এখানে ডেলিভারড কিন্তু সার্ভারে নয়)
+          // পুরো অর্ডারসহ আবার লিখে দেওয়া হতো। ফলে অন্য ডিভাইসে মুছে ফেলা অর্ডার ফিরে আসত, আর পুরনো
+          // কপি লিখে দেওয়ায় অন্য ডিভাইসে নেওয়া পেমেন্ট মুছে যেত। এই ডিভাইসের নিজের লেখা পৌঁছে দেওয়ার
+          // কাজ Firestore নিজেই করে (নিজস্ব সারিতে) — তাই এখানে শুধু হিসাব রাখা হয় ──
+          const localNos=new Set((ordersRef.current||[]).filter(o=>o&&o.no).map(o=>o.no));
+          const onlyHere=[...localNos].filter(no=>!serverIds.has(no)&&!pendingOrderNosRef.current.has(no));
+          const onlyServer=[...serverIds].filter(no=>!localNos.has(no));
+          setAutoStuckStatus(prev=>({...(prev||{}),totalDocs:serverIds.size,foundPendingCount:0,queuedThisRun:0,resolvedThisRun:0,failedThisRun:0,lastAttemptDetail:[],onlyHere:onlyHere.length,onlyServer:onlyServer.length}));
           // ── অর্ডারের বাইরের তথ্যগুলোও একইভাবে মেলানো হয় (খরচ, কাঠ, কর্মী, বেতন, ফার্নিচার
           // ডেটাবেস) — এগুলোও একই আটকে থাকা সারির পেছনে আটকে ছিল, যার ফলে "৩০ দিনের নগদ প্রবাহ"
           // আর "কাঠের মাপ নেই" সংখ্যাগুলো ডিভাইসে ডিভাইসে আলাদা দেখাচ্ছিল। প্রতিটা ধাপেই সময়সীমা
@@ -2685,12 +2997,11 @@ function App({firebaseConfig,onResetConfig}){
               // সার্ভার থেকে টেনে এনে বসানো হয় না — রিয়েল-টাইম লিসেনারই সেটা করে।
               // এখানে বসালে সদ্য করা পরিবর্তন পুরনো কপি দিয়ে মুছে যেত।
               const changed=false;
-              let pushedCount=0;
-              for(const item of(localList||[])){
-                if(item&&item.id&&!serverIds.has(item.id)){
-                  try{await withTimeout(fs2.collection(name).doc(item.id).set(item),45000,"সময়সীমা পার");pushedCount++}catch(e3){}
-                }
-              }
+              // v4.53: এই ডিভাইসে আছে কিন্তু সার্ভারে নেই এমন কিছু আর আবার পাঠানো হয় না (অন্য ডিভাইসে
+              // মুছে ফেলা খরচ/লট/কর্মী এভাবেই ফিরে আসত) — শুধু গোনা হয়
+              const pushedCount=0;
+              const onlyHereN=(localList||[]).filter(item=>item&&item.id&&!serverIds.has(item.id)).length;
+              if(onlyHereN)otherSyncStatus[name+"_onlyHere"]=onlyHereN;
               otherSyncStatus[name]=`সার্ভারে ${s.docs.length}টি${changed?", হালনাগাদ করা হয়েছে":""}${pushedCount?`, ${pushedCount}টি পাঠানো হয়েছে`:""}`;
             }catch(e3){otherSyncStatus[name]="ত্রুটি: "+e3.message}
           };
@@ -2795,21 +3106,8 @@ function App({firebaseConfig,onResetConfig}){
                 });
                 if(needsFix){ordersNeedingFix.push({no:o.no,items:newItems});fixedOrderLinks++}
               });
-              if(ordersNeedingFix.length){
-                setOrders(prev=>prev.map(o=>{
-                  const fix=ordersNeedingFix.find(f=>f.no===o.no);
-                  return fix?{...o,items:fix.items}:o;
-                }));
-                const fixChunks=[];
-                for(let i=0;i<ordersNeedingFix.length;i+=400)fixChunks.push(ordersNeedingFix.slice(i,i+400));
-                for(const chunk of fixChunks){
-                  try{
-                    const batch=fs2.batch();
-                    chunk.forEach(o=>batch.set(fs2.collection("orders").doc(o.no),{items:o.items},{merge:true}));
-                    await withTimeout(batch.commit(),45000,"সময়সীমা পার");
-                  }catch(e5){}
-                }
-              }
+              // v4.53: অর্ডারের ক্যাটাগরি-সংযোগ ঠিক করতে পুরো আইটেম তালিকা আর লেখা হয় না (পুরনো কপি থেকে
+              // লেখায় অন্য ডিভাইসের বদল মুছে যেত) — শুধু হিসাব রাখা হয়
               setDbGaps({missingFromDb,localOnlyCats:addedCats,localOnlyVars:addedVars,localOnlyWood:filledWood,merged});
               // ── ⚠️ স্বয়ংক্রিয়ভাবে পুরো ডেটাবেস নথি লেখা বন্ধ করা হলো ──
               // আগে এখানে প্রতিটা ডিভাইস নিজের স্থানীয় কপি + সার্ভারের কপি মিলিয়ে একটা
@@ -2826,7 +3124,7 @@ function App({firebaseConfig,onResetConfig}){
               // ফিরিয়ে আনে না। ফলে যে ডিভাইসেই কাজ করুন, সব ডিভাইসে একই তথ্য থাকবে ──
               // ── v4.52: আগে এখানে পুরো ডেটাবেস নতুন করে লেখা হতো (set) — এর মাঝে অন্য কোথাও করা
               // পরিবর্তন মুছে যেতে পারত। এখন শুধু যা সার্ভারে নেই সেই ঘরগুলোই যোগ হয় ──
-              if(needsPush&&!skipPush&&pushWrites.length){
+              if(false&&needsPush&&!skipPush&&pushWrites.length){ // v4.53: বন্ধ — পুরনো কপি থেকে কিছু আর যোগ করা হয় না
                 try{
                   const FP=firebase.firestore.FieldPath;
                   const args=[];pushWrites.forEach(([segs,val])=>{args.push(new FP(...segs),val)});
@@ -2858,33 +3156,9 @@ function App({firebaseConfig,onResetConfig}){
             if(!(pw.metadata&&pw.metadata.fromCache)){
               const map={};pw.docs.forEach(d=>{map[d.id]=d.data()});
               if(!(pw.docs.length===0&&Object.keys(od.payrollWeeks||{}).length>0)){
-                let pushedCount=0;
-                for(const[wk,val]of Object.entries(od.payrollWeeks||{})){
-                  if(!map[wk]){
-                    // পুরো সপ্তাহের নথিই সার্ভারে নেই — পুরোটা পাঠানো
-                    try{await withTimeout(fs2.collection("payrollWeeks").doc(wk).set(val),45000,"সময়সীমা পার");pushedCount++}catch(e4){}
-                  }else{
-                    // ── নথি আছে, কিন্তু এই ডিভাইসে যোগ করা কিছু অগ্রিম/হাজিরা এখনো সার্ভারে
-                    // পৌঁছায়নি এমন হতে পারে (আগে এটা এখানে ধরা পড়ত না — ঠিক এই কারণেই কিছু
-                    // অগ্রিম "হারিয়ে" যাচ্ছিল)। প্রতিটা অগ্রিম এন্ট্রি আলাদাভাবে মিলিয়ে দেখা হয় ──
-                    const serverAdvIds=new Set(((map[wk].advances)||[]).map(a=>a.id));
-                    const missingAdvances=((val.advances)||[]).filter(a=>a.id&&!serverAdvIds.has(a.id));
-                    for(const adv of missingAdvances){
-                      try{await withTimeout(fs2.collection("payrollWeeks").doc(wk).set({advances:firebase.firestore.FieldValue.arrayUnion(adv)},{merge:true}),45000,"সময়সীমা পার");pushedCount++}catch(e4){}
-                    }
-                    // হাজিরার তথ্যও একইভাবে — স্থানীয়ভাবে থাকা কিন্তু সার্ভারে না থাকা এন্ট্রি পাঠানো
-                    // (এখানেও আগে ডট-যুক্ত নামে লেখা হচ্ছিল, যা নেস্টেড ম্যাপে বসত না — ঠিক করা হলো)
-                    const serverAtt=map[wk].attendance||{};
-                    const missingAtt={};
-                    Object.entries(val.attendance||{}).forEach(([wid,days])=>{
-                      if(serverAtt[wid]===undefined)missingAtt[wid]=days;
-                    });
-                    if(Object.keys(missingAtt).length){
-                      try{await withTimeout(fs2.collection("payrollWeeks").doc(wk).set({attendance:missingAtt},{merge:true}),45000,"সময়সীমা পার");pushedCount++}catch(e4){}
-                    }
-                  }
-                }
-                otherSyncStatus.payrollWeeks=pushedCount?`${pushedCount}টি পাঠানো হয়েছে`:"মিলে আছে";
+                // v4.53: অন্য ডিভাইসে মুছে ফেলা অগ্রিম/হাজিরা পুরনো কপি থেকে আর ফিরিয়ে আনা হয় না — শুধু গোনা
+                const onlyHereWeeks=Object.keys(od.payrollWeeks||{}).filter(wk=>!map[wk]).length;
+                otherSyncStatus.payrollWeeks=`সার্ভারে ${pw.docs.length}টি সপ্তাহ${onlyHereWeeks?` · শুধু এই ডিভাইসে ${onlyHereWeeks}টি`:""}`;
               }
             }
           }catch(e3){otherSyncStatus.payrollWeeks="ত্রুটি: "+e3.message}
@@ -2917,7 +3191,7 @@ function App({firebaseConfig,onResetConfig}){
       const firstStuckCheck=setTimeout(autoStuckCheck,15000);
       const stuckCheckInterval=setInterval(autoStuckCheck,60000);
 
-      return()=>{clearTimeout(timer);clearTimeout(firstStuckCheck);clearInterval(stuckCheckInterval);unsubOrders();unsubExpenses();unsubLots();unsubDb();unsubGalleries();unsubWoodSettings();unsubLaborSettings();unsubAlertSettings();unsubRackSplits();unsubRackBands();unsubCarp();unsubWorkers();unsubPayroll()};
+      return()=>{clearTimeout(timer);clearTimeout(firstStuckCheck);clearInterval(stuckCheckInterval);try{unsubVer();unsubDevices()}catch(e){}unsubOrders();unsubExpenses();unsubLots();unsubDb();unsubGalleries();unsubWoodSettings();unsubLaborSettings();unsubAlertSettings();unsubRackSplits();unsubRackBands();unsubCarp();unsubWorkers();unsubPayroll()};
     }catch(e){
       clearTimeout(timer);
       setConnError(e.message);
@@ -2948,14 +3222,14 @@ function App({firebaseConfig,onResetConfig}){
           // বলবৎ করার জন্য। এই ডিভাইসে আছে কিন্তু সার্ভারে নেই এমন অর্ডার পেলে চুপচাপ সার্ভারে
           // পাঠিয়ে দেয় (আগে এটা ⚙️ সেকশনে হাতে করতে হতো), আর সেগুলো তালিকা থেকেও হারিয়ে যায় না।
           // এই একই স্ন্যাপশটই ব্যবহার হয়, তাই বাড়তি কোনো পড়ার খরচ নেই ──
+          // ── v4.53: সার্ভারে নেই এমন অর্ডার আর কখনো আবার পাঠানো হয় না (অন্য ডিভাইসে মুছে ফেলা অর্ডার
+          // এভাবেই ফিরে আসত)। শুধু এই ডিভাইসের সদ্য-করা, এখনো পৌঁছানোর পথে থাকা পরিবর্তনগুলো রাখা হয় ──
           const serverNos=new Set(snap.docs.map(d=>d.id));
-          const localOnly=(ordersRef.current||[]).filter(o=>o&&o.no&&!serverNos.has(o.no));
-          setOrders(localOnly.length?[...localOnly,...list]:list);
-          localOnly.forEach(o=>{
-            fs.collection("orders").doc(o.no).set(o).catch(e=>{
-              if(isLikelyTooLargeError(e))autoResolveTooLarge(o.no,false,o);
-            });
-          });
+          const pend=pendingOrderNosRef.current;
+          const localMap={};(ordersRef.current||[]).forEach(o=>{if(o&&o.no)localMap[o.no]=o});
+          const localPending=Object.values(localMap).filter(o=>!serverNos.has(o.no)&&pend.has(o.no));
+          const merged=list.map(o=>pend.has(o.no)&&localMap[o.no]?localMap[o.no]:o);
+          setOrders(localPending.length?[...localPending,...merged]:merged);
         }),
       ];
       // ধীরে বদলায় এমন কালেকশনগুলো প্রতিবার নতুন করে পড়ার দরকার নেই — রিয়েল-টাইম লিসেনার
@@ -3118,6 +3392,8 @@ function App({firebaseConfig,onResetConfig}){
   // ডেলিভারি হয়ে যাওয়া অর্ডার ইচ্ছাকৃতভাবে বাদ — ওগুলো তখনকার মাপেই বানানো হয়েছে, বদলে
   // দিলে লাভ-ক্ষতির ইতিহাস মিথ্যা হয়ে যাবে ──
   const propagateWoodChange=async(catKey,varKey,newSections)=>{
+    // v4.61: ডেলিভারড অর্ডারে এই মডেলের কাঠের তালিকা ফাঁকা থাকলে একবার বসে যায় (আগে বসানো থাকলে আর বদলায় না)
+    setTimeout(()=>{backfillDeliveredWood({[catKey+"|"+varKey]:newSections})},1500);
     const fs=fsRef.current;
     const affected=(ordersRef.current||[]).filter(o=>!o.delivered&&!o.cancelled&&(o.items||[]).some(it=>it.catKey===catKey&&it.varKey===varKey));
     if(!affected.length)return;
@@ -3152,6 +3428,8 @@ function App({firebaseConfig,onResetConfig}){
       if(!isSrc(it))return it;
       const base={...it,catKey:toCat,varKey:toVar,variantBn:keptVariant.bn,code:keptVariant.code||it.code};
       if(!o.delivered&&!o.cancelled&&keptVariant.sections&&keptVariant.sections.length)base.sections=JSON.parse(JSON.stringify(keptVariant.sections));
+      // v4.61: ডেলিভারড অর্ডারে কাঠের তালিকা ফাঁকা থাকলে রাখা মডেলের তালিকা একবার বসে ("পরে বসানো মাপ")
+      else if(o.delivered&&!o.cancelled&&itemWoodEmpty(it)&&!itemWoodEmpty({sections:keptVariant.sections})){base.sections=JSON.parse(JSON.stringify(keptVariant.sections));base.woodFilledAt=todayStr()}
       return base;
     });
     setOrders(prev=>prev.map(o=>(o.items||[]).some(isSrc)?{...o,items:remap(o)}:o));
@@ -3175,6 +3453,8 @@ function App({firebaseConfig,onResetConfig}){
       if(!(it.catKey===fromCat&&it.varKey===fromVar))return it;
       const base={...it,catKey:toCat,varKey:toVar,variantBn:keptVariant.bn,code:keptVariant.code||it.code};
       if(!o.delivered&&!o.cancelled&&keptVariant.sections&&keptVariant.sections.length)base.sections=JSON.parse(JSON.stringify(keptVariant.sections));
+      // v4.61: ডেলিভারড অর্ডারে কাঠের তালিকা ফাঁকা থাকলে রাখা মডেলের তালিকা একবার বসে ("পরে বসানো মাপ")
+      else if(o.delivered&&!o.cancelled&&itemWoodEmpty(it)&&!itemWoodEmpty({sections:keptVariant.sections})){base.sections=JSON.parse(JSON.stringify(keptVariant.sections));base.woodFilledAt=todayStr()}
       return base;
     });
     setOrders(prev=>prev.map(o=>(o.items||[]).some(it=>it.catKey===fromCat&&it.varKey===fromVar)?{...o,items:remap(o)}:o));
@@ -3304,32 +3584,32 @@ function App({firebaseConfig,onResetConfig}){
   // ধরে রাখত, সেই কপি দিয়ে লিখলে পরে যোগ হওয়া পেমেন্ট বা ডেলিভারি স্ট্যাটাস মুছে যেতে পারত।
   // এখন: (১) সর্বশেষ পরিচিত কপির উপরে পরিবর্তন বসানো হয়, (২) টাকার হিসাব ও স্ট্যাটাসের মতো
   // জরুরি ক্ষেত্র কখনোই ঢাকা পড়ে না, (৩) merge:true — অনুপস্থিত ক্ষেত্র সার্ভারে মুছে যায় না।
-  const PROTECTED_ORDER_FIELDS=["payments","delivered","deliveredAt","cancelled","cancelledAt"];
+  // ── v4.53: অর্ডার আপডেট — শুধু যা বদলেছে ──
+  // আগে পুরো অর্ডার (পেমেন্টের তালিকাসহ) লেখা হতো। যে ডিভাইসের তথ্য পুরনো, সেখানে শুধু একটা স্লিপ প্রিন্ট
+  // করলেও তার পুরনো পেমেন্ট-তালিকা সার্ভারে বসে যেত — অন্য ডিভাইসে নেওয়া টাকা মুছে যেত, ডেলিভারি উল্টে
+  // যেত। এখন এই ডিভাইসের সর্বশেষ কপির সাথে তুলনা করে কেবল বদলানো ঘরগুলোই যায়; পেমেন্ট যায় এন্ট্রি ধরে ──
   const updateOrder=(updated)=>{
     const live=orders.find(o=>o.no===updated.no)||null;
-    let safe={...(live||{}),...updated};
-    if(live){
-      PROTECTED_ORDER_FIELDS.forEach(f=>{
-        const incomingHasIt=Object.prototype.hasOwnProperty.call(updated,f)&&updated[f]!==undefined;
-        // ইচ্ছাকৃতভাবে এই ক্ষেত্র বদলানো হলে (যেমন বাতিল করা) সেটাই মানা হবে,
-        // নাহলে সার্ভারের সর্বশেষ মানটাই অক্ষত থাকবে
-        if(!incomingHasIt&&live[f]!==undefined)safe[f]=live[f];
-      });
-    }
-    Object.keys(safe).forEach(k=>{if(safe[k]===undefined)delete safe[k]}); // Firestore undefined নেয় না
-    setOrders(prev=>prev.map(o=>o.no===safe.no?safe:o));
-    if(draft&&draft.no===safe.no)setDraft(safe);
+    const merged={...(live||{}),...updated};
+    Object.keys(merged).forEach(k=>{if(merged[k]===undefined)delete merged[k]});
+    setOrders(prev=>prev.map(o=>o.no===merged.no?merged:o));
+    if(draft&&draft.no===merged.no)setDraft(merged);
     const push=async()=>{
-      if(estimateOrderBytes(safe)>950000){
-        await autoResolveTooLarge(safe.no,true,safe);
-        return;
-      }
-      if(!fsRef.current)return;
+      const fs=fsRef.current;
+      if(!fs)return;
+      const ref=fs.collection("orders").doc(merged.no);
       try{
-        await fsRef.current.collection("orders").doc(safe.no).set(safe,{merge:true});
+        if(!live){await ref.set(JSON.parse(JSON.stringify(merged)),{merge:true});return}
+        const patch=topLevelPatch(live,merged,["payments","no"]);
+        if(Object.keys(patch).length){
+          if(estimateOrderBytes(merged)>950000&&(patch.refImgs||patch.deliveryImgs)){
+            await autoResolveTooLarge(merged.no,true,{refImgs:merged.refImgs||[],deliveryImgs:merged.deliveryImgs||[]});
+          }else await ref.set(patch,{merge:true});
+        }
+        if(JSON.stringify(live.payments||[])!==JSON.stringify(merged.payments||[]))await applyListDiff(ref,"payments",live.payments,merged.payments);
       }catch(err){
-        if(isLikelyTooLargeError(err))await autoResolveTooLarge(safe.no,true,safe);
-        else queuePendingWrite({kind:"order",orderNo:safe.no,data:safe,merge:true});
+        if(isLikelyTooLargeError(err))await autoResolveTooLarge(merged.no,true,{refImgs:merged.refImgs||[],deliveryImgs:merged.deliveryImgs||[]});
+        else if(!isTimeoutErr(err))alert("⚠️ অর্ডারের পরিবর্তন সার্ভারে পাঠাতে সমস্যা হয়েছে: "+err.message);
       }
     };
     push();
@@ -3364,7 +3644,13 @@ function App({firebaseConfig,onResetConfig}){
       const next=exists?(prev||[]).map(e=>e.id===id?withId:e):[...(prev||[]),withId];
       return next.sort((a,b)=>new Date(b.at||b.date||0)-new Date(a.at||a.date||0));
     });
-    if(fsRef.current)fsRef.current.collection("expenses").doc(id).set(withId).catch(err=>alert("⚠️ খরচ সিঙ্ক করতে সমস্যা হয়েছে: "+err.message+"\n\nখরচটা এই ডিভাইসে আছে — অ্যাপ খোলা রাখলে স্বয়ংক্রিয়ভাবে আবার চেষ্টা হবে।"));
+    // v4.53: আগে থাকা খরচ বদলালে শুধু বদলানো ঘরগুলোই যায়
+    const oldExp=(latestDataRef.current.expenses||[]).find(e=>e.id===id);
+    if(fsRef.current){
+      const ref=fsRef.current.collection("expenses").doc(id);
+      const p=oldExp?ref.set(topLevelPatch(oldExp,withId,["id"]),{merge:true}):ref.set(JSON.parse(JSON.stringify(withId)));
+      p.catch(err=>{if(!isTimeoutErr(err))alert("⚠️ খরচ সার্ভারে পাঠাতে সমস্যা হয়েছে: "+err.message)});
+    }
   };
   const saveCarpenters=(list)=>{
     setCarpenters(list);
@@ -3376,11 +3662,25 @@ function App({firebaseConfig,onResetConfig}){
     const newIds=new Set(newList.map(l=>l.id));
     const oldList=woodLotsRef.current||woodLots||[];
     // পরিবর্তিত/নতুন লটগুলোই লেখা হয়
+    // ── v4.53: আগে পুরো লট (সব গুড়ি, সাপ্লায়ারের সব পেমেন্টসহ) নতুন করে লেখা হতো — পুরনো কপির ডিভাইস
+    // থেকে একটা গুড়ি কাটা চিহ্ন দিলেও অন্য ডিভাইসে দেওয়া পেমেন্ট মুছে যেত। এখন: সাধারণ ঘর শুধু বদলালে,
+    // টাকার তালিকা এন্ট্রি ধরে, আর গুড়ির তালিকা id ধরে জায়গামতো ──
+    const fsL=fsRef.current;
     newList.forEach(lot=>{
       const old=oldList.find(l=>l.id===lot.id);
-      if(!old||JSON.stringify(old)!==JSON.stringify(lot)){
-        fsRef.current.collection("woodlots").doc(lot.id).set(lot).catch(err=>alert("⚠️ কাঠের স্টক সিঙ্ক করতে সমস্যা হয়েছে: "+err.message));
-      }
+      const ref=fsL.collection("woodlots").doc(lot.id);
+      const fail=(err)=>{if(!isTimeoutErr(err))alert("⚠️ কাঠের স্টক সার্ভারে পাঠাতে সমস্যা হয়েছে: "+err.message)};
+      if(!old){ref.set(JSON.parse(JSON.stringify(lot))).catch(fail);return}
+      if(JSON.stringify(old)===JSON.stringify(lot))return;
+      const patch=topLevelPatch(old,lot,["id","payments","millingEntries","logs"]);
+      (async()=>{
+        try{
+          if(Object.keys(patch).length)await ref.set(patch,{merge:true});
+          if(JSON.stringify(old.payments||[])!==JSON.stringify(lot.payments||[]))await applyListDiff(ref,"payments",old.payments,lot.payments);
+          if(JSON.stringify(old.millingEntries||[])!==JSON.stringify(lot.millingEntries||[]))await applyListDiff(ref,"millingEntries",old.millingEntries,lot.millingEntries);
+          if(JSON.stringify(old.logs||[])!==JSON.stringify(lot.logs||[]))await applyOrderedListDiff(fsL,ref,"logs",old.logs,lot.logs);
+        }catch(err){fail(err)}
+      })();
     });
     // ── মুছে ফেলার রক্ষাকবচ: একবারে ৩টার বেশি লট মুছে যাওয়ার কথা এলে বাতিল, কারণ এই
     // ডিভাইসের তালিকা পুরনো হলে অন্য ডিভাইসে যোগ করা লট মুছে যেত ──
@@ -3401,7 +3701,13 @@ function App({firebaseConfig,onResetConfig}){
     const id=worker.id||("worker_"+Date.now());
     const withId={...worker,id};
     setWorkers(prev=>{const exists=prev.some(w=>w.id===id);return exists?prev.map(w=>w.id===id?withId:w):[...prev,withId]});
-    if(fsRef.current)fsRef.current.collection("workers").doc(id).set(withId).catch(err=>alert("⚠️ কর্মীর তথ্য সিঙ্ক করতে সমস্যা হয়েছে: "+err.message));
+    // v4.53: আগে থাকা কর্মীর প্রোফাইল বদলালে শুধু বদলানো ঘরগুলোই যায়
+    const oldW=(latestDataRef.current.workers||[]).find(w=>w.id===id);
+    if(fsRef.current){
+      const ref=fsRef.current.collection("workers").doc(id);
+      const p=oldW?ref.set(topLevelPatch(oldW,withId,["id"]),{merge:true}):ref.set(JSON.parse(JSON.stringify(withId)));
+      p.catch(err=>{if(!isTimeoutErr(err))alert("⚠️ কর্মীর তথ্য সার্ভারে পাঠাতে সমস্যা হয়েছে: "+err.message)});
+    }
   };
   const deleteWorker=(id)=>{
     setWorkers(prev=>prev.filter(w=>w.id!==id));
@@ -3484,6 +3790,15 @@ function App({firebaseConfig,onResetConfig}){
   // যাতে সব জায়গায় (Transport Slip, Usage Analysis) একই কোড তৈরি হয়
   const woodSettingsWithBands=useMemo(()=>({...woodSettings,__rackBands:rackBands}),[woodSettings,rackBands]);
 
+  // v4.61: নতুন অর্ডারের দামের পরামর্শে সাম্প্রতিক আসল বেতন ও খরচের হার (শুধু নতুন অর্ডারের পাতায় হিসাব হয়)
+  const recentCostRates=useMemo(()=>page==="form"?furnitureCosting(orders,buildSpendLedger(expenses,payrollWeeks,workers,woodLots),woodSettings,laborSettings,db,null).recent:null,[page,orders,expenses,payrollWeeks,workers,woodLots,woodSettings,laborSettings,db]);
+  if(verBlock)return<div style={{padding:"40px 24px",textAlign:"center",maxWidth:440,margin:"50px auto"}}>
+    <div style={{fontSize:36,marginBottom:10}}>⛔</div>
+    <div style={{fontSize:16,fontWeight:800,color:"#991b1b",marginBottom:10}}>এটা অ্যাপের পুরনো সংস্করণ (v{BUILD_TAG})</div>
+    <div style={{fontSize:12.5,color:"#555",lineHeight:1.7,marginBottom:18}}>সর্বশেষ সংস্করণ v{verBlock.min} চালু হয়ে গেছে। পুরনো কপি থেকে লিখলে অন্য ডিভাইসের তথ্য নষ্ট হতে পারে, তাই এই কপি থেকে আর কিছুই সংরক্ষণ হবে না।{location.protocol==="file:"?" এটা ডাউনলোড করা একটা ফাইল — এটা মুছে ফেলে ওয়েবসাইটের ঠিকানা থেকে অ্যাপটি খুলুন।":""}</div>
+    {location.protocol==="file:"?(verBlock.url?<a href={verBlock.url} style={{display:"inline-block",background:RED,color:"white",borderRadius:9,padding:"12px 22px",fontSize:13,fontWeight:700,textDecoration:"none"}}>ওয়েবসাইট খুলুন</a>:null):
+    <button onClick={()=>{try{sessionStorage.removeItem("rf_ver_reloads")}catch(e){}window.location.replace(location.pathname+"?v="+Date.now())}} style={{background:RED,color:"white",border:"none",borderRadius:9,padding:"12px 22px",fontSize:13,fontWeight:700}}>সর্বশেষ সংস্করণ খুলুন</button>}
+  </div>;
   if(!tabActive)return<div style={{padding:"40px 24px",textAlign:"center",maxWidth:420,margin:"60px auto"}}>
     <div style={{fontSize:9,color:"#ccc",marginBottom:12}}>v{BUILD_TAG}</div>
     <div style={{fontSize:34,marginBottom:12}}>🔁</div>
@@ -3525,21 +3840,21 @@ function App({firebaseConfig,onResetConfig}){
     if(navStack.length>1)setTimeout(()=>{try{window.history.back()}catch(e){}},0);
   };
   const renderPage=()=>{
-  if(page==="preview")return<Preview order={viewed||draft} onBack={goBack} slip={slip} setSlip={setSlip} onUpdate={updateOrder} onAddPayment={addOrderPayment} onSetDelivered={setOrderDelivered} onDelete={deleteOrderPermanently} db={db} saveDb={saveDb} carpenters={carpenters} saveCarpenters={saveCarpenters} galleries={galleries} saveGalleryEntry={saveGalleryEntry} woodSettings={woodSettingsWithBands} laborSettings={laborSettings} workers={workers} allOrders={orders} rackSplits={rackSplits}/>;
-  if(page==="form")return<Form onSave={saveOrder} onBack={goBack} db={db} saveDb={saveDb} galleries={galleries} woodSettings={woodSettings} laborSettings={laborSettings} orders={orders} getNextOrderNumber={getNextOrderNumber}/>;
-  if(page==="history")return<Hist orders={orders} db={db} onBack={goBack} onView={o=>navigate({page:"preview",orderNo:o.no,slip:0})} highlightNo={highlightNo} q={curScreen.q||""} setQ={q=>replaceTop({...curScreen,q})} statusFilter={curScreen.statusFilter||"all"} setStatusFilter={statusFilter=>replaceTop({...curScreen,statusFilter})} catFilter={curScreen.catFilter||"all"} setCatFilter={catFilter=>replaceTop({...curScreen,catFilter})} sortMode={curScreen.sortMode||"recent"} setSortMode={sortMode=>replaceTop({...curScreen,sortMode})}/>;
+  if(page==="preview")return<Preview syncInfo={syncInfo} online={online} order={viewed||draft} onBack={goBack} slip={slip} setSlip={setSlip} onUpdate={updateOrder} onAddPayment={addOrderPayment} onSetDelivered={setOrderDelivered} onDelete={deleteOrderPermanently} db={db} saveDb={saveDb} carpenters={carpenters} saveCarpenters={saveCarpenters} galleries={galleries} saveGalleryEntry={saveGalleryEntry} woodSettings={woodSettingsWithBands} laborSettings={laborSettings} workers={workers} allOrders={orders} rackSplits={rackSplits}/>;
+  if(page==="form")return<Form recentRates={recentCostRates} onSave={saveOrder} onBack={goBack} db={db} saveDb={saveDb} galleries={galleries} woodSettings={woodSettings} laborSettings={laborSettings} orders={orders} getNextOrderNumber={getNextOrderNumber}/>;
+  if(page==="history")return<Hist syncInfo={syncInfo} online={online} orders={orders} db={db} onBack={goBack} onView={o=>navigate({page:"preview",orderNo:o.no,slip:0})} highlightNo={highlightNo} q={curScreen.q||""} setQ={q=>replaceTop({...curScreen,q})} statusFilter={curScreen.statusFilter||"all"} setStatusFilter={statusFilter=>replaceTop({...curScreen,statusFilter})} catFilter={curScreen.catFilter||"all"} setCatFilter={catFilter=>replaceTop({...curScreen,catFilter})} sortMode={curScreen.sortMode||"recent"} setSortMode={sortMode=>replaceTop({...curScreen,sortMode})}/>;
   if(page==="manage")return<ManageDB db={db} saveDb={saveDb} galleries={galleries} saveGalleryEntry={saveGalleryEntry} onBack={goBack} navigate={navigate} goBack={goBack} replaceTop={replaceTop} curScreen={curScreen} highlightNo={highlightNo} onRenameVariant={propagateVariantRename} orders={orders} onMergeMany={mergeManyAcrossOrders} onMoveVariant={propagateVariantMove} onRecodeVariant={propagateVariantCode} onWoodChange={propagateWoodChange} onMergeVariants={mergeVariantsAcrossOrders}/>;
   if(page==="woodstock")return<WoodStockPage woodLots={woodLots} saveWoodLots={saveWoodLots} addLotPayment={addLotPayment} woodSettings={woodSettingsWithBands} saveWoodSettings={saveWoodSettings} laborSettings={laborSettings} saveLaborSettings={saveLaborSettings} rackSplits={rackSplits} addRackSplit={addRackSplit} rackBands={rackBands} addRackBand={addRackBand} removeRackBand={removeRackBand} payrollWeeks={payrollWeeks} workers={workers} orders={orders} expenses={expenses} onBack={goBack} view={curScreen.view||"list"} lotId={curScreen.lotId||null} onOpenList={()=>navigate({page:"woodstock",view:"list"})} onOpenDetail={lotId=>navigate({page:"woodstock",view:"detail",lotId})} onOpenNew={()=>navigate({page:"woodstock",view:"new"})} onOpenRates={()=>navigate({page:"woodstock",view:"rates"})} onOpenUsage={()=>navigate({page:"woodstock",view:"usage"})} highlightNo={highlightNo}/>;
   if(page==="expense")return<ExpensePage expenses={expenses} onSave={saveExpense} onBack={goBack}/>;
   if(page==="payroll")return<PayrollPage workers={workers} saveWorker={saveWorker} deleteWorker={deleteWorker} payrollWeeks={payrollWeeks} savePayrollWeek={savePayrollWeek} updateAttendance={updateAttendance} addAdvanceEntry={addAdvanceEntry} removeAdvanceEntry={removeAdvanceEntry} onBack={goBack}/>;
   if(page==="plreport")return<PLReportPage orders={orders} expenses={expenses} workers={workers} payrollWeeks={payrollWeeks} woodLots={woodLots} woodSettings={woodSettings} laborSettings={laborSettings} onBack={goBack}/>;
-  return<Home lastPageCrash={lastPageCrash} orders={orders} expenses={expenses} woodLots={woodLots} db={db} woodSettings={woodSettings} laborSettings={laborSettings} workers={workers} payrollWeeks={payrollWeeks} alertSettings={alertSettings} saveAlertSettings={saveAlertSettings} backupFailed={backupFailed} lastSyncAt={lastSyncAt} onManualRefresh={manualRefresh} pendingWrites={pendingWrites} onCheckServerSync={checkServerSync} onAcceptServerVersion={acceptServerVersion} onUpdateOrder={updateOrder} onNew={()=>navigate({page:"form"})} onHist={()=>navigate({page:"history"})} onManage={()=>navigate({page:"manage"})} onExpense={()=>navigate({page:"expense"})} onWoodStock={()=>navigate({page:"woodstock",view:"list"})} onPayroll={()=>navigate({page:"payroll"})} onPLReport={()=>navigate({page:"plreport"})} onView={o=>navigate({page:"preview",orderNo:o.no,slip:0})} onViewDelivery={o=>navigate({page:"preview",orderNo:o.no,slip:5})} online={online} connError={connError} onResetConfig={onResetConfig} folderStatus={folderStatus} connectFolder={connectFolder} highlightNo={highlightNo} onBackupData={backupData} projectId={firebaseConfig?.projectId||""} appId={firebaseConfig?.appId||""} permanentSyncFailures={permanentSyncFailures} autoStuckStatus={autoStuckStatus} dbGaps={dbGaps} setDbGaps={setDbGaps} fsRef={fsRef}/>;
+  return<Home syncInfo={syncInfo} devices={devices} deviceId={deviceIdRef.current} lastPageCrash={lastPageCrash} orders={orders} expenses={expenses} woodLots={woodLots} db={db} woodSettings={woodSettings} laborSettings={laborSettings} workers={workers} payrollWeeks={payrollWeeks} alertSettings={alertSettings} saveAlertSettings={saveAlertSettings} backupFailed={backupFailed} lastSyncAt={lastSyncAt} onManualRefresh={manualRefresh} pendingWrites={pendingWrites} onCheckServerSync={checkServerSync} onAcceptServerVersion={acceptServerVersion} onUpdateOrder={updateOrder} onNew={()=>navigate({page:"form"})} onHist={()=>navigate({page:"history"})} onManage={()=>navigate({page:"manage"})} onExpense={()=>navigate({page:"expense"})} onWoodStock={()=>navigate({page:"woodstock",view:"list"})} onPayroll={()=>navigate({page:"payroll"})} onPLReport={()=>navigate({page:"plreport"})} onView={o=>navigate({page:"preview",orderNo:o.no,slip:0})} onViewDelivery={o=>navigate({page:"preview",orderNo:o.no,slip:5})} online={online} connError={connError} onResetConfig={onResetConfig} folderStatus={folderStatus} connectFolder={connectFolder} highlightNo={highlightNo} onBackupData={backupData} projectId={firebaseConfig?.projectId||""} appId={firebaseConfig?.appId||""} permanentSyncFailures={permanentSyncFailures} autoStuckStatus={autoStuckStatus} dbGaps={dbGaps} setDbGaps={setDbGaps} fsRef={fsRef}/>;
   };
   return<PageErrorBoundary resetKey={navStack.length+"|"+page+"|"+(curScreen.tab||"")} canGoBack={navStack.length>1} onError={onPageCrash}>{renderPage()}</PageErrorBoundary>;
 }
 
 /* ── HOME / DASHBOARD ── */
-function Home({lastPageCrash,orders,expenses,woodLots,db,woodSettings,laborSettings,workers,payrollWeeks,alertSettings,saveAlertSettings,backupFailed,lastSyncAt,onManualRefresh,pendingWrites,onCheckServerSync,onAcceptServerVersion,onUpdateOrder,onNew,onHist,onManage,onExpense,onWoodStock,onPayroll,onPLReport,onView,onViewDelivery,online,connError,onResetConfig,folderStatus,connectFolder,highlightNo,onBackupData,projectId,appId,permanentSyncFailures,autoStuckStatus,dbGaps,setDbGaps,fsRef}){
+function Home({syncInfo,devices,deviceId,lastPageCrash,orders,expenses,woodLots,db,woodSettings,laborSettings,workers,payrollWeeks,alertSettings,saveAlertSettings,backupFailed,lastSyncAt,onManualRefresh,pendingWrites,onCheckServerSync,onAcceptServerVersion,onUpdateOrder,onNew,onHist,onManage,onExpense,onWoodStock,onPayroll,onPLReport,onView,onViewDelivery,online,connError,onResetConfig,folderStatus,connectFolder,highlightNo,onBackupData,projectId,appId,permanentSyncFailures,autoStuckStatus,dbGaps,setDbGaps,fsRef}){
   const now=new Date();
   const[showAllRunning,setShowAllRunning]=useState(false);
   const[showSystemZone,setShowSystemZone]=useState(false);
@@ -3983,7 +4298,7 @@ function Home({lastPageCrash,orders,expenses,woodLots,db,woodSettings,laborSetti
         daysUntilOrder:dailyUse>0?Math.round((stock-reorderPoint)/dailyUse):null};
     }).filter(Boolean).sort((a,b)=>a.monthsLeft-b.monthsLeft);
 
-    return{furnitureMonths:fcost.months,furnitureHasPayroll:fcost.hasPayroll,running:withDays,yoy,totalRevenue,totalExpense,catPie,thisMonthCount:thisMonthOrders.length,avgOrderValue,totalOutstanding,yearly,stockPie,payables,totalPayable,cfInflow,cfOutflow,cfNet,deptAvg,deptAvgMax,stuckItems,payrollProdByMonth,validPerCft,setLabourRate,emptyWoodModels,repeatRate,repeatCount:repeatCusts.length,totalCustCount:custList.length,repeatRevenueShare,stockAlerts,readyNotCollected,readyValueStuck,avgProdDays,recentAvgProd,olderAvgProd,prodCount:prodTimes.length,woodPriceAlerts,catProfitRanked,throughputRanked,bottleneckDeptBn,workerRanked,backlogTrend};
+    return{furnitureMonths:fcost.months,furnitureHasPayroll:fcost.hasPayroll,furnitureAvgDur:fcost.avgDur,running:withDays,yoy,totalRevenue,totalExpense,catPie,thisMonthCount:thisMonthOrders.length,avgOrderValue,totalOutstanding,yearly,stockPie,payables,totalPayable,cfInflow,cfOutflow,cfNet,deptAvg,deptAvgMax,stuckItems,payrollProdByMonth,validPerCft,setLabourRate,emptyWoodModels,repeatRate,repeatCount:repeatCusts.length,totalCustCount:custList.length,repeatRevenueShare,stockAlerts,readyNotCollected,readyValueStuck,avgProdDays,recentAvgProd,olderAvgProd,prodCount:prodTimes.length,woodPriceAlerts,catProfitRanked,throughputRanked,bottleneckDeptBn,workerRanked,backlogTrend};
   },[orders,expenses,db,woodLots,woodSettings,laborSettings,workers,payrollWeeks,alertSettings,spendLedger]);
 
   // ── "খরচ — ক্যাটাগরি অনুযায়ী" এখন সময়সীমা বাছাই করা যায় — এটা আলাদা, ছোট useMemo-তে রাখা
@@ -4224,6 +4539,7 @@ function Home({lastPageCrash,orders,expenses,woodLots,db,woodSettings,laborSetti
   return<div style={{minHeight:"100vh",background:`linear-gradient(150deg,${RED} 0%,#8B0020 100%)`,position:"relative"}}>
     <div style={{position:"absolute",top:8,right:10,fontSize:9,color:"rgba(255,255,255,0.55)",fontWeight:600,letterSpacing:0.3,zIndex:5,textAlign:"right"}}>v{BUILD_TAG}<br/>{projectId}</div>
     <div style={{padding:"24px 18px 18px",textAlign:"center",color:"white"}}>
+      <div style={{marginBottom:10}}><SyncChip info={syncInfo} online={online} compact/></div>
       <div style={{width:52,height:52,background:"white",borderRadius:13,display:"inline-flex",alignItems:"center",justifyContent:"center",marginBottom:8,boxShadow:"0 4px 18px rgba(0,0,0,.3)"}}><span style={{color:RED,fontSize:26,fontWeight:800,fontFamily:"Georgia,serif"}}>R</span></div>
       <div style={{fontSize:20,fontWeight:800}}>রূপালী ফার্নিচার</div>
       <div style={{fontSize:10,opacity:.8,marginTop:2}}>Rupali Furniture · Sirajganj | সাদমান সাকিব</div>
@@ -4493,6 +4809,37 @@ function Home({lastPageCrash,orders,expenses,woodLots,db,woodSettings,laborSetti
         </div>:<div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"14px",textAlign:"center",fontSize:11,color:"#999"}}>এই মুহূর্তে কোনো বাকি নেই</div>}
       </div>
 
+      {stats.totalCustCount>0&&<div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 14px",marginBottom:14}}>
+        <div style={{fontSize:12,fontWeight:700,color:"#1d4ed8",marginBottom:3}}>🔁 পুনরাবৃত্ত গ্রাহক</div>
+        <div style={{fontSize:9,color:"#999",marginBottom:8}}>যেসব গ্রাহক একবারের বেশি অর্ডার করেছেন — সন্তুষ্ট গ্রাহকের সবচেয়ে সরাসরি প্রমাণ।</div>
+        <div style={{display:"flex",alignItems:"baseline",gap:8,marginBottom:6}}>
+          <span style={{fontSize:26,fontWeight:800,color:"#1d4ed8"}}>{stats.repeatRate.toFixed(0)}%</span>
+          <span style={{fontSize:11,color:"#666"}}>{stats.totalCustCount} জনের মধ্যে {stats.repeatCount} জন</span>
+        </div>
+        <div style={{background:"#f0f0f0",borderRadius:4,height:7,overflow:"hidden",marginBottom:6}}><div style={{width:`${Math.min(100,stats.repeatRate)}%`,height:"100%",background:"#1d4ed8"}}></div></div>
+        {stats.repeatCount>0&&<div style={{fontSize:10,color:"#166534",fontWeight:600}}>মোট আয়ের {stats.repeatRevenueShare.toFixed(0)}% এসেছে এই পুনরাবৃত্ত গ্রাহকদের থেকে</div>}
+      </div>}
+
+      {(()=>{
+        const overpaid=(orders||[]).filter(o=>{
+          const paid=(o.payments||[]).reduce((s,p)=>s+(parseFloat(p.amount)||0),0);
+          return paid>(parseFloat(o.cust.total)||0)+1; // পূর্ণসংখ্যা-বৃত্তির সামান্য পার্থক্য উপেক্ষা করার জন্য ১ টাকা মার্জিন
+        });
+        if(!overpaid.length)return null;
+        return<div style={{background:"#fef2f2",border:"1px solid #fca5a5",borderRadius:10,padding:"12px 14px",marginBottom:14}}>
+          <div style={{fontSize:12,fontWeight:700,color:"#991b1b",marginBottom:3}}>⚠️ {overpaid.length}টা অর্ডারে মোট মূল্যের চেয়ে বেশি পেমেন্ট জমা আছে</div>
+          <div style={{fontSize:9,color:"#7f1d1d",marginBottom:8,lineHeight:1.5}}>টাইপো বা ভুল অঙ্কের কারণে হয়ে থাকতে পারে — প্রতিটায় ঢুকে "অর্ডার বুক কপি"-তে পেমেন্ট ট্র্যাকিং এডিট/মুছে ঠিক করে নিন। (এখন থেকে নতুন পেমেন্টে এই ভুল আর হবে না — বাকির চেয়ে বেশি দিলে সফটওয়্যারই আটকে দেবে)</div>
+          {overpaid.map(o=>{
+            const paid=(o.payments||[]).reduce((s,p)=>s+(parseFloat(p.amount)||0),0);
+            return<div key={o.no} onClick={()=>onView&&onView(o)} style={{background:"white",borderRadius:7,padding:"7px 9px",marginBottom:5,fontSize:10,cursor:"pointer",border:"1px solid #fecaca"}}>
+              <div style={{fontWeight:700}}>{o.cust.name} — {o.no}</div>
+              <div style={{color:"#991b1b",marginTop:1}}>মূল্য {money(o.cust.total)} · পরিশোধ {money(paid)} · বেশি {money(paid-(parseFloat(o.cust.total)||0))}</div>
+            </div>
+          })}
+        </div>
+      })()}
+
+      <div id="z-health" style={{scrollMarginTop:56,fontSize:11,fontWeight:800,color:"#1d4ed8",letterSpacing:"0.3px",margin:"18px 0 8px",paddingBottom:4,borderBottom:"2px solid #1d4ed822"}}>📊 ব্যবসার স্বাস্থ্য</div>
       {/* মাসিক তারল্য — প্রতি মাসে সংগ্রহ বাদ ব্যয়, যা হাতে থাকার কথা */}
       <div style={{marginBottom:16}}>
         <div style={{fontWeight:700,fontSize:13,color:"#222",marginBottom:6}}>💵 মাসিক তারল্য ({monthlyIncomeData.year})</div>
@@ -4532,7 +4879,6 @@ function Home({lastPageCrash,orders,expenses,woodLots,db,woodSettings,laborSetti
         </div>
       </div>
 
-      <div id="z-health" style={{scrollMarginTop:56,fontSize:11,fontWeight:800,color:"#1d4ed8",letterSpacing:"0.3px",margin:"18px 0 8px",paddingBottom:4,borderBottom:"2px solid #1d4ed822"}}>📊 ব্যবসার স্বাস্থ্য</div>
       {/* Revenue vs Expense */}
       <div style={{marginBottom:18}}>
         <div style={{fontWeight:700,fontSize:13,color:"#222",marginBottom:2}}>💰 সংগ্রহ বনাম ব্যয় ({svExpData.year})</div>
@@ -4566,6 +4912,31 @@ function Home({lastPageCrash,orders,expenses,woodLots,db,woodSettings,laborSetti
           </div>
         </div>
       </div>
+
+      {/* ── v4.52: মোট ব্যয় — সব খরচ + বেতন + কাঠের আসল পেমেন্ট ── */}
+      <SpendPeriodChart icon="🧾" title="মোট ব্যয়" accent="#0f766e"
+        note="সব খরচ + কর্মীদের বেতন + কাঠ। কাঠ ধরা হয় সাপ্লায়ারকে যেদিন যত টাকা দেওয়া হয়েছে সেই তারিখে (লটের মোট দাম বা কেনার তারিখে নয়), সাথে স'মিল কাটাই আর কাঠ পরিবহনের খরচ। উপরের 'সংগ্রহ বনাম ব্যয়'-এর ব্যয়ও ঠিক এটাই।"
+        entries={spendLedger} segs={SPEND_SEGS} segOf={e=>e.kind}
+        renderDetail={(bar)=>{
+          if(!bar.total)return<div style={{fontSize:11,color:"#999"}}>এই সময়ে কোনো ব্যয় লেখা নেই</div>;
+          const group=(kind,keyFn)=>{const m={};bar.entries.forEach(e=>{if(e.kind!==kind)return;const k=keyFn(e);m[k]=(m[k]||0)+e.amount});return Object.entries(m).sort((x,y)=>y[1]-x[1])};
+          const partBlock=(sg,total,rows,extra)=>total>0?<div key={sg.id} style={{marginBottom:9}}>
+            <div style={{display:"flex",alignItems:"center",gap:6,fontSize:11.5,fontWeight:700,color:"#333",marginBottom:3}}>
+              <span style={{width:9,height:9,borderRadius:2,background:sg.color,flexShrink:0}}></span>
+              <span style={{flex:1}}>{sg.bn}</span>
+              <span style={{color:"#888",fontSize:10,fontWeight:600}}>{toBnDigits(((total/bar.total)*100).toFixed(0))}%</span>
+              <span>{money(Math.round(total))}</span>
+            </div>
+            {(rows||[]).slice(0,6).map(([k,v])=><div key={k} style={{display:"flex",justifyContent:"space-between",gap:6,fontSize:10,color:"#666",padding:"1px 0 1px 15px"}}><span style={{minWidth:0}}>{k}</span><span style={{flexShrink:0}}>{money(Math.round(v))}</span></div>)}
+            {rows&&rows.length>6&&<div style={{fontSize:9,color:"#aaa",paddingLeft:15}}>আরও {toBnDigits(rows.length-6)}টা</div>}
+            {extra}
+          </div>:null;
+          return<div>
+            {partBlock(SPEND_SEGS[0],bar.values.expense||0,group("expense",e=>e.label))}
+            {partBlock(SPEND_SEGS[1],bar.values.salary||0,null,<div style={{fontSize:9.5,color:"#999",paddingLeft:15}}>বিস্তারিত উপরের "কর্মীদের বেতন" চার্টে</div>)}
+            {partBlock(SPEND_SEGS[2],bar.values.wood||0,group("wood",e=>e.label==="সাপ্লায়ারকে পেমেন্ট"?`সাপ্লায়ার: ${e.supplier}`:e.label))}
+          </div>;
+        }}/>
 
       {/* Pie chart - expense by category */}
       {expRangeData.expensePie&&expRangeData.expensePie.length>0&&<div style={{marginBottom:18}}>
@@ -4623,31 +4994,6 @@ function Home({lastPageCrash,orders,expenses,woodLots,db,woodSettings,laborSetti
           </div>;
         }}/>
 
-      {/* ── v4.52: মোট ব্যয় — সব খরচ + বেতন + কাঠের আসল পেমেন্ট ── */}
-      <SpendPeriodChart icon="🧾" title="মোট ব্যয়" accent="#0f766e"
-        note="সব খরচ + কর্মীদের বেতন + কাঠ। কাঠ ধরা হয় সাপ্লায়ারকে যেদিন যত টাকা দেওয়া হয়েছে সেই তারিখে (লটের মোট দাম বা কেনার তারিখে নয়), সাথে স'মিল কাটাই আর কাঠ পরিবহনের খরচ। উপরের 'সংগ্রহ বনাম ব্যয়'-এর ব্যয়ও ঠিক এটাই।"
-        entries={spendLedger} segs={SPEND_SEGS} segOf={e=>e.kind}
-        renderDetail={(bar)=>{
-          if(!bar.total)return<div style={{fontSize:11,color:"#999"}}>এই সময়ে কোনো ব্যয় লেখা নেই</div>;
-          const group=(kind,keyFn)=>{const m={};bar.entries.forEach(e=>{if(e.kind!==kind)return;const k=keyFn(e);m[k]=(m[k]||0)+e.amount});return Object.entries(m).sort((x,y)=>y[1]-x[1])};
-          const partBlock=(sg,total,rows,extra)=>total>0?<div key={sg.id} style={{marginBottom:9}}>
-            <div style={{display:"flex",alignItems:"center",gap:6,fontSize:11.5,fontWeight:700,color:"#333",marginBottom:3}}>
-              <span style={{width:9,height:9,borderRadius:2,background:sg.color,flexShrink:0}}></span>
-              <span style={{flex:1}}>{sg.bn}</span>
-              <span style={{color:"#888",fontSize:10,fontWeight:600}}>{toBnDigits(((total/bar.total)*100).toFixed(0))}%</span>
-              <span>{money(Math.round(total))}</span>
-            </div>
-            {(rows||[]).slice(0,6).map(([k,v])=><div key={k} style={{display:"flex",justifyContent:"space-between",gap:6,fontSize:10,color:"#666",padding:"1px 0 1px 15px"}}><span style={{minWidth:0}}>{k}</span><span style={{flexShrink:0}}>{money(Math.round(v))}</span></div>)}
-            {rows&&rows.length>6&&<div style={{fontSize:9,color:"#aaa",paddingLeft:15}}>আরও {toBnDigits(rows.length-6)}টা</div>}
-            {extra}
-          </div>:null;
-          return<div>
-            {partBlock(SPEND_SEGS[0],bar.values.expense||0,group("expense",e=>e.label))}
-            {partBlock(SPEND_SEGS[1],bar.values.salary||0,null,<div style={{fontSize:9.5,color:"#999",paddingLeft:15}}>বিস্তারিত উপরের "কর্মীদের বেতন" চার্টে</div>)}
-            {partBlock(SPEND_SEGS[2],bar.values.wood||0,group("wood",e=>e.label==="সাপ্লায়ারকে পেমেন্ট"?`সাপ্লায়ার: ${e.supplier}`:e.label))}
-          </div>;
-        }}/>
-
       {stats.catProfitRanked&&stats.catProfitRanked.length>0&&<div onClick={()=>setProfitDetailOpen(true)} style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 14px",marginBottom:14,cursor:"pointer"}}>
         <div style={{fontSize:12,fontWeight:700,color:"#166534",marginBottom:3,display:"flex",justifyContent:"space-between",alignItems:"center"}}><span>💰 কোন ফার্নিচারে খরচ ও লাভ কত</span><span style={{color:"#aaa",fontSize:14}}>›</span></div>
         <div style={{fontSize:9,color:"#999",marginBottom:8}}>ডেলিভারি হওয়া অর্ডার থেকে — কাঠ, কর্মীদের বেতন আর অন্যান্য খরচ বাদ দিয়ে আসল লাভ। অর্ডার ধরে পুরো হিসাব দেখতে ট্যাপ করুন।</div>
@@ -4659,65 +5005,6 @@ function Home({lastPageCrash,orders,expenses,woodLots,db,woodSettings,laborSetti
           <div style={{background:"#f0f0f0",borderRadius:4,height:6,overflow:"hidden"}}><div style={{width:`${Math.max(0,Math.min(100,c.margin))}%`,height:"100%",background:c.margin>=30?"#16a34a":c.margin>=15?"#f59e0b":RED}}></div></div>
         </div>)}
       </div>}
-
-      {stats.throughputRanked&&stats.throughputRanked.length>0&&stats.bottleneckDeptBn&&<div style={{background:"#fffbeb",border:"1.5px solid #fcd34d",borderRadius:10,padding:"12px 14px",marginBottom:14}}>
-        <div style={{fontSize:12,fontWeight:700,color:"#92400e",marginBottom:3}}>🎯 বাধার প্রতিদিনে কোনটা বেশি টাকা আনে</div>
-        <div style={{fontSize:9,color:"#a16207",marginBottom:8,lineHeight:1.5}}>আপনার সবচেয়ে ধীর বিভাগ <strong>{stats.bottleneckDeptBn}</strong> — এটাই আপনার উৎপাদনের আসল সীমা। তাই শতাংশ লাভ নয়, <strong>এই বিভাগের প্রতিদিনে কত টাকা লাভ আসে</strong> সেটাই অগ্রাধিকারের সঠিক মাপ (Goldratt-এর থ্রুপুট নীতি)।</div>
-        {stats.throughputRanked.slice(0,6).map((c,i)=>{
-          const maxV=stats.throughputRanked[0].profitPerBnDay||1;
-          return<div key={c.label} style={{marginBottom:8}}>
-            <div style={{display:"flex",justifyContent:"space-between",fontSize:11,marginBottom:2}}>
-              <span style={{fontWeight:600}}>{i===0?"🥇 ":""}{c.label} <span style={{color:"#aaa",fontSize:9}}>({c.bnSamples}টি)</span></span>
-              <span style={{fontWeight:700,color:"#92400e"}}>{money(Math.round(c.profitPerBnDay))}/দিন</span>
-            </div>
-            <div style={{background:"#f0f0f0",borderRadius:4,height:6,overflow:"hidden"}}><div style={{width:`${Math.max(0,Math.min(100,(c.profitPerBnDay/maxV)*100))}%`,height:"100%",background:i===0?"#b45309":"#fcd34d"}}></div></div>
-            <div style={{fontSize:8,color:"#999",marginTop:1}}>শতাংশ লাভ {c.margin.toFixed(0)}% · {stats.bottleneckDeptBn}-এ গড়ে {(c.bottleneckDays/c.bnSamples).toFixed(1)} দিন</div>
-          </div>
-        })}
-        <div style={{fontSize:9,color:"#a16207",marginTop:6,paddingTop:6,borderTop:"1px dashed #fcd34d",lineHeight:1.5}}>💡 কাজের চাপ বেশি থাকলে উপরের দিকের ফার্নিচারগুলো আগে নিন — শতাংশ লাভ কম হলেও মোট আয় বেশি হবে।</div>
-      </div>}
-
-      {stats.totalCustCount>0&&<div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 14px",marginBottom:14}}>
-        <div style={{fontSize:12,fontWeight:700,color:"#1d4ed8",marginBottom:3}}>🔁 পুনরাবৃত্ত গ্রাহক</div>
-        <div style={{fontSize:9,color:"#999",marginBottom:8}}>যেসব গ্রাহক একবারের বেশি অর্ডার করেছেন — সন্তুষ্ট গ্রাহকের সবচেয়ে সরাসরি প্রমাণ।</div>
-        <div style={{display:"flex",alignItems:"baseline",gap:8,marginBottom:6}}>
-          <span style={{fontSize:26,fontWeight:800,color:"#1d4ed8"}}>{stats.repeatRate.toFixed(0)}%</span>
-          <span style={{fontSize:11,color:"#666"}}>{stats.totalCustCount} জনের মধ্যে {stats.repeatCount} জন</span>
-        </div>
-        <div style={{background:"#f0f0f0",borderRadius:4,height:7,overflow:"hidden",marginBottom:6}}><div style={{width:`${Math.min(100,stats.repeatRate)}%`,height:"100%",background:"#1d4ed8"}}></div></div>
-        {stats.repeatCount>0&&<div style={{fontSize:10,color:"#166534",fontWeight:600}}>মোট আয়ের {stats.repeatRevenueShare.toFixed(0)}% এসেছে এই পুনরাবৃত্ত গ্রাহকদের থেকে</div>}
-      </div>}
-
-      {stats.avgProdDays!==null&&<div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 14px",marginBottom:14}}>
-        <div style={{fontSize:12,fontWeight:700,color:"#0f766e",marginBottom:3}}>⚙️ উৎপাদনের গতি</div>
-        <div style={{fontSize:9,color:"#999",marginBottom:8}}>অর্ডার নেওয়া থেকে কাজ ১০০% শেষ হতে গড়ে কত দিন — গ্রাহকের দেরি এতে ধরা হয় না।</div>
-        <div style={{display:"flex",alignItems:"baseline",gap:8}}>
-          <span style={{fontSize:26,fontWeight:800,color:"#0f766e"}}>{stats.avgProdDays}</span>
-          <span style={{fontSize:11,color:"#666"}}>দিন গড়ে ({stats.prodCount}টি সম্পন্ন কাজ থেকে)</span>
-        </div>
-        {stats.recentAvgProd!==null&&stats.olderAvgProd!==null&&<div style={{fontSize:10,marginTop:6,color:stats.recentAvgProd<stats.olderAvgProd?"#166534":stats.recentAvgProd>stats.olderAvgProd?RED:"#666",fontWeight:600}}>
-          {stats.recentAvgProd<stats.olderAvgProd?`✅ গতি বেড়েছে — আগে ${stats.olderAvgProd} দিন, এখন ${stats.recentAvgProd} দিন`:stats.recentAvgProd>stats.olderAvgProd?`⚠️ গতি কমেছে — আগে ${stats.olderAvgProd} দিন, এখন ${stats.recentAvgProd} দিন`:"গতি একই আছে"}
-        </div>}
-      </div>}
-
-      {(()=>{
-        const overpaid=(orders||[]).filter(o=>{
-          const paid=(o.payments||[]).reduce((s,p)=>s+(parseFloat(p.amount)||0),0);
-          return paid>(parseFloat(o.cust.total)||0)+1; // পূর্ণসংখ্যা-বৃত্তির সামান্য পার্থক্য উপেক্ষা করার জন্য ১ টাকা মার্জিন
-        });
-        if(!overpaid.length)return null;
-        return<div style={{background:"#fef2f2",border:"1px solid #fca5a5",borderRadius:10,padding:"12px 14px",marginBottom:14}}>
-          <div style={{fontSize:12,fontWeight:700,color:"#991b1b",marginBottom:3}}>⚠️ {overpaid.length}টা অর্ডারে মোট মূল্যের চেয়ে বেশি পেমেন্ট জমা আছে</div>
-          <div style={{fontSize:9,color:"#7f1d1d",marginBottom:8,lineHeight:1.5}}>টাইপো বা ভুল অঙ্কের কারণে হয়ে থাকতে পারে — প্রতিটায় ঢুকে "অর্ডার বুক কপি"-তে পেমেন্ট ট্র্যাকিং এডিট/মুছে ঠিক করে নিন। (এখন থেকে নতুন পেমেন্টে এই ভুল আর হবে না — বাকির চেয়ে বেশি দিলে সফটওয়্যারই আটকে দেবে)</div>
-          {overpaid.map(o=>{
-            const paid=(o.payments||[]).reduce((s,p)=>s+(parseFloat(p.amount)||0),0);
-            return<div key={o.no} onClick={()=>onView&&onView(o)} style={{background:"white",borderRadius:7,padding:"7px 9px",marginBottom:5,fontSize:10,cursor:"pointer",border:"1px solid #fecaca"}}>
-              <div style={{fontWeight:700}}>{o.cust.name} — {o.no}</div>
-              <div style={{color:"#991b1b",marginTop:1}}>মূল্য {money(o.cust.total)} · পরিশোধ {money(paid)} · বেশি {money(paid-(parseFloat(o.cust.total)||0))}</div>
-            </div>
-          })}
-        </div>
-      })()}
 
       <div id="z-wood" style={{scrollMarginTop:56,fontSize:11,fontWeight:800,color:"#065f46",letterSpacing:"0.3px",margin:"18px 0 8px",paddingBottom:4,borderBottom:"2px solid #065f4622"}}>🪵 কাঠ ও মজুদ</div>
       {/* Pie chart - wood stock by type */}
@@ -4765,6 +5052,18 @@ function Home({lastPageCrash,orders,expenses,woodLots,db,woodSettings,laborSetti
       </div>}
 
       <div id="z-perf" style={{scrollMarginTop:56,fontSize:11,fontWeight:800,color:"#7c2d12",letterSpacing:"0.3px",margin:"18px 0 8px",paddingBottom:4,borderBottom:"2px solid #7c2d1222"}}>🚧 কর্মদক্ষতা ও উৎপাদন বিশ্লেষণ</div>
+      {stats.avgProdDays!==null&&<div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 14px",marginBottom:14}}>
+        <div style={{fontSize:12,fontWeight:700,color:"#0f766e",marginBottom:3}}>⚙️ উৎপাদনের গতি</div>
+        <div style={{fontSize:9,color:"#999",marginBottom:8}}>অর্ডার নেওয়া থেকে কাজ ১০০% শেষ হতে গড়ে কত দিন — গ্রাহকের দেরি এতে ধরা হয় না।</div>
+        <div style={{display:"flex",alignItems:"baseline",gap:8}}>
+          <span style={{fontSize:26,fontWeight:800,color:"#0f766e"}}>{stats.avgProdDays}</span>
+          <span style={{fontSize:11,color:"#666"}}>দিন গড়ে ({stats.prodCount}টি সম্পন্ন কাজ থেকে)</span>
+        </div>
+        {stats.recentAvgProd!==null&&stats.olderAvgProd!==null&&<div style={{fontSize:10,marginTop:6,color:stats.recentAvgProd<stats.olderAvgProd?"#166534":stats.recentAvgProd>stats.olderAvgProd?RED:"#666",fontWeight:600}}>
+          {stats.recentAvgProd<stats.olderAvgProd?`✅ গতি বেড়েছে — আগে ${stats.olderAvgProd} দিন, এখন ${stats.recentAvgProd} দিন`:stats.recentAvgProd>stats.olderAvgProd?`⚠️ গতি কমেছে — আগে ${stats.olderAvgProd} দিন, এখন ${stats.recentAvgProd} দিন`:"গতি একই আছে"}
+        </div>}
+      </div>}
+
       {stats.backlogTrend&&stats.bottleneckDeptBn&&<div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 14px",marginBottom:14}}>
         <div style={{fontSize:12,fontWeight:700,color:"#7c2d12",marginBottom:3}}>📊 ব্যাকলগ বাড়ছে না কমছে ({stats.bottleneckDeptBn})</div>
         <div style={{fontSize:9,color:"#999",marginBottom:8,lineHeight:1.5}}>আপনার বাধা-বিভাগে প্রতি মাসে কতটা কাজ ঢুকেছে (শুরু হয়েছে) বনাম কতটা বের হয়েছে (শেষ হয়েছে)। ঢোকা যদি বের হওয়ার চেয়ে বেশি হতেই থাকে, ব্যাকলগ বাড়ছে — শুধু বেশি কর্মী/সময় দিয়ে সমাধান হবে না, নতুন অর্ডার নেওয়ার হারও পুনর্বিবেচনা করা দরকার।</div>
@@ -4808,6 +5107,23 @@ function Home({lastPageCrash,orders,expenses,woodLots,db,woodSettings,laborSetti
           </div>
           <div style={{background:"#f0f0f0",borderRadius:4,height:6,overflow:"hidden"}}><div style={{width:d.avg!==null?`${(d.avg/stats.deptAvgMax)*100}%`:"0%",height:"100%",background:d.avg===stats.deptAvgMax?RED:"#0f766e"}}></div></div>
         </div>)}
+      </div>}
+
+      {stats.throughputRanked&&stats.throughputRanked.length>0&&stats.bottleneckDeptBn&&<div style={{background:"#fffbeb",border:"1.5px solid #fcd34d",borderRadius:10,padding:"12px 14px",marginBottom:14}}>
+        <div style={{fontSize:12,fontWeight:700,color:"#92400e",marginBottom:3}}>🎯 বাধার প্রতিদিনে কোনটা বেশি টাকা আনে</div>
+        <div style={{fontSize:9,color:"#a16207",marginBottom:8,lineHeight:1.5}}>আপনার সবচেয়ে ধীর বিভাগ <strong>{stats.bottleneckDeptBn}</strong> — এটাই আপনার উৎপাদনের আসল সীমা। তাই শতাংশ লাভ নয়, <strong>এই বিভাগের প্রতিদিনে কত টাকা লাভ আসে</strong> সেটাই অগ্রাধিকারের সঠিক মাপ (Goldratt-এর থ্রুপুট নীতি)।</div>
+        {stats.throughputRanked.slice(0,6).map((c,i)=>{
+          const maxV=stats.throughputRanked[0].profitPerBnDay||1;
+          return<div key={c.label} style={{marginBottom:8}}>
+            <div style={{display:"flex",justifyContent:"space-between",fontSize:11,marginBottom:2}}>
+              <span style={{fontWeight:600}}>{i===0?"🥇 ":""}{c.label} <span style={{color:"#aaa",fontSize:9}}>({c.bnSamples}টি)</span></span>
+              <span style={{fontWeight:700,color:"#92400e"}}>{money(Math.round(c.profitPerBnDay))}/দিন</span>
+            </div>
+            <div style={{background:"#f0f0f0",borderRadius:4,height:6,overflow:"hidden"}}><div style={{width:`${Math.max(0,Math.min(100,(c.profitPerBnDay/maxV)*100))}%`,height:"100%",background:i===0?"#b45309":"#fcd34d"}}></div></div>
+            <div style={{fontSize:8,color:"#999",marginTop:1}}>শতাংশ লাভ {c.margin.toFixed(0)}% · {stats.bottleneckDeptBn}-এ গড়ে {(c.bottleneckDays/c.bnSamples).toFixed(1)} দিন</div>
+          </div>
+        })}
+        <div style={{fontSize:9,color:"#a16207",marginTop:6,paddingTop:6,borderTop:"1px dashed #fcd34d",lineHeight:1.5}}>💡 কাজের চাপ বেশি থাকলে উপরের দিকের ফার্নিচারগুলো আগে নিন — শতাংশ লাভ কম হলেও মোট আয় বেশি হবে।</div>
       </div>}
 
       {stats.workerRanked&&stats.workerRanked.length>0&&<div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 14px",marginBottom:14}}>
@@ -4886,10 +5202,7 @@ function Home({lastPageCrash,orders,expenses,woodLots,db,woodSettings,laborSetti
       {/* Automatic sync status */}
       <div style={{marginTop:10,paddingTop:16,borderTop:"1px solid #eee",textAlign:"center"}}>
         {connError?<div style={{background:"#fef2f2",color:"#991b1b",borderRadius:9,padding:"9px 12px",fontSize:11,marginBottom:8}}>⚠️ সিঙ্ক সমস্যা: {connError}</div>:
-        <div style={{display:"inline-flex",alignItems:"center",gap:6,background:online?"#f0fdf4":"#fffbeb",color:online?"#166534":"#92400e",borderRadius:20,padding:"6px 14px",fontSize:11,fontWeight:700,marginBottom:8}}>
-          <span style={{width:8,height:8,borderRadius:"50%",background:online?"#16a34a":"#f59e0b",display:"inline-block"}}></span>
-          {online?"স্বয়ংক্রিয় সিঙ্ক সক্রিয় — সব ডিভাইসে আপডেট হচ্ছে":"অফলাইন — ইন্টারনেট এলে সিঙ্ক হবে"}
-        </div>}
+        <div style={{marginBottom:8}}><SyncChip info={syncInfo} online={online}/>{syncInfo&&syncInfo.lastServerAt?<div style={{fontSize:9.5,color:"#888",marginTop:4}}>সর্বশেষ সার্ভার-নিশ্চিত: {new Date(syncInfo.lastServerAt).toLocaleTimeString("bn-BD")}</div>:null}</div>}
       </div>
 
       {/* Data backup */}
@@ -4911,6 +5224,25 @@ function Home({lastPageCrash,orders,expenses,woodLots,db,woodSettings,laborSetti
           <div>{new Date(lastPageCrash.at).toLocaleString("bn-BD")} · পাতা: {lastPageCrash.page}</div>
           <div style={{fontFamily:"monospace",fontSize:9,color:"#94a3b8",wordBreak:"break-word"}}>{lastPageCrash.msg}</div>
         </div>}
+        {(()=>{
+          // ── v4.53: এই ডেটাবেসে যুক্ত ডিভাইস — প্রত্যেকে নিজের দেখা সংখ্যা জানায়; সব মিলে থাকার কথা ──
+          const list=[...(devices||[])].filter(d=>d&&d.id).sort((a,b)=>String(b.lastSeen||"").localeCompare(String(a.lastSeen||""))).slice(0,12);
+          if(!list.length)return null;
+          const me=list.find(d=>d.id===deviceId);
+          const sig=(d)=>{const c=d.counts||{};return[c.orders,c.running,c.due,c.woodlots,c.models,c.payrollWeeks].join("|")};
+          const fmtTime=(iso)=>{if(!iso)return"—";const t=new Date(iso);return t.toLocaleDateString("bn-BD",{day:"numeric",month:"short"})+" "+t.toLocaleTimeString("bn-BD",{hour:"numeric",minute:"2-digit"})};
+          return<div style={{marginTop:12,background:"white",border:"1px solid #e5e7eb",borderRadius:10,padding:"11px 12px"}}>
+            <div style={{fontSize:12,fontWeight:800,color:"#334155",marginBottom:3}}>📱 এই ডেটাবেসে যুক্ত ডিভাইস</div>
+            <div style={{fontSize:9.5,color:"#888",lineHeight:1.55,marginBottom:8}}>প্রতিটা ডিভাইস নিজে যা দেখছে তা এখানে জানায়। সব ডিভাইসে সংখ্যাগুলো একই থাকার কথা। কোনো ডিভাইস এই তালিকায় না থাকলে সেটা অন্য কোনো ডেটাবেসের সাথে যুক্ত।</div>
+            {list.map(d=>{const c=d.counts||{};const isMe=d.id===deviceId;const differs=me&&!isMe&&d.fresh&&me.fresh&&sig(d)!==sig(me);const old=Date.now()-new Date(d.lastSeen||0).getTime()>3*86400000;
+              return<div key={d.id} style={{border:"1px solid "+(differs?"#fca5a5":"#f1f5f9"),background:differs?"#fef2f2":isMe?"#f8fafc":"white",borderRadius:8,padding:"7px 9px",marginBottom:6,opacity:old?0.6:1}}>
+                <div style={{display:"flex",justifyContent:"space-between",gap:6,fontSize:11,fontWeight:700,color:"#333"}}><span>{d.label||"ডিভাইস"}{isMe?" (এই ডিভাইস)":""}</span><span style={{color:"#64748b",fontWeight:600,flexShrink:0}}>v{d.version||"?"}</span></div>
+                <div style={{fontSize:9.5,color:"#777",marginTop:2}}>শেষ দেখা: {fmtTime(d.lastSeen)} · {d.fresh?<span style={{color:"#166534",fontWeight:700}}>সার্ভারের সাথে মেলানো ছিল</span>:<span style={{color:"#991b1b",fontWeight:700}}>সার্ভারের সাথে মেলানো ছিল না</span>}{d.origin==="ডাউনলোড করা ফাইল"?" · ডাউনলোড করা ফাইল":""}</div>
+                <div style={{fontSize:9.5,color:"#555",marginTop:2,lineHeight:1.5}}>অর্ডার {toBnDigits(c.orders||0)} (চলমান {toBnDigits(c.running||0)}) · মোট পাওনা {money(c.due||0)} · মডেল {toBnDigits(c.models||0)} · কাঠের লট {toBnDigits(c.woodlots||0)} · বেতনের সপ্তাহ {toBnDigits(c.payrollWeeks||0)}</div>
+                {differs&&<div style={{fontSize:9.5,color:"#b91c1c",fontWeight:700,marginTop:2}}>⚠️ এই ডিভাইসের সংখ্যার সাথে মেলে না</div>}
+              </div>})}
+          </div>;
+        })()}
 
         <div style={{marginTop:12,background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 14px"}}>
           <div style={{fontSize:12,fontWeight:700,color:"#444",marginBottom:3}}>🔍 সার্ভার-সিঙ্ক পরীক্ষা</div>
@@ -5007,9 +5339,10 @@ function Home({lastPageCrash,orders,expenses,woodLots,db,woodSettings,laborSetti
             <div style={{background:"#f0fdf4",border:"1px solid #bbf7d0",borderRadius:10,padding:"10px 12px",fontSize:10,color:"#166534",lineHeight:1.65,marginBottom:12}}>
               <div style={{fontWeight:800,marginBottom:3}}>হিসাব যেভাবে হয়েছে</div>
               <div>• শুধু ডেলিভারি হওয়া অর্ডার। বিক্রি = দাম × পরিমাণ।</div>
-              <div>• কাঠ: অর্ডারে যত CFT কাঠ গেছে (পরিবহন বিভাগের তারিখে), অর্ডারের সময়ের কাঠের দামে।</div>
-              <div>• বেতন: ফার্নিচারটা যে মাসে তৈরি শেষ হয়েছে, সেই মাস আর আগের ২ মাসে কর্মীদের মোট বেতন ÷ ওই ৩ মাসে তৈরি শেষ হওয়া মোট CFT — এই হারে প্রতি CFT-তে বসানো।{stats.furnitureHasPayroll?"":" (পে-রোলে এখনো কোনো হাজিরা নেই, তাই সেটিংসের শ্রম-হার ধরা হয়েছে।)"}</div>
-              <div>• অন্যান্য খরচ: খরচের খাতার সব খরচ (বেতন বাদে) একইভাবে প্রতি CFT-তে ভাগ করে বসানো।</div>
+              <div>• কাঠ: অর্ডারে যত CFT কাঠ গেছে × অর্ডারের সময়ের কাঠের দাম (অপচয় ধরা চূড়ান্ত দাম)।</div>
+              <div>• বেতন ও অন্যান্য খরচ: ফার্নিচারটা যে সপ্তাহগুলোতে তৈরি হয়েছে (প্রথম বিভাগে কাজ শুরু থেকে শেষ বিভাগের শেষ দিন), সেই সপ্তাহগুলোর আসল বেতন আর খরচ, ওই সময়ে কাজ চলা সব ফার্নিচারের মধ্যে CFT অনুযায়ী ভাগ করে।{stats.furnitureHasPayroll?"":" (পে-রোলে এখনো কোনো হাজিরা নেই, তাই সেটিংসের শ্রম-হার ধরা হয়েছে।)"}</div>
+              <div>• শেষের তারিখ না থাকলে ডেলিভারির তারিখ ধরা হয়; শুরুর তারিখ না থাকলে ট্র্যাক করা ফার্নিচারের গড় তৈরির সময় ({toBnDigits(stats.furnitureAvgDur||21)} দিন)।</div>
+              <div>• যে সপ্তাহে কোনো ফার্নিচারে কাজ চলেনি, সেই বেতন/খরচ লাভ-ক্ষতি রিপোর্টে আলাদা লাইনে দেখায়।</div>
             </div>
             {ranked.length>0&&<div style={{background:"white",border:"1.5px solid #166534",borderRadius:10,padding:"12px 14px",marginBottom:12}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
@@ -5043,19 +5376,20 @@ function Home({lastPageCrash,orders,expenses,woodLots,db,woodSettings,laborSetti
               {open&&<div style={{marginTop:8}}>
                 {c.rows.map((r,i)=><div key={i} style={{background:"white",border:"1px solid #eee",borderRadius:8,padding:"7px 9px",marginBottom:6}}>
                   <div style={{display:"flex",justifyContent:"space-between",gap:6,fontSize:10.5,fontWeight:700,color:"#333"}}><span style={{minWidth:0}}>🪵 {r.woodDate?fmtDate(r.woodDate):"—"} · {r.cust||"—"}</span><span style={{color:r.profit>=0?"#166534":RED,flexShrink:0}}>লাভ {money(Math.round(r.profit))}</span></div>
-                  <div style={{fontSize:9.5,color:"#777",margin:"2px 0 5px"}}>{r.model}{r.wood?` · ${r.wood}`:""} · {toBnDigits(r.cft.toFixed(2))} CFT কাঠ · অর্ডার {r.no}</div>
+                  <div style={{fontSize:9.5,color:"#777",margin:"2px 0 2px"}}>{r.model}{r.wood?` · ${r.wood}`:""} · {toBnDigits(r.cft.toFixed(2))} CFT × {money(Math.round(r.woodRate||0))}/CFT · অর্ডার {r.no}</div>
+                  <div style={{fontSize:9,color:"#94a3b8",marginBottom:5}}>🔨 তৈরি: {r.start?fmtDate(r.start):"—"}{r.startAssumed?" (আনুমানিক)":""} – {r.end?fmtDate(r.end):"—"}{r.endIsDelivery?" (ডেলিভারির তারিখ)":""}{r.woodFilledAt?` · কাঠের মাপ পরে বসানো (${fmtDate(r.woodFilledAt)})`:""}</div>
                   <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:4,fontSize:9.5,textAlign:"center"}}>
                     {[["বিক্রি",r.revenue],["কাঠ",r.woodCost],["বেতন",r.salaryCost],["খরচ",r.expenseCost]].map(([l,v])=><div key={l}><div style={{color:"#999"}}>{l}</div><div style={{fontWeight:600}}>{money(Math.round(v))}</div></div>)}
                   </div>
-                  {r.salBasis==="setting"&&<div style={{fontSize:8.5,color:"#a16207",marginTop:3}}>বেতন: সেটিংসের শ্রম-হারে (তখনো পে-রোলে হাজিরা ছিল না)</div>}
+                  {r.salBasis!=="weeks"&&<div style={{fontSize:8.5,color:"#a16207",marginTop:3}}>বেতন: {r.salBasis==="setting"?"সেটিংসের শ্রম-হারে (তখনো পে-রোলে হাজিরা ছিল না)":"আংশিক সেটিংসের শ্রম-হারে (পে-রোল শুরুর আগের অংশ)"}</div>}
                 </div>)}
               </div>}
             </div>})}
             <div style={{marginTop:16}}>
               <div style={{fontSize:12,fontWeight:800,color:"#333",marginBottom:3}}>📅 মাস অনুযায়ী প্রতি CFT-এর হার</div>
-              <div style={{fontSize:9.5,color:"#999",marginBottom:8,lineHeight:1.5}}>প্রতিটা মাসের হার = সেই মাস আর আগের ২ মাসের মোট ÷ ওই সময়ে তৈরি শেষ হওয়া CFT</div>
-              <div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",fontSize:9.5,minWidth:380}}>
-                <thead><tr style={{background:"#f3f4f6"}}>{["মাস","তৈরি শেষ (CFT)","বেতন","অন্যান্য খরচ","প্রতি CFT বেতন","প্রতি CFT খরচ"].map((h,i)=><th key={h} style={{padding:"6px 4px",textAlign:i===0?"left":"right",fontWeight:700,color:"#555"}}>{h}</th>)}</tr></thead>
+              <div style={{fontSize:9.5,color:"#999",marginBottom:8,lineHeight:1.5}}>কাজ হয়েছে = সেই মাসে ফার্নিচারগুলোতে যতটা কাজ চলেছে (CFT)। প্রতি CFT হার = ফার্নিচারে বসানো বেতন/খরচ ÷ ওই কাজ। "না বসা" = যে সপ্তাহে কোনো ফার্নিচারে কাজ চলেনি</div>
+              <div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",fontSize:9.5,minWidth:430}}>
+                <thead><tr style={{background:"#f3f4f6"}}>{["মাস","কাজ হয়েছে (CFT)","বেতন","অন্যান্য খরচ","প্রতি CFT বেতন","প্রতি CFT খরচ","না বসা"].map((h,i)=><th key={h} style={{padding:"6px 4px",textAlign:i===0?"left":"right",fontWeight:700,color:"#555"}}>{h}</th>)}</tr></thead>
                 <tbody>{[...(stats.furnitureMonths||[])].reverse().map(m=><tr key={m.key} style={{borderBottom:"1px solid #f0f0f0"}}>
                   <td style={{padding:"5px 4px",fontWeight:600,whiteSpace:"nowrap"}}>{m.label}</td>
                   <td style={{padding:"5px 4px",textAlign:"right"}}>{m.cft?toBnDigits(m.cft.toFixed(1)):"—"}</td>
@@ -5063,6 +5397,7 @@ function Home({lastPageCrash,orders,expenses,woodLots,db,woodSettings,laborSetti
                   <td style={{padding:"5px 4px",textAlign:"right"}}>{m.expense?money(Math.round(m.expense)):"—"}</td>
                   <td style={{padding:"5px 4px",textAlign:"right",fontWeight:600}}>{m.salPerCft!==null?money(Math.round(m.salPerCft)):"—"}</td>
                   <td style={{padding:"5px 4px",textAlign:"right",fontWeight:600}}>{m.expPerCft!==null?money(Math.round(m.expPerCft)):"—"}</td>
+                  <td style={{padding:"5px 4px",textAlign:"right",color:"#a16207"}}>{(m.idleSalary+m.idleExpense)>0?money(Math.round(m.idleSalary+m.idleExpense)):"—"}</td>
                 </tr>)}</tbody>
               </table></div>
             </div>
@@ -5220,7 +5555,18 @@ function WoodStockPage({woodLots,saveWoodLots,addLotPayment,woodSettings,saveWoo
   const setView=(v)=>{if(v==="list")onOpenList();else if(v==="new")onOpenNew();else if(v==="rates")onOpenRates();else if(v==="usage")onOpenUsage()}; // পুরনো কল-সাইটের সাথে সামঞ্জস্যের জন্য
   const setSelLotId=(id)=>onOpenDetail(id);
   const selLotId=lotId;
-  const[newLot,setNewLot]=useState({woodType:"S",supplier:"",supplierPhone:"",supplierAddress:"",date:today,ratePerCft:""});
+  const[newLot,setNewLot]=useState({woodType:"S",supplier:"",supplierPhone:"",supplierAddress:"",date:today,ratePerCft:"",codePrefix:""});
+  // ── v4.61: আগের সাপ্লায়ারদের তালিকা (সর্বশেষ লট থেকে ফোন, ঠিকানা আর গুড়ির কোডের অক্ষর) ──
+  const[supSel,setSupSel]=useState("");
+  const supplierList=useMemo(()=>{
+    const m={};
+    [...(woodLots||[])].sort((a,b)=>String(b.date||"").localeCompare(String(a.date||""))).forEach(l=>{
+      const nm=String(l.supplier||"").trim();if(!nm||m[nm])return;
+      m[nm]={name:nm,phone:l.supplierPhone||"",address:l.supplierAddress||"",prefix:String(l.codePrefix||"").trim()};
+    });
+    return Object.values(m);
+  },[woodLots]);
+  const cleanPrefix=(v)=>String(v||"").replace(/[\s\-]+/g,"").slice(0,8);
   const[newLog,setNewLog]=useState({lengthFt:"",diameterIn:""});
   const[newPay,setNewPay]=useState({date:today,amount:""});
   const[sellingLogId,setSellingLogId]=useState(null);
@@ -5245,10 +5591,10 @@ function WoodStockPage({woodLots,saveWoodLots,addLotPayment,woodSettings,saveWoo
 
   const createLot=()=>{
     if(!newLot.supplier)return;
-    const lot={id:"lot_"+Date.now(),...newLot,logs:[],payments:[],millingEntries:[],transportCost:0,otherCost:0};
+    const lot={id:"lot_"+Date.now(),...newLot,supplier:newLot.supplier.trim(),codePrefix:cleanPrefix(newLot.codePrefix),logCounter:0,logs:[],payments:[],millingEntries:[],transportCost:0,otherCost:0};
     saveWoodLots([lot,...woodLots]);
     onOpenDetail(lot.id);
-    setNewLot({woodType:"S",supplier:"",supplierPhone:"",supplierAddress:"",date:today,ratePerCft:""});
+    setNewLot({woodType:"S",supplier:"",supplierPhone:"",supplierAddress:"",date:today,ratePerCft:"",codePrefix:""});setSupSel("");
   };
 
   const updateLot=(updated)=>{
@@ -5259,8 +5605,11 @@ function WoodStockPage({woodLots,saveWoodLots,addLotPayment,woodSettings,saveWoo
     const lengthFt=parseFloat(newLog.lengthFt),diameterIn=parseFloat(newLog.diameterIn);
     if(!lengthFt||!diameterIn)return;
     const cftVal=cftLog(lengthFt,diameterIn);
-    const log={id:"log_"+Date.now(),lengthFt,diameterIn,cft:cftVal,cut:false,cutDate:"",sold:false,soldDate:"",soldPrice:0};
-    updateLot({...selLot,logs:[...selLot.logs,log]});
+    // v4.61: প্রতিটা গুড়ি যোগ হওয়ার সাথে সাথেই স্থায়ী কোড পায় (যেমন RH-24) — পরে কোনো গুড়ি মুছলেও বদলায় না
+    const n=nextLogNumber(selLot,woodLots);
+    const code=makeLogCode(String(selLot.codePrefix||"").trim(),n);
+    const log={id:"log_"+Date.now(),code,lengthFt,diameterIn,cft:cftVal,cut:false,cutDate:"",sold:false,soldDate:"",soldPrice:0};
+    updateLot({...selLot,logCounter:n,logs:[...selLot.logs,log]});
     setNewLog({lengthFt:"",diameterIn:""});
   };
   const removeLog=(logId,logLabel)=>{
@@ -5833,9 +6182,20 @@ function WoodStockPage({woodLots,saveWoodLots,addLotPayment,woodSettings,saveWoo
           {Object.entries(WOOD).map(([k,v])=><option key={k} value={k}>{v.bn} ({v.en})</option>)}
         </select>
         {lbl("ক্রয়ের তারিখ")}<div style={{marginBottom:10}}><DateInput value={newLot.date} onChange={v=>setNewLot({...newLot,date:v})} accent="#065f46"/></div>
-        {lbl("বিক্রেতার নাম *")}<input value={newLot.supplier} onChange={e=>setNewLot({...newLot,supplier:e.target.value})} style={{...inp,marginBottom:10}}/>
+        {lbl("বিক্রেতা / সাপ্লায়ার *")}
+        <select value={supSel} onChange={e=>{const v=e.target.value;setSupSel(v);
+          if(v==="__new"||v==="")setNewLot({...newLot,supplier:"",supplierPhone:"",supplierAddress:"",codePrefix:""});
+          else{const sp=supplierList.find(x=>x.name===v);if(sp)setNewLot({...newLot,supplier:sp.name,supplierPhone:sp.phone,supplierAddress:sp.address,codePrefix:sp.prefix})}}} style={{...inp,marginBottom:10}}>
+          <option value="">-- সাপ্লায়ার বেছে নিন --</option>
+          {supplierList.map(sp=><option key={sp.name} value={sp.name}>{sp.name}</option>)}
+          <option value="__new">+ নতুন সাপ্লায়ার</option>
+        </select>
+        {supSel==="__new"&&<>{lbl("নতুন সাপ্লায়ারের নাম *")}<input value={newLot.supplier} onChange={e=>setNewLot({...newLot,supplier:e.target.value})} style={{...inp,marginBottom:10}}/></>}
         {lbl("বিক্রেতার ফোন")}<input value={newLot.supplierPhone} onChange={e=>setNewLot({...newLot,supplierPhone:e.target.value})} style={{...inp,marginBottom:10}}/>
-        {lbl("বিক্রেতার ঠিকানা")}<input value={newLot.supplierAddress} onChange={e=>setNewLot({...newLot,supplierAddress:e.target.value})} style={{...inp,marginBottom:14}}/>
+        {lbl("বিক্রেতার ঠিকানা")}<input value={newLot.supplierAddress} onChange={e=>setNewLot({...newLot,supplierAddress:e.target.value})} style={{...inp,marginBottom:10}}/>
+        {lbl("গুড়ির কোডের শুরুর অক্ষর (যেমন RH)")}
+        <input value={newLot.codePrefix||""} onChange={e=>setNewLot({...newLot,codePrefix:cleanPrefix(e.target.value)})} placeholder="যেমন: RH" style={{...inp,marginBottom:4}}/>
+        <div style={{fontSize:10.5,color:"#065f46",marginBottom:14,lineHeight:1.5}}>এই লটের প্রথম গুড়ির কোড হবে: <strong style={{fontSize:12}}>{makeLogCode(cleanPrefix(newLot.codePrefix),nextLogNumber({codePrefix:cleanPrefix(newLot.codePrefix),logs:[]},woodLots))}</strong> — এরপর প্রতিটা গুড়ি নিজে থেকেই পরের নম্বর পাবে। একই অক্ষরের আগের লট থাকলে নম্বর সেখান থেকে এগোবে।</div>
         <div style={{display:"flex",gap:8}}>
           <button onClick={()=>setView("list")} style={{flex:1,background:"#f3f4f6",border:"none",borderRadius:9,padding:"12px",fontSize:13}}>বাতিল</button>
           <button onClick={createLot} disabled={!newLot.supplier} style={{flex:2,background:newLot.supplier?"#065f46":"#ccc",color:"white",border:"none",borderRadius:9,padding:"12px",fontSize:13,fontWeight:700}}>লট তৈরি করুন → গুড়ি যোগ করুন</button>
@@ -5849,6 +6209,10 @@ function WoodStockPage({woodLots,saveWoodLots,addLotPayment,woodSettings,saveWoo
             <IR l="বিক্রেতা" v={selLot.supplier}/><IR l="ফোন" v={selLot.supplierPhone}/>
           </div>
           <IR l="ঠিকানা" v={selLot.supplierAddress}/>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,marginTop:4}}>
+            <IR l="কোডের অক্ষর" v={String(selLot.codePrefix||"").trim()||"(নেই — শুধু নম্বর)"}/>
+            <button onClick={()=>{const v=window.prompt("এই লটের নতুন গুড়ির কোডের শুরুর অক্ষর (আগের গুড়ির কোড বদলাবে না):",selLot.codePrefix||"");if(v===null)return;updateLot({...selLot,codePrefix:cleanPrefix(v)})}} style={{background:"#f3f4f6",border:"none",borderRadius:6,padding:"4px 10px",fontSize:10,color:"#374151",flexShrink:0}}>✏️ বদলান</button>
+          </div>
           <button onClick={()=>deleteLot(selLot.id)} style={{background:"#fee2e2",border:"none",borderRadius:7,padding:"6px 12px",color:RED,fontSize:11,fontWeight:600,marginTop:8}}>🗑 লট মুছে ফেলুন</button>
         </div>
 
@@ -5857,12 +6221,13 @@ function WoodStockPage({woodLots,saveWoodLots,addLotPayment,woodSettings,saveWoo
         <div style={{background:"white",borderRadius:11,overflow:"hidden",marginBottom:12,boxShadow:"0 1px 4px rgba(0,0,0,.07)"}}>
           {selLot.logs.length===0?<div style={{textAlign:"center",color:"#aaa",padding:16,fontSize:12}}>এখনো কোনো গুড়ি যোগ করা হয়নি</div>:
           selLot.logs.map((log,i)=>{
-            const label=`#${i+1} — ${log.lengthFt}ft × ${log.diameterIn}″`;
+            const lcode=log.code||String(i+1);
+            const label=`${lcode} (ক্রমিক #${i+1}) — ${log.lengthFt}ft × ${log.diameterIn}″`;
             const stateColor=log.sold?"#7c3aed":log.cut?"#94a3b8":"#065f46";
             return<div key={log.id} style={{padding:"10px 12px",borderBottom:i<selLot.logs.length-1?"1px solid #f2f2f2":"none",background:log.sold?"#f5f3ff":log.cut?"#fafafa":"white"}}>
               <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
                 <div style={{flex:"1 1 auto",minWidth:140,color:(log.cut||log.sold)?"#999":"#222",textDecoration:(log.cut||log.sold)?"line-through":"none"}}>
-                  <span style={{fontWeight:700,fontSize:13}}>#{i+1}</span> — লম্বা {log.lengthFt}ft × ব্যাস {log.diameterIn}″ = <strong>{log.cft.toFixed(3)} CFT</strong>
+                  <span style={{fontWeight:800,fontSize:14,color:(log.cut||log.sold)?"#999":"#065f46"}}>{lcode}</span> <span style={{fontSize:9.5,color:"#bbb",fontWeight:400}}>#{i+1}</span> — লম্বা {log.lengthFt}ft × ব্যাস {log.diameterIn}″ = <strong>{log.cft.toFixed(3)} CFT</strong>
                   {log.cut&&log.cutDate&&<span style={{fontSize:10,marginLeft:6}}>(কাটা: {fmtDate(log.cutDate)})</span>}
                   {log.sold&&<span style={{fontSize:10,marginLeft:6,color:"#7c3aed",fontWeight:700}}>(বিক্রি: {money(log.soldPrice)}, {fmtDate(log.soldDate)})</span>}
                 </div>
@@ -5882,7 +6247,8 @@ function WoodStockPage({woodLots,saveWoodLots,addLotPayment,woodSettings,saveWoo
           })}
         </div>
         <div style={{background:"white",borderRadius:11,padding:12,marginBottom:14,boxShadow:"0 1px 4px rgba(0,0,0,.07)"}}>
-          <div style={{fontWeight:700,fontSize:12,marginBottom:8,color:"#065f46"}}>নতুন গুড়ি যোগ করুন</div>
+          <div style={{fontWeight:700,fontSize:12,marginBottom:6,color:"#065f46"}}>নতুন গুড়ি যোগ করুন</div>
+          <div style={{background:"#ecfdf5",border:"1px dashed #6ee7b7",borderRadius:8,padding:"7px 10px",marginBottom:8,fontSize:11,color:"#065f46"}}>এই গুড়ির কোড হবে <strong style={{fontSize:15,letterSpacing:0.5}}>{makeLogCode(String(selLot.codePrefix||"").trim(),nextLogNumber(selLot,woodLots))}</strong> — গুড়ির গায়ে এটাই লিখে দিন</div>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr auto",gap:8,alignItems:"end"}}>
             <div>{lbl("দৈর্ঘ্য (ফুট)")}<input type="number" step="0.5" value={newLog.lengthFt} onChange={e=>setNewLog({...newLog,lengthFt:e.target.value})} style={inp}/></div>
             <div>{lbl("ব্যাস (ইঞ্চি)")}<input type="number" step="0.5" value={newLog.diameterIn} onChange={e=>setNewLog({...newLog,diameterIn:e.target.value})} style={inp}/></div>
@@ -6044,58 +6410,39 @@ function PLReportPage({orders,expenses,workers,payrollWeeks,woodLots,woodSetting
   const endIdx=startIdx+period.months-1;
   const inRange=(dateStr)=>{if(!dateStr)return false;const idx=monthIndexOf(dateStr);return idx>=startIdx&&idx<=endIdx};
 
+  // ── v4.61: "কোন ফার্নিচারে খরচ ও লাভ কত"-এর একই হিসাব — প্রতিটা ফার্নিচারের খরচ তার তৈরির সপ্তাহগুলোর
+  // আসল বেতন ও খরচ থেকে; যে সপ্তাহে কোনো ফার্নিচারে কাজ চলেনি সেই খরচ আলাদা লাইনে ──
+  const ledger=useMemo(()=>buildSpendLedger(expenses,payrollWeeks,workers,woodLots),[expenses,payrollWeeks,workers,woodLots]);
+  const costing=useMemo(()=>furnitureCosting(orders,ledger,woodSettings,laborSettings,null,null),[orders,ledger,woodSettings,laborSettings]);
+  const[showOrders,setShowOrders]=useState(false);
   const stats=useMemo(()=>{
-    const allActive=orders.filter(o=>!o.cancelled);
-
-    // ── প্রতিটা অর্ডারের "বালতি" খরচ (job cost) — কাঠ ও শ্রম দুটোই CFT-ভিত্তিক ──
-    const jobCost=(o)=>{
-      const cftTotal=orderTotalCft(o);
-      const wood=(o.items||[]).reduce((s,it)=>s+itemWoodCost(it,o,woodSettings),0);
-      const lRate=orderLabourRate(o,laborSettings);
-      const labour=cftTotal*lRate;
-      return{wood,labour,cft:cftTotal,total:wood+labour};
-    };
-
-    // ── ডেলিভারি হওয়া অর্ডার = এই সময়ের আয় ও তার খরচ ──
-    const delivered=allActive.filter(o=>o.delivered&&inRange(o.deliveredAt));
-    const revenue=delivered.reduce((s,o)=>s+(parseFloat(o.cust.total)||0),0);
-    let woodCost=0,labourCost=0,deliveredCft=0;
-    delivered.forEach(o=>{const j=jobCost(o);woodCost+=j.wood;labourCost+=j.labour;deliveredCft+=j.cft});
-
-    // ── অসম্পূর্ণ কাজ (WIP) — সম্পদ, খরচ নয় ──
-    const wipOrders=allActive.filter(o=>!o.delivered);
-    const wipValue=wipOrders.reduce((s,o)=>s+jobCost(o).total,0);
-
-    // ── এই সময়ে আসলে দেওয়া মোট মজুরি (তথ্যের জন্য, তুলনা করতে) ──
-    let actualPayroll=0;
-    Object.entries(payrollWeeks||{}).forEach(([weekEnd,wd])=>{
-      if(!inRange(weekEnd))return;
-      Object.entries(wd.attendance||{}).forEach(([wid,d])=>{
-        const w=workers.find(w=>w.id===wid);
-        if(w)actualPayroll+=(parseFloat(d)||0)*(parseFloat(w.dailyRate)||0);
-      });
+    const dItems=costing.items.filter(x=>x.delivered&&inRange(x.deliveredAt));
+    const byOrder={};
+    dItems.forEach(x=>{
+      const r=byOrder[x.no]||(byOrder[x.no]={no:x.no,cust:x.cust,date:x.deliveredAt,revenue:0,wood:0,salary:0,expense:0,cft:0,filled:false,estimated:false});
+      r.revenue+=x.revenue;r.wood+=x.woodCost;r.salary+=x.salary;r.expense+=x.expense;r.cft+=x.cft;
+      if(x.woodFilledAt)r.filled=true;if(x.startAssumed||x.endIsDelivery)r.estimated=true;
     });
-
-    // ── সাধারণ খরচ (হার্ডওয্যার/বার্নিশ/ইউটিলিটি ইত্যাদি) ──
-    const generalExpenses=expenses.filter(e=>inRange(e.date)).reduce((s,e)=>s+(parseFloat(e.total)||0),0);
-    const expenseByCat={};
-    expenses.filter(e=>inRange(e.date)).forEach(e=>{
-      const cat=EXP_CATS.find(c=>c.id===e.category);
-      const label=cat?cat.bn:e.category;
-      expenseByCat[label]=(expenseByCat[label]||0)+(parseFloat(e.total)||0);
-    });
-
-    const woodPurchaseCash=(woodLots||[]).filter(l=>inRange(l.date)).reduce((s,l)=>{
-      const tCft=(l.logs||[]).reduce((ss,lg)=>ss+lg.cft,0);
-      return s+tCft*(parseFloat(l.ratePerCft)||0);
-    },0);
-
-    const totalCosts=woodCost+labourCost+generalExpenses;
+    const orderRows=Object.values(byOrder).map(r=>({...r,profit:r.revenue-r.wood-r.salary-r.expense})).sort((p,q)=>String(q.date).localeCompare(String(p.date)));
+    const sum=(f)=>orderRows.reduce((t,r)=>t+r[f],0);
+    const revenue=sum("revenue"),woodCost=sum("wood"),salaryCost=sum("salary"),expenseCost=sum("expense"),deliveredCft=sum("cft");
+    let idleSalary=0,idleExpense=0;
+    Object.entries(costing.idle||{}).forEach(([w,v])=>{if(inRange(w)){idleSalary+=v.salary;idleExpense+=v.expense}});
+    const totalCosts=woodCost+salaryCost+expenseCost+idleSalary+idleExpense;
     const netProfit=revenue-totalCosts;
-    return{revenue,woodCost,labourCost,deliveredCft,generalExpenses,totalCosts,netProfit,expenseByCat,woodPurchaseCash,
-      deliveredCount:delivered.length,wipCount:wipOrders.length,wipValue,actualPayroll,
-      labourGap:actualPayroll-labourCost};
-  },[orders,expenses,workers,payrollWeeks,woodLots,woodSettings,laborSettings,startIdx,endIdx]);
+    const wipItems=costing.items.filter(x=>!x.delivered);
+    const wipValue=wipItems.reduce((t,x)=>t+x.woodCost+x.salary+x.expense,0);
+    const wipCount=new Set(wipItems.map(x=>x.no)).size;
+    let actualPayroll=0,periodExpenses=0,woodPaid=0;const expenseByCat={};
+    ledger.forEach(e=>{if(!inRange(e.date))return;
+      if(e.kind==="salary")actualPayroll+=e.amount;
+      else if(e.kind==="wood")woodPaid+=e.amount;
+      else{periodExpenses+=e.amount;expenseByCat[e.label]=(expenseByCat[e.label]||0)+e.amount}});
+    return{revenue,woodCost,salaryCost,expenseCost,idleSalary,idleExpense,deliveredCft,totalCosts,netProfit,orderRows,
+      deliveredCount:orderRows.length,wipCount,wipValue,actualPayroll,periodExpenses,woodPaid,expenseByCat,
+      filledCount:orderRows.filter(r=>r.filled).length,estimatedCount:orderRows.filter(r=>r.estimated).length};
+  },[costing,ledger,startIdx,endIdx]);
+  const line=(label,val,opts)=><div style={{display:"flex",justifyContent:"space-between",gap:8,fontSize:(opts&&opts.fs)||12,marginBottom:6,paddingLeft:(opts&&opts.indent)?8:0,color:(opts&&opts.color)||"#333",fontWeight:(opts&&opts.bold)?800:400}}><span>{label}</span><span style={{flexShrink:0}}>{val}</span></div>;
 
   return<div style={{minHeight:"100vh",background:"#f8f8f8"}}>
     <div style={{background:"#B45309",color:"white",padding:"13px 16px",display:"flex",alignItems:"center",gap:11}}>
@@ -6103,11 +6450,9 @@ function PLReportPage({orders,expenses,workers,payrollWeeks,woodLots,woodSetting
       <span style={{fontWeight:700,fontSize:16}}>লাভ-ক্ষতি রিপোর্ট</span>
     </div>
     <div style={{padding:"16px",maxWidth:600,margin:"0 auto"}}>
-
       <div style={{display:"flex",gap:6,overflowX:"auto",marginBottom:14,paddingBottom:2}}>
         {PL_PERIODS.map(p=><button key={p.key} onClick={()=>setPeriodKey(p.key)} style={{flexShrink:0,background:periodKey===p.key?"#B45309":"white",color:periodKey===p.key?"white":"#B45309",border:"1.5px solid #B45309",borderRadius:20,padding:"7px 14px",fontSize:12,fontWeight:700}}>{p.label}</button>)}
       </div>
-
       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",background:"white",borderRadius:11,padding:"10px 14px",marginBottom:16,boxShadow:"0 1px 4px rgba(0,0,0,.07)"}}>
         <button onClick={()=>setBlockOffset(b=>b-1)} style={{background:"#fef3e2",border:"none",borderRadius:8,padding:"8px 12px",color:"#B45309",fontWeight:700,fontSize:13}}>◀</button>
         <div style={{fontSize:14,fontWeight:700,color:"#222"}}>{plPeriodLabel(startIdx,period.months)}</div>
@@ -6115,46 +6460,57 @@ function PLReportPage({orders,expenses,workers,payrollWeeks,woodLots,woodSetting
       </div>
 
       <div style={{background:"white",borderRadius:13,padding:16,marginBottom:14,boxShadow:"0 1px 4px rgba(0,0,0,.07)"}}>
-        <div style={{fontSize:10,color:"#999",marginBottom:8,background:"#f8fafc",borderRadius:6,padding:"6px 9px"}}>হিসাব হয় <strong>ডেলিভারি হওয়া</strong> অর্ডারের উপর — অর্ডার নেওয়ার তারিখে নয়। তাই কোনো মাসে ভুয়া লাভ/ক্ষতি দেখাবে না।</div>
-        <div style={{display:"flex",justifyContent:"space-between",fontSize:13,marginBottom:10,paddingBottom:10,borderBottom:"1px solid #f0f0f0"}}>
-          <span style={{color:"#555"}}>ডেলিভারিকৃত বিক্রয় ({stats.deliveredCount} অর্ডার)</span>
-          <span style={{fontWeight:800,color:"#166534"}}>{money(stats.revenue)}</span>
-        </div>
-        <div style={{fontSize:12,fontWeight:700,color:"#888",marginBottom:8}}>বাদ যাবে — শুধু এই অর্ডারগুলোর খরচ:</div>
-        <div style={{display:"flex",justifyContent:"space-between",fontSize:12,marginBottom:6,paddingLeft:8}}><span>🪵 কাঠের খরচ</span><span style={{color:RED}}>− {money(stats.woodCost)}</span></div>
-        <div style={{display:"flex",justifyContent:"space-between",fontSize:12,marginBottom:10,paddingLeft:8}}><span>👷 শ্রম ({stats.deliveredCft.toFixed(1)} CFT)</span><span style={{color:RED}}>− {money(stats.labourCost)}</span></div>
-        <div style={{display:"flex",justifyContent:"space-between",fontSize:12,marginBottom:10,paddingLeft:8}}><span>🧾 হার্ডওয়্যার/বার্নিশ/অন্যান্য</span><span style={{color:RED}}>− {money(stats.generalExpenses)}</span></div>
-        <div style={{display:"flex",justifyContent:"space-between",fontSize:16,fontWeight:900,paddingTop:12,borderTop:"2px solid #eee",color:stats.netProfit>=0?"#166534":RED}}>
+        <div style={{fontSize:10,color:"#777",marginBottom:10,background:"#f8fafc",borderRadius:6,padding:"7px 9px",lineHeight:1.6}}>বিক্রি ধরা হয় <strong>ডেলিভারির তারিখে</strong>। প্রতিটা ফার্নিচারের খরচ = কাঠ (অর্ডারের সময়ের দামে) + যে সপ্তাহগুলোতে সেটা তৈরি হয়েছে সেই সপ্তাহগুলোর আসল বেতন আর অন্যান্য খরচের ভাগ (CFT অনুযায়ী)। শেষের তারিখ না থাকলে ডেলিভারির তারিখ ধরা হয়।</div>
+        {line(`ডেলিভারিকৃত বিক্রয় (${toBnDigits(stats.deliveredCount)}টি অর্ডার)`,<span style={{fontWeight:800,color:"#166534"}}>{money(Math.round(stats.revenue))}</span>,{fs:13})}
+        <div style={{fontSize:12,fontWeight:700,color:"#888",margin:"10px 0 8px"}}>বাদ যাবে — এই অর্ডারগুলো তৈরির খরচ:</div>
+        {line(`🪵 কাঠ (${toBnDigits(stats.deliveredCft.toFixed(1))} CFT)`,<span style={{color:RED}}>− {money(Math.round(stats.woodCost))}</span>,{indent:true})}
+        {line("👷 কর্মীদের বেতন (তৈরির সপ্তাহগুলোর)",<span style={{color:RED}}>− {money(Math.round(stats.salaryCost))}</span>,{indent:true})}
+        {line("🧾 অন্যান্য খরচ (তৈরির সপ্তাহগুলোর)",<span style={{color:RED}}>− {money(Math.round(stats.expenseCost))}</span>,{indent:true})}
+        {(stats.idleSalary+stats.idleExpense)>0&&<>
+          <div style={{fontSize:12,fontWeight:700,color:"#888",margin:"10px 0 8px"}}>এই সময়ের যে সপ্তাহে কোনো ফার্নিচারে কাজ চলেনি:</div>
+          {stats.idleSalary>0&&line("👷 বেতন",<span style={{color:RED}}>− {money(Math.round(stats.idleSalary))}</span>,{indent:true})}
+          {stats.idleExpense>0&&line("🧾 অন্যান্য খরচ",<span style={{color:RED}}>− {money(Math.round(stats.idleExpense))}</span>,{indent:true})}
+        </>}
+        <div style={{display:"flex",justifyContent:"space-between",fontSize:16,fontWeight:900,paddingTop:12,marginTop:6,borderTop:"2px solid #eee",color:stats.netProfit>=0?"#166534":RED}}>
           <span>{stats.netProfit>=0?"✅ নিট লাভ":"⚠️ নিট ক্ষতি"}</span>
-          <span>{money(Math.abs(stats.netProfit))}</span>
+          <span>{money(Math.round(Math.abs(stats.netProfit)))}</span>
         </div>
+        {stats.revenue>0&&<div style={{fontSize:10,color:"#888",textAlign:"right",marginTop:3}}>লাভের হার {toBnDigits((stats.netProfit/stats.revenue*100).toFixed(0))}%</div>}
+        {(stats.filledCount>0||stats.estimatedCount>0)&&<div style={{fontSize:9.5,color:"#a16207",marginTop:8,lineHeight:1.5}}>{stats.filledCount>0?`${toBnDigits(stats.filledCount)}টা অর্ডারে কাঠের মাপ ডেলিভারির পরে বসানো। `:""}{stats.estimatedCount>0?`${toBnDigits(stats.estimatedCount)}টা অর্ডারের তৈরির সময় পুরো ট্র্যাক করা ছিল না — আনুমানিক।`:""}</div>}
       </div>
+
+      {stats.orderRows.length>0&&<div style={{background:"white",borderRadius:13,padding:14,marginBottom:14,boxShadow:"0 1px 4px rgba(0,0,0,.07)"}}>
+        <button onClick={()=>setShowOrders(!showOrders)} style={{width:"100%",background:"none",border:"none",display:"flex",justifyContent:"space-between",alignItems:"center",fontSize:13,fontWeight:700,color:"#B45309",padding:0}}><span>📋 অর্ডার অনুযায়ী হিসাব ({toBnDigits(stats.orderRows.length)})</span><span>{showOrders?"▲":"▼"}</span></button>
+        {showOrders&&<div style={{marginTop:10}}>
+          {stats.orderRows.map(r=><div key={r.no} style={{border:"1px solid #f1f1f1",borderRadius:8,padding:"7px 9px",marginBottom:6}}>
+            <div style={{display:"flex",justifyContent:"space-between",gap:6,fontSize:10.5,fontWeight:700,color:"#333"}}><span style={{minWidth:0}}>{fmtDate(r.date)} · {r.cust||"—"}</span><span style={{color:r.profit>=0?"#166534":RED,flexShrink:0}}>লাভ {money(Math.round(r.profit))}</span></div>
+            <div style={{fontSize:9,color:"#999",margin:"2px 0 4px"}}>অর্ডার {r.no} · {toBnDigits(r.cft.toFixed(2))} CFT{r.filled?" · কাঠের মাপ পরে বসানো":""}{r.estimated?" · আনুমানিক সময়":""}</div>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:4,fontSize:9.5,textAlign:"center"}}>
+              {[["বিক্রি",r.revenue],["কাঠ",r.wood],["বেতন",r.salary],["খরচ",r.expense]].map(([l,v])=><div key={l}><div style={{color:"#999"}}>{l}</div><div style={{fontWeight:600}}>{money(Math.round(v))}</div></div>)}
+            </div>
+          </div>)}
+        </div>}
+      </div>}
 
       <div style={{background:"#eff6ff",border:"1px solid #bfdbfe",borderRadius:11,padding:14,marginBottom:14}}>
         <div style={{fontWeight:700,fontSize:12,color:"#1d4ed8",marginBottom:8}}>🔨 অসম্পূর্ণ কাজ (আপনার সম্পদ — খরচ নয়)</div>
-        <div style={{display:"flex",justifyContent:"space-between",fontSize:12,marginBottom:4}}><span>চলমান অর্ডার সংখ্যা</span><span style={{fontWeight:700}}>{stats.wipCount} টি</span></div>
-        <div style={{display:"flex",justifyContent:"space-between",fontSize:13,fontWeight:800,color:"#1d4ed8"}}><span>এতে জমা খরচ</span><span>{money(stats.wipValue)}</span></div>
-        <div style={{fontSize:10,color:"#555",marginTop:7,lineHeight:1.6}}>এই টাকাটা এখনো লাভ-ক্ষতির হিসাবে ঢোকেনি — এগুলো ডেলিভারি হলেই তখন হিসাবে আসবে। এই কারণেই কম অর্ডারের মাসেও ভুয়া লস দেখায় না।</div>
+        <div style={{display:"flex",justifyContent:"space-between",fontSize:12,marginBottom:4}}><span>ডেলিভারি না হওয়া অর্ডার</span><span style={{fontWeight:700}}>{toBnDigits(stats.wipCount)} টি</span></div>
+        <div style={{display:"flex",justifyContent:"space-between",fontSize:13,fontWeight:800,color:"#1d4ed8"}}><span>এতে এখন পর্যন্ত জমা খরচ</span><span>{money(Math.round(stats.wipValue))}</span></div>
+        <div style={{fontSize:10,color:"#555",marginTop:7,lineHeight:1.6}}>কাঠ আর এ পর্যন্ত কাজের সপ্তাহগুলোর বেতন/খরচের ভাগ। এগুলো ডেলিভারি হলে তখন লাভ-ক্ষতিতে আসবে — তাই কম ডেলিভারির মাসে ভুয়া ক্ষতি দেখায় না।</div>
       </div>
 
       <div style={{background:"white",borderRadius:11,padding:14,marginBottom:14,boxShadow:"0 1px 4px rgba(0,0,0,.07)"}}>
-        <div style={{fontWeight:700,fontSize:12,color:"#B45309",marginBottom:8}}>ℹ️ তুলনা (শুধু তথ্যের জন্য)</div>
-        <div style={{display:"flex",justifyContent:"space-between",fontSize:12,marginBottom:4}}><span>এই সময়ে আসলে দেওয়া মজুরি</span><span style={{fontWeight:700}}>{money(stats.actualPayroll)}</span></div>
-        <div style={{display:"flex",justifyContent:"space-between",fontSize:12,marginBottom:4}}><span>ডেলিভারিকৃত কাজে ধরা শ্রম</span><span style={{fontWeight:700}}>{money(stats.labourCost)}</span></div>
-        <div style={{display:"flex",justifyContent:"space-between",fontSize:12,paddingTop:6,borderTop:"1px solid #f0f0f0",color:"#555"}}>
-          <span style={{fontWeight:700}}>পার্থক্য</span><span style={{fontWeight:800}}>{stats.labourGap>=0?"+":"−"}{money(Math.abs(stats.labourGap))}</span>
-        </div>
-        <div style={{fontSize:10,color:"#777",marginTop:7,lineHeight:1.6}}>এই পার্থক্যটা <strong>স্বাভাবিক</strong> — মজুরির টাকা চলমান (অসম্পূর্ণ) কাজে গেছে, অথবা কাঠ প্রস্তুতি/অন্য সহায়তায় গেছে যা সরাসরি কোনো অর্ডারের সাথে যুক্ত নয়। উপরের লাভ-ক্ষতির হিসাবে এই পার্থক্য নিয়ে চিন্তার দরকার নেই — CFT-ভিত্তিক শ্রম হারই আসল হিসাব।</div>
+        <div style={{fontWeight:700,fontSize:12,color:"#B45309",marginBottom:8}}>💵 এই সময়ে হাত থেকে যাওয়া টাকা (নগদের হিসাব)</div>
+        {line("কর্মীদের বেতন",money(Math.round(stats.actualPayroll)))}
+        {line("খরচের খাতার খরচ",money(Math.round(stats.periodExpenses)))}
+        {line("কাঠ — সাপ্লায়ার পেমেন্ট, কাটাই ও পরিবহন",money(Math.round(stats.woodPaid)))}
+        <div style={{fontSize:10,color:"#777",marginTop:4,lineHeight:1.6}}>এটা টাকা দেওয়ার তারিখের হিসাব। উপরের লাভ-ক্ষতিতে একই খরচ ধরা হয় ফার্নিচার তৈরির সময় অনুযায়ী — তাই দুটো সংখ্যা মাসে মাসে আলাদা হতে পারে।</div>
       </div>
 
       {Object.keys(stats.expenseByCat).length>0&&<div style={{background:"white",borderRadius:13,padding:16,marginBottom:14,boxShadow:"0 1px 4px rgba(0,0,0,.07)"}}>
-        <div style={{fontWeight:700,fontSize:13,marginBottom:10,color:"#B45309"}}>খরচের ভাঙন (হার্ডওয়্যার/বার্নিশ/অন্যান্য)</div>
-        {Object.entries(stats.expenseByCat).sort((a,b)=>b[1]-a[1]).map(([label,val])=><div key={label} style={{display:"flex",justifyContent:"space-between",fontSize:12,padding:"5px 0",borderBottom:"1px solid #f5f5f5"}}><span>{label}</span><span style={{fontWeight:600}}>{money(val)}</span></div>)}
+        <div style={{fontWeight:700,fontSize:13,marginBottom:10,color:"#B45309"}}>খরচের খাতার ভাঙন (এই সময়ে)</div>
+        {Object.entries(stats.expenseByCat).sort((p,q)=>q[1]-p[1]).map(([label,val])=><div key={label} style={{display:"flex",justifyContent:"space-between",fontSize:12,padding:"5px 0",borderBottom:"1px solid #f5f5f5"}}><span>{label}</span><span style={{fontWeight:600}}>{money(Math.round(val))}</span></div>)}
       </div>}
-
-      <div style={{background:"#fffbeb",border:"1px solid #fde68a",borderRadius:11,padding:14,fontSize:12,color:"#92400e"}}>
-        ℹ️ এই সময়ে কাঠ কেনায় নগদ ব্যয় হয়েছে <strong>{money(stats.woodPurchaseCash)}</strong> — এটা উপরের লাভ-ক্ষতির হিসাবে ধরা হয়নি, কারণ কেনা কাঠ তখনই খরচ হিসেবে গণ্য হয় যখন সেটা কোনো অর্ডারে ব্যবহৃত হয়। এটা শুধু আপনার নগদ টাকার প্রবাহ বোঝার জন্য।
-      </div>
     </div>
   </div>
 }
@@ -6859,25 +7215,25 @@ function ManageDB({db,saveDb,galleries,saveGalleryEntry,onBack,navigate,goBack,r
               <button onClick={()=>saveCode(catK,vK)} style={{background:"#6d28d9",color:"white",border:"none",borderRadius:6,padding:"5px 9px",fontSize:11,fontWeight:700}}>✓</button>
               <button onClick={()=>setEditingCode(null)} style={{background:"#f3f4f6",border:"none",borderRadius:6,padding:"5px 9px",fontSize:11}}>✕</button>
             </div>:<div style={{display:"flex",alignItems:"stretch",gap:8}}>
-              <div style={{flex:1,display:"flex",gap:6,alignItems:"flex-start",minWidth:0}}>
+              <div style={{flex:2,display:"flex",gap:6,alignItems:"flex-start",minWidth:0}}>
                 {galleries&&galleries[`${catK}__${vK}`]&&galleries[`${catK}__${vK}`].coverImage&&<img src={galleries[`${catK}__${vK}`].coverImage} onClick={e=>{e.stopPropagation();openLightbox(galleries[`${catK}__${vK}`].coverImage)}} style={{width:32,height:32,objectFit:"cover",borderRadius:6,border:"1px solid #eee",flexShrink:0,cursor:"pointer"}} alt=""/>}
                 <div style={{minWidth:0}}><div style={{fontSize:12,fontWeight:600,wordBreak:"break-word"}}>{isEmptyWood(v)?"⚠️ ":""}{v.bn}</div><div style={{fontSize:10,color:"#888",fontFamily:"monospace"}}>Code: <span style={dupOthers.length?{color:"#dc2626",fontWeight:700}:undefined}>{v.code||"—"}</span>{isEmptyWood(v)?" — কাঠের মাপ ফাঁকা":""}{galleries&&galleries[`${catK}__${vK}`]&&galleries[`${catK}__${vK}`].gallery&&galleries[`${catK}__${vK}`].gallery.length?` · ${galleries[`${catK}__${vK}`].gallery.length} ছবি`:""}</div>{dupOthers.length>0&&<div style={{fontSize:9.5,color:"#dc2626",fontWeight:600,marginTop:2,lineHeight:1.45,wordBreak:"break-word"}}>⚠️ একই কোড: {dupOthers.map(d=>`${d.bn} (${d.catBn})`).join(", ")}</div>}</div>
               </div>
-              <div style={{flex:1,display:"flex",flexDirection:"column",gap:4}}>
-                <div style={{display:"flex",gap:4}}>
-                  <button onClick={()=>startRenameVar(catK,vK)} style={{flex:1,background:"#f5f3ff",border:"none",borderRadius:6,padding:"5px 4px",color:"#6d28d9",fontSize:10,fontWeight:600}}>✏️ নাম</button>
-                  <button onClick={()=>openGallery(catK,vK)} style={{flex:1,background:"#fef3c7",border:"none",borderRadius:6,padding:"5px 4px",color:"#92400e",fontSize:10,fontWeight:600}}>🖼️ ছবি</button>
-                  <button onClick={()=>openEdit(catK,vK)} style={{flex:1,background:"#f5f3ff",border:"none",borderRadius:6,padding:"5px 4px",color:"#6d28d9",fontSize:10,fontWeight:600}}>কাঠ</button>
-                </div>
-                <div style={{display:"flex",gap:4}}>
-                  <button onClick={()=>{
+              {/* v4.61: নাম ২/৩ জায়গায়, বাটন ১/৩ জায়গায় — সব বাটন একই শান্ত রঙে; শুধু বিশেষ অবস্থায় (মেশানোর জন্য
+                  বাছাই, একই কোড) আলাদা দেখায় */}
+              <div style={{flex:1,minWidth:0,display:"grid",gridTemplateColumns:"1fr 1fr",gap:4,alignContent:"start"}}>
+                {[
+                  {k:"n",t:"✏️ নাম",f:()=>startRenameVar(catK,vK)},
+                  {k:"g",t:"🖼️ ছবি",f:()=>openGallery(catK,vK)},
+                  {k:"w",t:"🪵 কাঠ",f:()=>openEdit(catK,vK)},
+                  {k:"m",t:isSelectedForMerge?"✓ বাছাই":"🔗 মেশান",on:isSelectedForMerge,f:()=>{
                     if(!mergeSelectFirst)setMergeSelectFirst(thisKey);
                     else if(mergeSelectFirst===thisKey)setMergeSelectFirst(null);
                     else{const[fc,fv]=mergeSelectFirst.split("|");doMergeVariants(fc,fv,thisKey)}
-                  }} style={{flex:1,background:isSelectedForMerge?"#b91c1c":"#fef2f2",border:"none",borderRadius:6,padding:"5px 4px",color:isSelectedForMerge?"white":"#b91c1c",fontSize:10,fontWeight:600}}>{isSelectedForMerge?"✓ নির্বাচিত":"🔗 মেশান"}</button>
-                  <button onClick={()=>setMovingVar(thisKey)} style={{flex:1,background:"#ecfdf5",border:"none",borderRadius:6,padding:"5px 4px",color:"#047857",fontSize:10,fontWeight:600}}>📁 সরান</button>
-                  <button onClick={()=>startEditCode(catK,vK)} style={{flex:1,background:dupOthers.length?"#fee2e2":"#eff6ff",border:"none",borderRadius:6,padding:"5px 4px",color:dupOthers.length?"#b91c1c":"#1d4ed8",fontSize:10,fontWeight:600}}>🏷️ কোড</button>
-                </div>
+                  }},
+                  {k:"v",t:"📁 সরান",f:()=>setMovingVar(thisKey)},
+                  {k:"c",t:"🏷️ কোড",warn:dupOthers.length>0,f:()=>startEditCode(catK,vK)}
+                ].map(bt=><button key={bt.k} onClick={bt.f} style={{background:bt.on?"#3f3f46":"#f4f4f5",color:bt.on?"white":bt.warn?"#b91c1c":"#3f3f46",border:"1px solid "+(bt.on?"#3f3f46":bt.warn?"#fca5a5":"#e4e4e7"),borderRadius:6,padding:"5px 2px",fontSize:9.5,fontWeight:600,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{bt.t}</button>)}
               </div>
             </div>}
           </div>;})}
@@ -7007,7 +7363,7 @@ function ManageDB({db,saveDb,galleries,saveGalleryEntry,onBack,navigate,goBack,r
 }
 
 /* ── FORM (no wood editing here anymore, smart delivery date, inline new-category) ── */
-function Form({onSave,onBack,db,saveDb,galleries,woodSettings,laborSettings,orders,getNextOrderNumber}){
+function Form({recentRates,onSave,onBack,db,saveDb,galleries,woodSettings,laborSettings,orders,getNextOrderNumber}){
   const today=todayStr();
   const[orderNo,setOrderNo]=useState(null);
   useEffect(()=>{
@@ -7079,23 +7435,27 @@ function Form({onSave,onBack,db,saveDb,galleries,woodSettings,laborSettings,orde
     const cftVal=totalCft(fVar.sections)*(ni.qty||1);
     const draftItem={wood:ni.wood,qty:parseFloat(ni.qty)||1,sections:fVar.sections};
     const woodCost=itemWoodCost(draftItem,{cust:{date:todayStr()}},woodSettings);
+    // v4.61: কাঠ (অপচয় ধরা চূড়ান্ত দাম) + সাম্প্রতিক ১২ সপ্তাহের আসল বেতন/CFT + অন্যান্য খরচ/CFT
     const lRate=parseFloat((laborSettings&&laborSettings.ratePerCft)||0);
-    const estCost=woodCost+cftVal*lRate;
+    const salR=(recentRates&&recentRates.salPerCft!=null)?recentRates.salPerCft:lRate;
+    const expR=(recentRates&&recentRates.expPerCft!=null)?recentRates.expPerCft:0;
+    const salaryEst=cftVal*salR,expenseEst=cftVal*expR;
+    const estCost=woodCost+salaryEst+expenseEst;
     const past=(orders||[]).filter(o=>!o.cancelled).flatMap(o=>(o.items||[]).filter(it=>it.catKey===ni.catKey&&it.varKey===ni.varKey&&it.wood===ni.wood&&parseFloat(it.price)>0).map(it=>({price:parseFloat(it.price),qty:it.qty||1,date:o.cust.date||"",order:o,item:it})))
       .sort((a,b)=>(b.date||"").localeCompare(a.date||"")).slice(0,5);
-    if(past.length===0)return{estCost,cftVal,past:[]};
+    if(past.length===0)return{estCost,cftVal,woodCost,salaryEst,expenseEst,past:[]};
     const perUnitPrices=past.map(p=>p.price); // মূল্য ইতিমধ্যেই প্রতি-ইউনিট, আর ভাগ করার দরকার নেই
     const minP=Math.min(...perUnitPrices),maxP=Math.max(...perUnitPrices);
     const margins=past.map(p=>{
       const pWoodCost=itemWoodCost(p.item,p.order,woodSettings);
       const pLRate=orderLabourRate(p.order,laborSettings);
       const pCft=totalCft(p.item.sections||[])*(p.item.qty||1);
-      const pCost=pWoodCost+pCft*pLRate;
+      const pCost=pWoodCost+pCft*((recentRates&&recentRates.salPerCft!=null)?recentRates.salPerCft:pLRate)+pCft*((recentRates&&recentRates.expPerCft)||0);
       return pCost>0?((p.price-pCost)/p.price)*100:null;
     }).filter(m=>m!==null);
     const avgMargin=margins.length?margins.reduce((s,m)=>s+m,0)/margins.length:null;
-    return{estCost,cftVal,past,minP,maxP,avgMargin};
-  },[fVar,ni.catKey,ni.varKey,ni.wood,ni.qty,orders,woodSettings,laborSettings]);
+    return{estCost,cftVal,woodCost,salaryEst,expenseEst,past,minP,maxP,avgMargin};
+  },[fVar,ni.catKey,ni.varKey,ni.wood,ni.qty,orders,woodSettings,laborSettings,recentRates]);
   const itemsTotal=items.reduce((s,it)=>s+(parseFloat(it.price)||0)*(parseFloat(it.qty)||1),0);
   const totalPaid=payments.reduce((s,p)=>s+(parseFloat(p.amount)||0),0);
   const rem=itemsTotal-totalPaid;
@@ -7318,7 +7678,8 @@ function Form({onSave,onBack,db,saveDb,galleries,woodSettings,laborSettings,orde
             <div style={{display:"flex",alignItems:"flex-end"}}>{fVar&&<div style={{background:"#f0fdf4",borderRadius:9,padding:"10px 11px",fontSize:12,fontWeight:700,color:"#166534",width:"100%"}}>CFT: {(totalCft(fVar.sections)*(parseFloat(ni.qty)||1)).toFixed(2)}</div>}</div>
           </div>
           {pricingHint&&<div style={{background:"#faf5ff",border:"1px solid #ddd6fe",borderRadius:8,padding:"9px 11px",marginBottom:11,fontSize:11,color:"#4c1d95",lineHeight:1.6}}>
-            <div>💡 আনুমানিক খরচ (কাঠ+শ্রম): <strong>~{money(Math.round(pricingHint.estCost))}</strong></div>
+            <div>💡 আনুমানিক পুরো খরচ: <strong>~{money(Math.round(pricingHint.estCost))}</strong></div>
+            <div style={{fontSize:10,color:"#6b5b95"}}>কাঠ ~{money(Math.round(pricingHint.woodCost||0))} · বেতন ~{money(Math.round(pricingHint.salaryEst||0))} · অন্যান্য খরচ ~{money(Math.round(pricingHint.expenseEst||0))}</div>
             {pricingHint.past.length>0?<>
               <div>আগের {pricingHint.past.length}টা একই মডেল+কাঠের অর্ডারে দাম নিয়েছেন: <strong>{money(Math.round(pricingHint.minP))}–{money(Math.round(pricingHint.maxP))}</strong></div>
               {pricingHint.avgMargin!==null&&<div>গড় লাভ ছিল: <strong style={{color:pricingHint.avgMargin>=0?"#166534":RED}}>{pricingHint.avgMargin.toFixed(0)}%</strong></div>}
@@ -7375,7 +7736,7 @@ function Form({onSave,onBack,db,saveDb,galleries,woodSettings,laborSettings,orde
 }
 
 /* ── PREVIEW (each slip prints independently now) ── */
-function Preview({order,onBack,slip,setSlip,onUpdate,onAddPayment,onSetDelivered,onDelete,db,saveDb,carpenters,saveCarpenters,galleries,saveGalleryEntry,woodSettings,laborSettings,workers,allOrders,rackSplits}){
+function Preview({syncInfo,online,order,onBack,slip,setSlip,onUpdate,onAddPayment,onSetDelivered,onDelete,db,saveDb,carpenters,saveCarpenters,galleries,saveGalleryEntry,woodSettings,laborSettings,workers,allOrders,rackSplits}){
   const totalPaid=(order.payments||[]).reduce((s,p)=>s+(parseFloat(p.amount)||0),0);
   const isFullyPaid=parseFloat(order.cust.total)>0&&totalPaid>=(parseFloat(order.cust.total)||0);
   const[addingPay,setAddingPay]=useState(false);
@@ -7467,6 +7828,7 @@ function Preview({order,onBack,slip,setSlip,onUpdate,onAddPayment,onSetDelivered
   const tabs=[{id:0,l:"গ্রাহক",c:RED},{id:1,l:"অর্ডার বুক",c:"#1d4ed8"},{id:2,l:"ট্র্যাকিং",c:"#6d28d9"},{id:3,l:"কার্পেন্টার",c:"#92400e"},{id:4,l:"ট্রান্সপোর্ট",c:"#065f46"},{id:5,l:"ডেলিভারি",c:"#0f766e",locked:false}];
 
   return<div className="print-bg" style={{minHeight:"100vh",background:"#eee"}}>
+    {!(online!==false&&syncInfo&&syncInfo.fresh)&&<div className="no-print" style={{background:"#fef2f2",color:"#991b1b",fontSize:11.5,fontWeight:700,padding:"8px 14px",lineHeight:1.5,borderBottom:"1px solid #fecaca"}}>⚠️ এই ডিভাইস এখনো সার্ভারের সাথে মেলানো হয়নি — এই অর্ডারের পেমেন্ট, বাকি বা ডেলিভারি চূড়ান্ত ধরে নেবেন না।</div>}
     <div className="no-print" style={{background:RED,color:"white",padding:"11px 14px",display:"flex",alignItems:"center",gap:9}}>
       <button onClick={onBack} style={{background:"rgba(255,255,255,.2)",border:"none",color:"white",borderRadius:7,padding:"6px 12px",fontSize:12}}>←</button>
       <span style={{flex:1,fontWeight:700,fontSize:13}}>#{order.no}{order.cancelled?" — ❌ বাতিল":""}</span>
@@ -7508,7 +7870,7 @@ function Preview({order,onBack,slip,setSlip,onUpdate,onAddPayment,onSetDelivered
 }
 
 /* ── HISTORY (with search) ── */
-function Hist({orders,db,onBack,onView,highlightNo,q,setQ,statusFilter,setStatusFilter,catFilter,setCatFilter,sortMode,setSortMode}){
+function Hist({syncInfo,online,orders,db,onBack,onView,highlightNo,q,setQ,statusFilter,setStatusFilter,catFilter,setCatFilter,sortMode,setSortMode}){
   // ── সার্চ/ফিল্টার/সর্ট এখন এই পেজের নিজের সাময়িক মেমোরিতে না — parent থেকে prop হিসেবে আসে
   // (নেভিগেশন স্ট্যাকে সংরক্ষিত), যাতে কোনো অর্ডারে ঢুকে ব্যাক করে ফিরলে যা বেছে নিয়েছিলেন
   // (সার্চ লেখা, স্ট্যাটাস ট্যাব, ক্যাটাগরি, সর্ট) তাই থেকে যায় ──
@@ -7565,6 +7927,7 @@ function Hist({orders,db,onBack,onView,highlightNo,q,setQ,statusFilter,setStatus
   },[orders,q,statusFilter,catFilter,sortMode,customerRank]);
 
   return<div style={{minHeight:"100vh",background:"#f8f8f8"}}>
+    {!(online!==false&&syncInfo&&syncInfo.fresh)&&<div style={{background:"#fef2f2",color:"#991b1b",fontSize:11.5,fontWeight:700,padding:"8px 14px",lineHeight:1.5,borderBottom:"1px solid #fecaca"}}>⚠️ এই ডিভাইস এখনো সার্ভারের সাথে মেলানো হয়নি — এই তালিকার বাকি, পেমেন্ট বা ডেলিভারি চূড়ান্ত ধরে নেবেন না।</div>}
     <div style={{background:RED,color:"white",padding:"12px 14px",display:"flex",alignItems:"center",gap:10}}>
       <button onClick={onBack} style={{background:"rgba(255,255,255,.2)",border:"none",color:"white",borderRadius:7,padding:"6px 12px",fontSize:12}}>←</button>
       <span style={{fontWeight:700,fontSize:15}}>অর্ডার ইতিহাস ({orders.length})</span>
