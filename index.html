@@ -124,7 +124,7 @@ function compressImage(file,maxDim=1200,quality=0.82,maxBytes=110000){
 /* ── FULL-RESOLUTION LOCAL FOLDER STORAGE (desktop Chrome/Edge/Brave only) ──
    Original, uncompressed images are saved as real files in a folder you choose
    on your computer. Only a small compressed thumbnail syncs to the cloud/mobile. */
-const BUILD_TAG="4.99";
+const BUILD_TAG="5.04";
 const FS_SUPPORTED=typeof window!=="undefined"&&"showDirectoryPicker" in window;
 function idbOpen(){
   return new Promise((resolve,reject)=>{
@@ -345,29 +345,12 @@ async function applyListDiff(ref,field,oldList,newList){
   if(removed.length)await ref.set({[field]:FV.arrayRemove(...removed.map(clean))},{merge:true});
   if(added.length)await ref.set({[field]:FV.arrayUnion(...added.map(clean))},{merge:true});
 }
-// ── ক্রম গুরুত্বপূর্ণ এমন তালিকা (কাঠের গুড়ি — ক্রমিক নম্বর তালিকার অবস্থান থেকেই আসে): সার্ভারের
-// সর্বশেষ তালিকা পড়ে id ধরে যোগ/বাদ/জায়গামতো বদল (transaction)। নেট না থাকলে আগের মতো পুরো তালিকা ──
-async function applyOrderedListDiff(fs,ref,field,oldList,newList){
-  const oldBy={},newBy={};
-  (oldList||[]).forEach(p=>{oldBy[listKey(p)]=p});
-  (newList||[]).forEach(p=>{newBy[listKey(p)]=p});
-  const removedK=Object.keys(oldBy).filter(k=>!newBy[k]);
-  const changed=Object.keys(newBy).filter(k=>oldBy[k]&&JSON.stringify(oldBy[k])!==JSON.stringify(newBy[k]));
-  const addedK=Object.keys(newBy).filter(k=>!oldBy[k]);
-  if(!removedK.length&&!changed.length&&!addedK.length)return;
-  const clean=(x)=>JSON.parse(JSON.stringify(x));
-  try{
-    await fs.runTransaction(async tx=>{
-      const d=await tx.get(ref);
-      let cur=((d.exists&&d.data()[field])||[]).filter(p=>!removedK.includes(listKey(p)));
-      cur=cur.map(p=>changed.includes(listKey(p))?clean(newBy[listKey(p)]):p);
-      addedK.forEach(k=>{if(!cur.some(p=>listKey(p)===k))cur.push(clean(newBy[k]))});
-      tx.set(ref,{[field]:cur},{merge:true});
-    });
-  }catch(e){
-    await ref.set({[field]:clean(newList||[])},{merge:true});
-  }
-}
+// ── v5.04: এখানে আগে applyOrderedListDiff নামে একটা transaction-ভিত্তিক ফাংশন ছিল,
+// শুধু কাঠের গুড়ির তালিকার জন্য — যুক্তি ছিল "গুড়ির ক্রমিক নম্বর তালিকার অবস্থান থেকে
+// আসে, তাই ক্রম ঠিক রাখতে হবে"। কিন্তু v4.61 থেকে প্রতিটা গুড়ি নিজের স্থায়ী কোড (RZ-01)
+// নিয়েই তৈরি হয়, তাই অবস্থানের উপর আর কিছু নির্ভর করে না — আর transaction-এর লেখা এই
+// ডিভাইসে সাথে সাথে দেখা যায় না বলে সদ্য যোগ করা গুড়ি পর্দা থেকে উধাও হয়ে যেত।
+// গুড়ির তালিকা এখন উপরের applyListDiff দিয়েই যায়, আর দেখানোর সময় কোড ধরে সাজানো হয়।
 // ── এই ডিভাইসের পরিচয় (যুক্ত ডিভাইসের তালিকার জন্য) ──
 const deviceLabel=()=>{
   const ua=navigator.userAgent||"";
@@ -375,7 +358,35 @@ const deviceLabel=()=>{
   const br=/Edg\//.test(ua)?"Edge":/SamsungBrowser/i.test(ua)?"Samsung Browser":/Firefox\//.test(ua)?"Firefox":/CriOS|Chrome\//.test(ua)?"Chrome":/Safari\//.test(ua)?"Safari":"ব্রাউজার";
   return os+" · "+br;
 };
+// ── v5.03: অ্যাপ নিজে যখন পাতা রিলোড করে (নতুন সংস্করণ এলে, বা পড়া আটকে গেলে),
+// তখন নিচের সতর্কবার্তাটা দেখানো হবে না — শুধু আপনি নিজে বন্ধ/রিফ্রেশ করলে ──
+let ALLOW_UNLOAD=false;
+const safeReload=()=>{ALLOW_UNLOAD=true;try{window.location.reload()}catch(e){}};
 const cmpVersion=(a,b)=>{const x=parseFloat(a)||0,y=parseFloat(b)||0;return x>y?1:x<y?-1:0};
+// ── v5.02: "শুধু-দেখার" অফলাইন কপি ──────────────────────────────────────────
+// আগে অ্যাপ অফলাইনে খালি না দেখানোর জন্য Firestore-এর নিজের অফলাইন-ক্যাশ ব্যবহার
+// করা হতো। কিন্তু ওই ক্যাশ তথ্যের পাশাপাশি একটা "না-পাঠানো লেখার সারি"ও রাখে, আর
+// সেই সারির লেখাগুলো সে প্রতিটা পড়ার ফলাফলের উপর বসিয়ে দেয় — ফলে ডিভাইসটা
+// সার্ভারের বদলে নিজের কল্পনা পড়ে। সেটাই সব গোলমালের উৎস ছিল।
+// এই কপিটা সম্পূর্ণ আলাদা জিনিস: এটা শুধু পর্দায় দেখানোর জন্য, কখনো সার্ভারে
+// লেখা হয় না, আর সার্ভারের তথ্য আসামাত্র বদলে যায়। তাই এটা দিয়ে কোনো তথ্য
+// এলোমেলো হওয়া সম্ভব নয় — শুধু অ্যাপটা খালি দেখায় না।
+const OFFLINE_VIEW_KEY="rf_offline_view";
+const readOfflineView=()=>{try{const v=JSON.parse(localStorage.getItem(OFFLINE_VIEW_KEY)||"null");return(v&&typeof v==="object")?v:null}catch(e){return null}};
+const writeOfflineView=(payload)=>{
+  try{localStorage.setItem(OFFLINE_VIEW_KEY,JSON.stringify(payload));return true}
+  catch(e){
+    // জায়গা কম পড়লে আগে সংস্করণ-ইতিহাস ছেঁটে জায়গা বানানো হয়, তারপর আবার চেষ্টা
+    try{
+      const h=JSON.parse(localStorage.getItem("rf_db_history")||"[]");
+      if(Array.isArray(h)&&h.length>8)localStorage.setItem("rf_db_history",JSON.stringify(h.slice(0,8)));
+      localStorage.setItem(OFFLINE_VIEW_KEY,JSON.stringify(payload));return true;
+    }catch(e2){
+      try{localStorage.setItem(OFFLINE_VIEW_KEY,JSON.stringify({at:payload.at,orders:payload.orders,db:payload.db}));return true}catch(e3){}
+    }
+    return false;
+  }
+};
 // ── সার্ভারের সাথে মেলানোর অবস্থা — ছোট একটা চিহ্ন, সবসময় সত্যি কথা বলে ──
 // ── v4.75: লেখা আটকে থাকলে কত মিনিট ধরে আটকে — এক জায়গায় হিসাব ──
 const pendingMinutes=(info)=>(info&&info.pending&&info.pendingSince)?Math.floor((Date.now()-info.pendingSince)/60000):0;
@@ -616,6 +627,16 @@ const itemWoodEmpty=(it)=>!it||!it.sections||it.sections.length===0||it.sections
 // ── v4.61: গুড়ির স্থায়ী কোড — একবার দেওয়া কোড আর কখনো বদলায় না বা আবার দেওয়া হয় না। অক্ষর থাকলে
 // (যেমন RH) একই অক্ষরের সব লট মিলিয়ে নম্বর এগোয়; অক্ষর না থাকলে লটের ভেতরে নম্বর ──
 const makeLogCode=(prefix,n)=>prefix?`${prefix}-${String(n).padStart(2,"0")}`:String(n);
+// ── v5.04: গুড়ি এখন কোডের নম্বর ধরে সাজিয়ে দেখানো হয় (RZ-01, RZ-02, RZ-03…)।
+// সার্ভারে তালিকাটা যে ক্রমেই থাকুক — কাটা/বিক্রির চিহ্ন দিলে এন্ট্রিটা তালিকার শেষে
+// চলে যেতে পারে — পর্দায় ক্রম আর কখনো এলোমেলো হবে না। কোনো গুড়ির কোড না থাকলে
+// (খুব পুরনো লট) সাজানো হয় না, আগের ক্রমই থাকে ──
+const logSeqNo=(l)=>{const m=String((l&&l.code)||"").match(/(\d+)\s*$/);return m?parseInt(m[1],10):NaN};
+const sortLogs=(logs)=>{
+  const list=logs||[];
+  if(!list.length||list.some(l=>!isFinite(logSeqNo(l))))return list;
+  return[...list].sort((a,b)=>logSeqNo(a)-logSeqNo(b));
+};
 function nextLogNumber(lot,allLots){
   const p=String((lot&&lot.codePrefix)||"").trim();
   const nums=[0];
@@ -2190,7 +2211,7 @@ class PageErrorBoundary extends React.Component{
       <div style={{fontSize:14,fontWeight:700,color:"#334155",marginBottom:8}}>পাতাটা দেখাতে সমস্যা হয়েছে — কয়েক সেকেন্ডে নিজে থেকেই আবার চেষ্টা হবে</div>
       <div style={{fontSize:10,color:"#94a3b8",marginBottom:16,wordBreak:"break-word",fontFamily:"monospace"}}>{String((this.state.err&&this.state.err.message)||this.state.err).slice(0,200)}</div>
       <button onClick={()=>this.setState({err:null})} style={{background:"#6d28d9",color:"white",border:"none",borderRadius:9,padding:"11px 20px",fontSize:13,fontWeight:700,marginRight:8}}>আবার চেষ্টা করুন</button>
-      <button onClick={()=>window.location.reload()} style={{background:"white",color:"#6d28d9",border:"1.5px solid #6d28d9",borderRadius:9,padding:"11px 20px",fontSize:13,fontWeight:700}}>রিলোড</button>
+      <button onClick={()=>safeReload()} style={{background:"white",color:"#6d28d9",border:"1.5px solid #6d28d9",borderRadius:9,padding:"11px 20px",fontSize:13,fontWeight:700}}>রিলোড</button>
     </div>;
   }
 }
@@ -2253,6 +2274,9 @@ function App({firebaseConfig,onResetConfig}){
       const fp=fsPersistRef.current||f;
       try{await Promise.race([fp.waitForPendingWrites(),new Promise(r=>setTimeout(r,120000))])}catch(e){}
       try{await fp.terminate()}catch(e){}
+      // v5.02: বন্ধ করা সংযোগটা আর কাউকে দেওয়া যাবে না — নাহলে পরের বার getRescueFs()
+      // একটা মৃত সংযোগ ফেরত দিত আর সেই লেখাগুলো নিঃশব্দে হারিয়ে যেত
+      if(liveFsRef.current===fp||liveFsRef.current===f)liveFsRef.current=null;
       if(fsRef.current===f)fsRef.current=null;
     })();
   },[tabActive]);
@@ -2261,8 +2285,13 @@ function App({firebaseConfig,onResetConfig}){
   //   ৬ মিনিট → এই ডিভাইসের পুরনো ক্যাশ মুছে একদম নতুন করে (তবে শুধু যদি পাঠানোর মতো কোনো লেখা বাকি না থাকে) ──
   // ── v4.53: প্রতিটা ডিভাইস নিজের দেখা সংখ্যাগুলো সার্ভারে জানায় (শুরুতে আর প্রতি ৫ মিনিটে) ──
   useEffect(()=>{
+    // ── v5.02: এই পরিচয়-বার্তাটা আগে মূল সংযোগ দিয়ে যেত। এন্ড্রয়েডে ওই সংযোগের
+    // লেখার সারি জ্যাম থাকায় বার্তাটা কখনো সার্ভারে পৌঁছায়নি — এন্ড্রয়েড নিজের
+    // বার্তাটা নিজের তালিকায় দেখত (নিজের অপেক্ষমাণ লেখা নিজের কাছে দেখায়), কিন্তু
+    // আইফোনের তালিকায় এন্ড্রয়েড কখনোই আসেনি। এখন বার্তাটা ক্যাশ-বিহীন সংযোগ দিয়ে
+    // যায়, তাই যে ডিভাইস অ্যাপ খুলেছে সে সব ডিভাইসের তালিকাতেই দেখা যাবে ──
     const beat=()=>{
-      const f=fsRef.current;if(!f||!tabActiveRef.current)return;
+      const f=getRescueFs();if(!f||!tabActiveRef.current)return;
       const t=syncTrackRef.current,d=latestDataRef.current||{};
       // v4.84: ফার্নিচার তালিকা এখনো আসেনি — এখন সংখ্যা পাঠালে অন্য ডিভাইসে ভুল বার্তা যাবে
       if(d.db===null||d.db===undefined)return;
@@ -2272,9 +2301,10 @@ function App({firebaseConfig,onResetConfig}){
         counts:{orders:(d.orders||[]).length,running:os.filter(o=>!o.delivered).length,due:Math.round(due),expenses:(d.expenses||[]).length,woodlots:(d.woodLots||[]).length,workers:(d.workers||[]).length,payrollWeeks:Object.keys(d.payrollWeeks||{}).length,models:dbCats(d.db||{}).reduce((n,[,c])=>n+Object.keys(c.variants||{}).length,0),cats:dbCats(d.db||{}).length,dbKb:Math.round(((()=>{try{return new Blob([JSON.stringify(d.db||{})]).size}catch(e){return 0}})())/1024)}};
       f.collection("devices").doc(deviceIdRef.current).set(rec).catch(()=>{});
     };
-    const first=setTimeout(beat,20000);
+    const first=setTimeout(beat,8000);
     const iv=setInterval(beat,5*60000);
-    return()=>{clearTimeout(first);clearInterval(iv)};
+    beatNowRef.current=beat; // ⚙️ খুললেই সাথে সাথে একবার
+    return()=>{clearTimeout(first);clearInterval(iv);beatNowRef.current=null};
   },[]);
   // ── v4.61: ডেলিভারি হওয়া অর্ডারের যে ফার্নিচারে কাঠের তালিকা ফাঁকা, সেখানে ডেটাবেসের মাপ (জোড়ার নিয়মসহ)
   // একবারই বসানো হয়, "পরে বসানো মাপ" চিহ্নসহ — তারপর আর কখনো বদলায় না (ডেলিভারড ফার্নিচারের হিসাব স্থির
@@ -2328,6 +2358,21 @@ function App({firebaseConfig,onResetConfig}){
     });
     if(touched)saveWoodLots(next);
   };
+  // ── v5.03: সার্ভারে পৌঁছায়নি এমন কিছু বাকি থাকতে পাতা বন্ধ/রিফ্রেশ করলে ব্রাউজার
+  // একবার জিজ্ঞেস করবে। অফলাইন-ক্যাশ তুলে দেওয়ার পর এই পাহারাটা জরুরি: আগে না-পাঠানো
+  // লেখা ক্যাশে থেকে যেত (আর সেটাই সব গোলমালের কারণ ছিল), এখন সেটা শুধু এই পাতাতেই
+  // থাকে — তাই পাতা চলে গেলে ওটাও চলে যেত, আপনি টেরও পেতেন না ──
+  useEffect(()=>{
+    const onLeave=(e)=>{
+      if(ALLOW_UNLOAD)return;
+      const t=syncTrackRef.current;
+      if(!t||!t.pending)return;
+      e.preventDefault();e.returnValue="";return"";
+    };
+    window.addEventListener("beforeunload",onLeave);
+    return()=>window.removeEventListener("beforeunload",onLeave);
+  },[]);
+  const beatNowRef=useRef(null);
   const syncChoresDoneRef=useRef(false);
   const recoverRef=useRef({stage:0});
   useEffect(()=>{
@@ -2361,9 +2406,10 @@ function App({firebaseConfig,onResetConfig}){
       if(staleFor>180000&&rc.stage<2){
         rc.stage=2;
         const last=+(localStorage.getItem("rf_recover_reload_at")||0);
-        if(Date.now()-last>15*60000){localStorage.setItem("rf_recover_reload_at",String(Date.now()));window.location.reload();return}
+        if(Date.now()-last>15*60000){localStorage.setItem("rf_recover_reload_at",String(Date.now()));safeReload();return}
       }
-      if(staleFor>360000&&rc.stage<3){ // ইচ্ছাকৃতভাবে staleFor — অপেক্ষমাণ লেখা থাকলে ক্যাশ মোছা যাবে না
+      // v5.02: ক্যাশ মুছে ফেলার ধাপটা বাদ — মোছার মতো কোনো ক্যাশ আর নেই
+      if(false&&staleFor>360000&&rc.stage<3){
         rc.stage=3;
         const last=+(localStorage.getItem("rf_recover_clear_at")||0);
         if(Date.now()-last>60*60000){
@@ -2374,7 +2420,7 @@ function App({firebaseConfig,onResetConfig}){
             localStorage.setItem("rf_recover_clear_at",String(Date.now()));
             try{await fp2.terminate()}catch(e){}
             try{await fp2.clearPersistence()}catch(e){}
-            window.location.reload();
+            safeReload();
           }
         }
       }
@@ -2397,7 +2443,7 @@ function App({firebaseConfig,onResetConfig}){
           if(autoStuckCheckRef.current){
             try{await withTimeout(autoStuckCheckRef.current(),8000,"সময়সীমা পার")}catch(e2){}
           }
-          window.location.reload();
+          safeReload();
         }
       }catch(e){/* নেটওয়ার্ক হেঁচকি — পরের চেষ্টায় দেখা যাবে, নীরবে এড়িয়ে যান */}
     };
@@ -2459,7 +2505,10 @@ function App({firebaseConfig,onResetConfig}){
     window.addEventListener("popstate",onPop);
     return()=>window.removeEventListener("popstate",onPop);
   },[]);
-  const[orders,setOrders]=useState([]);
+  // ── v5.02: শুরুতেই শেষ-জানা কপিটা দেখানো হয়, যাতে সার্ভারের উত্তর আসার আগ পর্যন্ত
+  // অ্যাপ খালি না দেখায়। সার্ভারের তথ্য এলেই এগুলো বদলে যাবে ──
+  const offlineSeedRef=useRef(readOfflineView());
+  const[orders,setOrders]=useState(()=>{const v=offlineSeedRef.current;return(v&&Array.isArray(v.orders))?v.orders:[]});
   const ordersRef=useRef(orders);
   ordersRef.current=orders;
   // ── অর্ডারের মতোই বাকি তথ্যগুলোরও সর্বশেষ অবস্থা, স্বয়ংক্রিয় মিলকরণের জন্য (নিচে সেট করা হয়,
@@ -2468,15 +2517,15 @@ function App({firebaseConfig,onResetConfig}){
   const autoResolveAttemptedRef=useRef({}); // orderNo -> এই "পেন্ডিং পর্ব"-এ একবার চেষ্টা হয়ে গেছে কিনা (বারবার না করার জন্য)
   // ── একবার সার্ভারের আসল তথ্য পেয়ে গেছি কিনা — পেয়ে গেলে আর পুরনো ক্যাশের তথ্য বসানো হয় না ──
   const serverTruthSeenRef=useRef(false);
-  const[expenses,setExpenses]=useState([]);
-  const[woodLots,setWoodLots]=useState([]);
+  const[expenses,setExpenses]=useState(()=>{const v=offlineSeedRef.current;return(v&&Array.isArray(v.expenses))?v.expenses:[]});
+  const[woodLots,setWoodLots]=useState(()=>{const v=offlineSeedRef.current;return(v&&Array.isArray(v.woodLots))?v.woodLots:[]});
   const woodLotsRef=useRef([]);
   woodLotsRef.current=woodLots;
-  const[workers,setWorkers]=useState([]);
-  const[payrollWeeks,setPayrollWeeks]=useState({});
+  const[workers,setWorkers]=useState(()=>{const v=offlineSeedRef.current;return(v&&Array.isArray(v.workers))?v.workers:[]});
+  const[payrollWeeks,setPayrollWeeks]=useState(()=>{const v=offlineSeedRef.current;return(v&&v.payrollWeeks&&typeof v.payrollWeeks==="object")?v.payrollWeeks:{}});
   const payrollWeeksRef=useRef({});
   payrollWeeksRef.current=payrollWeeks;
-  const[db,setDb]=useState(null);
+  const[db,setDb]=useState(()=>{const v=offlineSeedRef.current;return(v&&v.db&&typeof v.db==="object")?v.db:null});
   const dbRef=useRef(null);
   dbRef.current=db;
   // ── v4.96: ফার্নিচার তালিকার সংস্করণ-ইতিহাস। তালিকা বদলালেই এই ডিভাইসে একটা কপি
@@ -2499,6 +2548,17 @@ function App({firebaseConfig,onResetConfig}){
       return next;
     });
   },[db]);
+  // ── v5.02: সার্ভার থেকে নিশ্চিত হয়ে আসা তথ্যই কেবল "শুধু-দেখার" কপিতে রাখা হয়।
+  // এই কপি কখনো সার্ভারে ফেরত যায় না — শুধু পরেরবার খোলার সময় পর্দা ভরানোর জন্য ──
+  const offlineSaveRef=useRef(0);
+  useEffect(()=>{
+    if(!syncTrackRef.current||!syncTrackRef.current.fresh)return;
+    if(db===null||db===undefined)return;
+    const now=Date.now();
+    if(now-offlineSaveRef.current<10000)return;
+    offlineSaveRef.current=now;
+    writeOfflineView({at:new Date().toISOString(),orders,expenses,woodLots,workers,payrollWeeks,db});
+  },[orders,expenses,woodLots,workers,payrollWeeks,db]);
   const restoreDbVersion=(idx)=>{
     const v=(dbHistory||[])[idx];
     if(!v||!v.db)return;
@@ -2777,6 +2837,9 @@ function App({firebaseConfig,onResetConfig}){
   const sameOrderData=(a,b)=>JSON.stringify(normalizeForCompare(a))===JSON.stringify(normalizeForCompare(b));
   const autoStuckCheckRef=useRef(null);
   const checkServerSync=async()=>{
+    // v5.02: যাচাই করার আগেই এই ডিভাইসের পরিচয়-বার্তা পাঠিয়ে দেওয়া হয়, যাতে অন্য
+    // ডিভাইসের তালিকায় এটা সাথে সাথে দেখা যায় — ৫ মিনিটের চক্রের অপেক্ষা ছাড়াই
+    try{if(beatNowRef.current)beatNowRef.current()}catch(e){}
     // ── আগে সরাসরি রিপোর্ট করা হতো, এখন প্রথমে পূর্ণ মিলকরণ চালানো হয় (একই যেটা পর্যায়ক্রমিক
     // ব্যাকগ্রাউন্ড প্রক্রিয়াতেও চলে) — তাই "যাচাই করুন" চাপলেই সাথে সাথে সব মিলে যায়, একটা
     // একটা করে "সার্ভারের সঠিক তথ্য নিন" চাপার দরকার নেই ──
@@ -2960,25 +3023,110 @@ function App({firebaseConfig,onResetConfig}){
     try{
       await fp.terminate();
       await fp.clearPersistence();
-      window.location.reload();
+      safeReload();
       return{ok:true};
     }catch(e){return{ok:false,msg:(e&&e.message)||"ক্যাশ মোছা যায়নি"}}
   };
   const rescueAppRef=useRef(null);
+  const liveFsRef=useRef(null);
+  const liveSeqRef=useRef(0);
+  // ── v5.02: পুরনো অফলাইন-ক্যাশ থেকে একবারের হস্তান্তর ────────────────────────
+  // নতুন সংস্করণ আর অফলাইন-ক্যাশ ব্যবহার করে না। কিন্তু আগের সংস্করণের ক্যাশে এই
+  // ডিভাইসের কিছু লেখা আটকে থাকতে পারে যা কখনো সার্ভারে পৌঁছায়নি। ক্যাশটা এমনিই
+  // ছেড়ে দিলে ওগুলো চিরতরে হারাত। তাই প্রথমবার খোলার সময় একবার পুরনো ক্যাশটা
+  // পড়া হয় এবং:
+  //   • সার্ভারে যেটা একেবারেই নেই — সেটা পাঠানো হয় (কিছু হারায় না)
+  //   • দুই জায়গায় আছে কিন্তু ভিন্ন — কিছুই লেখা হয় না, শুধু আপনাকে দেখানো হয়
+  //     (এখানে নিজে থেকে বেছে নিলে অন্য ডিভাইসে করা পরিবর্তন মুছে যেতে পারত)
+  //   • ফার্নিচার তালিকায় শুধু অনুপস্থিত মডেল যোগ হয়, কিছুই মোছে না
+  // তারপর পুরনো ক্যাশ মুছে ফেলা হয়, আর এটা আর কখনো চলে না ──
+  const HANDOFF_KEY="rf_cache_handoff_v5";
+  const[handoffReport,setHandoffReport]=useState(()=>{try{return JSON.parse(localStorage.getItem("rf_cache_handoff_report")||"null")}catch(e){return null}});
+  const runCacheHandoff=async(live)=>{
+    let oldFs=null,cleared=false;
+    try{
+      const state=localStorage.getItem(HANDOFF_KEY);
+      if(state==="done"||state==="none")return;
+      localStorage.setItem(HANDOFF_KEY,"running");
+      if(!firebase.apps.length)firebase.initializeApp(firebaseConfig);
+      oldFs=firebase.app().firestore();
+      try{oldFs.settings({experimentalForceLongPolling:true,experimentalAutoDetectLongPolling:false,merge:true})}catch(e){}
+      let opened=false;
+      try{await oldFs.enablePersistence();opened=true}catch(e){opened=false}
+      if(!opened){localStorage.setItem(HANDOFF_KEY,"none");return}
+      const report={at:new Date().toISOString(),restored:[],differs:[],models:0};
+      for(const col of["orders","expenses","woodlots","workers","payrollWeeks"]){
+        let cached=null,server=null;
+        try{cached=await oldFs.collection(col).get({source:"cache"})}catch(e){continue}
+        if(!cached||!cached.docs.length)continue;
+        try{server=await live.collection(col).get()}catch(e){continue}
+        const have=new Map(server.docs.map(d=>[d.id,JSON.stringify(d.data())]));
+        for(const d of cached.docs){
+          const body=d.data();
+          if(!have.has(d.id)){
+            try{await live.collection(col).doc(d.id).set(body);report.restored.push(col+"/"+d.id)}catch(e){}
+          }else if(have.get(d.id)!==JSON.stringify(body)){
+            report.differs.push({col,id:d.id});
+          }
+        }
+      }
+      try{
+        const cs=await oldFs.doc("meta/db").get({source:"cache"});
+        if(cs.exists){
+          const cachedDb=splitDbDoc(cs.data()).slim;
+          const ss=await live.doc("meta/db").get();
+          const serverRaw=ss.exists?ss.data():{};
+          const serverDb=ss.exists?splitDbDoc(serverRaw).slim:{};
+          const LEGACY_DEL="_"+"_deleted_"+"_";
+          const tombstones={...(serverRaw[LEGACY_DEL]||{}),...(serverRaw.zz_deletedRecord||{})};
+          const patch={};let added=0;
+          dbCats(cachedDb).forEach(([ck,c])=>{
+            if(tombstones["cat:"+ck])return;
+            const sc=serverDb[ck];
+            Object.entries(c.variants||{}).forEach(([vk,v])=>{
+              if(tombstones[vk]||tombstones["mv:"+ck+"|"+vk])return;
+              if(sc&&((sc.variants)||{})[vk])return;
+              if(!patch[ck])patch[ck]=sc?{variants:{}}:{bn:c.bn,...(c.en?{en:c.en}:{}),variants:{}};
+              if(!patch[ck].variants)patch[ck].variants={};
+              patch[ck].variants[vk]=JSON.parse(JSON.stringify(v));added++;
+            });
+          });
+          if(added){await live.doc("meta/db").set(patch,{merge:true});report.models=added}
+        }
+      }catch(e){}
+      try{localStorage.setItem("rf_cache_handoff_report",JSON.stringify(report))}catch(e){}
+      setHandoffReport(report);
+      localStorage.setItem(HANDOFF_KEY,"done");
+      cleared=true;
+    }catch(e){
+      try{localStorage.setItem(HANDOFF_KEY,"error")}catch(e2){}
+    }
+    if(cleared&&oldFs){
+      try{await oldFs.terminate()}catch(e){}
+      try{await oldFs.clearPersistence()}catch(e){}
+    }
+  };
   // ── v4.87: ক্যাশ-বিহীন আলাদা সংযোগ। এটা কেন এত জরুরি:
   // Firestore যেকোনো পড়ার ফলাফলের উপর ওই ডিভাইসের নিজের অপেক্ষমাণ (না-পাঠানো) লেখাগুলো
   // বসিয়ে দেয় — এমনকি source:"server" দিয়ে পড়লেও। তাই যে ডিভাইসে লেখা আটকে আছে, সে
   // "সার্ভারে কত আছে" জিজ্ঞেস করলে নিজের কল্পনার সংখ্যাটাই ফেরত পায়, আর তাই প্রতিবার
   // "✅ সব ঠিক আছে" দেখায়। এই আলাদা সংযোগে কোনো অফলাইন-ক্যাশ নেই, কোনো অপেক্ষমাণ সারিও
   // নেই — তাই এর পড়া সার্ভারের আসল সংখ্যা, আর এর লেখা জ্যামে না দাঁড়িয়ে সরাসরি যায় ──
-  const getRescueFs=()=>{
-    if(!rescueAppRef.current){
-      rescueAppRef.current=firebase.apps.find(a=>a.name==="rescue")||firebase.initializeApp(firebaseConfig,"rescue");
-    }
-    const fs2=rescueAppRef.current.firestore();
+  // ── v5.02: এখন মূল সংযোগটাই ক্যাশ-বিহীন, তাই আলাদা "উদ্ধার সংযোগ" রাখার আর দরকার
+  // নেই — দুটো আলাদা সংযোগ থাকলে দুজনে দুরকম দেখাতে পারত। সব কাজ একটাই সংযোগ দিয়ে।
+  // প্রতিবার নতুন নামে তৈরি করা হয়, কারণ একবার বন্ধ (terminate) হয়ে যাওয়া সংযোগ
+  // Firebase আর চালু করে না — ওটা ফেরত দিলে লেখা নিঃশব্দে হারাত ──
+  const makeLiveFs=()=>{
+    liveSeqRef.current++;
+    const nm=liveSeqRef.current===1?"live":"live"+liveSeqRef.current;
+    const app=firebase.apps.find(a=>a.name===nm)||firebase.initializeApp(firebaseConfig,nm);
+    const fs2=app.firestore();
     try{fs2.settings({experimentalForceLongPolling:true,experimentalAutoDetectLongPolling:false,merge:true})}catch(e){}
+    rescueAppRef.current=app;
+    liveFsRef.current=fs2;
     return fs2;
   };
+  const getRescueFs=()=>liveFsRef.current||makeLiveFs();
   const writeTest=async()=>{
     try{
       const fs2=getRescueFs();
@@ -3001,6 +3149,10 @@ function App({firebaseConfig,onResetConfig}){
   const pushWorkerRef=useRef({running:false});
   const[pushStatus,setPushStatus]=useState(null); // {at, sent, failed, models, err}
   const pushThroughStuck=async()=>{
+    // ── v5.02: বন্ধ। এই কর্মীটা ছিল শুধু অফলাইন-ক্যাশের জ্যাম হওয়া সারিকে টপকে
+    // যাওয়ার জন্য। ক্যাশই যখন নেই, সারিও নেই — টপকানোরও কিছু নেই। প্রতিটা লেখা
+    // এখন সরাসরি সার্ভারে যায়, আর না গেলে সাথে সাথেই পর্দায় জানায় ──
+    if(true)return;
     if(pushWorkerRef.current.running)return;
     const t=syncTrackRef.current;
     if(!t||!t.pending||!t.pendingSince||Date.now()-t.pendingSince<60000)return;
@@ -3232,8 +3384,11 @@ function App({firebaseConfig,onResetConfig}){
     const timer=setTimeout(()=>setTimedOut(true),25000);
     try{
       if(!firebase.apps.length)firebase.initializeApp(firebaseConfig);
-      const firestore=firebase.firestore();
-      // ── অফলাইন-ক্যাশ আবার চালু (কিন্তু synchronizeTabs ছাড়া) ──
+      // ── v5.02: মূল সংযোগ এখন ক্যাশ-বিহীন একটা আলাদা অ্যাপে ("live")। কারণ পুরনো
+      // ক্যাশটা [DEFAULT] অ্যাপের নামে জমা — ওটাকে ছোঁয়া ছাড়াই একবার পড়ে খালি করা
+      // দরকার, তাই দুটো আলাদা রাখা হয়েছে ──
+      const firestore=liveFsRef.current||makeLiveFs();
+      // ── পুরনো লেখা (v4.99 পর্যন্ত): অফলাইন-ক্যাশ চালু ছিল ──
       // আগে এটা একেবারে বন্ধ করে দিয়েছিলাম, যাতে লেখা চুপচাপ আটকে না যায়। কিন্তু তার
       // পার্শ্বপ্রতিক্রিয়া ছিল মারাত্মক: নেট একটু দুর্বল হলেই দেখানোর মতো কোনো তথ্য থাকত না,
       // তাই পুরো অ্যাপ খালি দেখাত। এখন দুটোই একসাথে সামলানো হচ্ছে —
@@ -3247,9 +3402,21 @@ function App({firebaseConfig,onResetConfig}){
       // অথচ সার্ভারের কোনো নতুন তথ্য আসে না আর নিজের লেখাও যায় না; শুধু নিজের পুরনো কপি দেখায়। তিন
       // ডিভাইসে তিন রকম তথ্যের মূল কারণ এটাই। এখন সবসময় "লং-পোলিং" (ছোট ছোট সাধারণ অনুরোধ) — এটা
       // সব নেটওয়ার্কে কাজ করে। এটা অবশ্যই অন্য যেকোনো Firestore কাজের আগে বসাতে হয় ──
-      try{firestore.settings({experimentalForceLongPolling:true,experimentalAutoDetectLongPolling:false,merge:true})}catch(e){console.warn("firestore settings",e)}
-      try{firestore.enablePersistence().catch(()=>{})}catch(e){}
+      // লং-পোলিং makeLiveFs()-এ একবারই বসানো হয়; এখানে আবার বসালে SDK আপত্তি করে
+      // ── v5.02: enablePersistence() আর ডাকা হয় না ─────────────────────────────
+      // অফলাইন-ক্যাশ শুধু তথ্য রাখে না, একটা "না-পাঠানো লেখার সারি"ও রাখে। আর ওই
+      // সারির প্রতিটা লেখা Firestore যেকোনো পড়ার ফলাফলের উপর বসিয়ে দেয় — এমনকি
+      // source:"server" দিয়ে পড়লেও। ফলে যে ডিভাইসে সারি জ্যাম, সে "সার্ভারে কী আছে"
+      // জিজ্ঞেস করলে নিজের অপেক্ষমাণ লেখাসহ উত্তর পায়, আর তাই প্রতিবার "✅ সব ঠিক
+      // আছে" দেখায় — অথচ অন্য ডিভাইসে সম্পূর্ণ অন্য তথ্য। ২২ সেপ্টেম্বর একই মিনিটে
+      // এন্ড্রয়েড ৯৯ মডেল আর আইফোন ১০৩ মডেল "সার্ভারে আছে" দেখিয়েছিল — দুজনেই সবুজ
+      // টিক সহ। একটা নথি দুই রকম হতে পারে না; ওটাই ছিল এই সারির কাজ।
+      // ক্যাশ না থাকলে সারিও নেই, বসানোও নেই — প্রতিটা পড়া সার্ভারের আসল তথ্য, আর
+      // কোনো লেখা ঘণ্টার পর ঘণ্টা চুপচাপ আটকে থাকতে পারে না। অ্যাপ খালি দেখানোর
+      // সমস্যাটা আমাদের নিজের "শুধু-দেখার" কপি দিয়ে সামলানো হয় (উপরে) ──
+      liveFsRef.current=firestore;
       fsRef.current=firestore;fsPersistRef.current=firestore;
+      runCacheHandoff(firestore).catch(()=>{});
       // v4.96: স্বয়ংক্রিয় পুরনো-ব্যর্থতা মাইগ্রেশন বন্ধ — নিজে থেকে কিছু লেখা হবে না
       // migrateLegacyPermanentFailures();
 
@@ -3450,8 +3617,12 @@ function App({firebaseConfig,onResetConfig}){
         // পাঠানোর পরেও সংখ্যা কমত না ──
         // v4.93: অর্ডারের হিসাব মূল সংযোগ দিয়েই, কিন্তু ফার্নিচার তালিকাটা ক্যাশ-বিহীন
         // সংযোগ দিয়ে — নাহলে এই ডিভাইসের অপেক্ষমাণ লেখাই "সার্ভারে আছে" বলে গোনা হয়
-        const fs2=fsRef.current;
-        setAutoStuckStatus(prev=>({...(prev||{}),running:true,lastRunAt:new Date().toISOString(),lastError:!fs2?"সংযোগ তৈরিই হয়নি":null}));
+        // ── v5.02: এখানেই দ্বিতীয় ফাঁকটা ছিল। v4.87-এ "ফার্নিচার তালিকা মেলানো" টুলে
+        // এটা ঠিক করেছিলাম, কিন্তু এই জায়গাটায় (fsRef.current) শুধু একটা মন্তব্য লিখে
+        // রেখেছিলাম — কোডটা বদলাইনি। ফলে এই পরীক্ষাটা ডিভাইসকে সার্ভারের সাথে নয়,
+        // নিজের সাথে নিজেকে মেলাত, আর তাই দুই ফোনে দুই রকম তথ্য থাকা সত্ত্বেও দুজনেই
+        // "✅ সব ঠিক আছে" দেখিয়েছে। এখন পড়াটা ক্যাশ-বিহীন সংযোগ দিয়ে ──
+        const fs2=getRescueFs();
         if(!fs2)return;
         try{
           const snap2=await fs2.collection("orders").get({source:"server"});
@@ -4224,7 +4395,14 @@ function App({firebaseConfig,onResetConfig}){
           if(Object.keys(patch).length)await ref.set(patch,{merge:true});
           if(JSON.stringify(old.payments||[])!==JSON.stringify(lot.payments||[]))await applyListDiff(ref,"payments",old.payments,lot.payments);
           if(JSON.stringify(old.millingEntries||[])!==JSON.stringify(lot.millingEntries||[]))await applyListDiff(ref,"millingEntries",old.millingEntries,lot.millingEntries);
-          if(JSON.stringify(old.logs||[])!==JSON.stringify(lot.logs||[]))await applyOrderedListDiff(fsL,ref,"logs",old.logs,lot.logs);
+          // ── v5.04: আগে এখানে runTransaction ব্যবহার হতো। Firestore-এ transaction-এর
+          // লেখা সার্ভার নিশ্চিত না করা পর্যন্ত এই ডিভাইসে দেখা যায় না, অথচ পাশের
+          // merge-set (logCounter) সাথে সাথেই দেখা যায়। তাই "+ যোগ" চাপার পরের
+          // মুহূর্তেই লিসেনার logCounter=1 কিন্তু logs=[] এমন একটা ছবি পাঠাত, আর সদ্য
+          // যোগ করা গুড়িটা পর্দা থেকে উধাও হয়ে যেত। এখন পেমেন্টের মতোই arrayUnion/
+          // arrayRemove — একইরকম নিরাপদ (পুরো তালিকা কখনো লেখা হয় না, তাই অন্য
+          // ডিভাইসের গুড়ি মোছে না), কিন্তু সাথে সাথে দেখা যায় ও অফলাইনেও কাজ করে ──
+          if(JSON.stringify(old.logs||[])!==JSON.stringify(lot.logs||[]))await applyListDiff(ref,"logs",old.logs,lot.logs);
         }catch(err){fail(err)}
       })();
     });
@@ -4352,7 +4530,7 @@ function App({firebaseConfig,onResetConfig}){
     <div style={{fontSize:12.5,color:"#64748b",lineHeight:1.7,marginBottom:20}}>
       এই ডিভাইসে নতুন একটা ট্যাবে অ্যাপটি খোলা হয়েছে, তাই সেটিই এখন চালু আছে। প্রতি ডিভাইসে একটাই ট্যাব চালু রাখা হয় — এতে সব জায়গায় একই তথ্য থাকে।
     </div>
-    <button onClick={()=>{try{localStorage.setItem("rf_active_tab",JSON.stringify({id:tabIdRef.current,ts:Date.now()}))}catch(e){}window.location.reload()}} style={{background:RED,color:"white",border:"none",borderRadius:9,padding:"12px 22px",fontSize:13,fontWeight:700}}>এই ট্যাবেই চালু করুন</button>
+    <button onClick={()=>{try{localStorage.setItem("rf_active_tab",JSON.stringify({id:tabIdRef.current,ts:Date.now()}))}catch(e){}safeReload()}} style={{background:RED,color:"white",border:"none",borderRadius:9,padding:"12px 22px",fontSize:13,fontWeight:700}}>এই ট্যাবেই চালু করুন</button>
   </div>;
   if(!db){
     if(connError)return<div style={{padding:30,textAlign:"center",maxWidth:480,margin:"40px auto"}}>
@@ -4394,13 +4572,13 @@ function App({firebaseConfig,onResetConfig}){
   if(page==="expense")return<ExpensePage expenses={expenses} onSave={saveExpense} onBack={goBack}/>;
   if(page==="payroll")return<PayrollPage workers={workers} saveWorker={saveWorker} deleteWorker={deleteWorker} payrollWeeks={payrollWeeks} savePayrollWeek={savePayrollWeek} updateAttendance={updateAttendance} addAdvanceEntry={addAdvanceEntry} removeAdvanceEntry={removeAdvanceEntry} onBack={goBack}/>;
   if(page==="plreport")return<PLReportPage orders={orders} expenses={expenses} workers={workers} payrollWeeks={payrollWeeks} woodLots={woodLots} woodSettings={woodSettings} laborSettings={laborSettings} onBack={goBack}/>;
-  return<Home syncInfo={syncInfo} devices={devices} dbAudit={dbAudit} dbHistory={dbHistory} onRestoreDbVersion={restoreDbVersion} onDownloadDbVersion={downloadDbVersion} deviceId={deviceIdRef.current} lastPageCrash={lastPageCrash} orders={orders} expenses={expenses} woodLots={woodLots} db={db} woodSettings={woodSettings} laborSettings={laborSettings} workers={workers} payrollWeeks={payrollWeeks} alertSettings={alertSettings} saveAlertSettings={saveAlertSettings} backupFailed={backupFailed} lastSyncAt={lastSyncAt} onManualRefresh={manualRefresh} onWriteTest={writeTest} catalogCheck={catalogCheck} onCheckCatalog={checkCatalog} onPushLocalModels={pushLocalOnlyModels} onMakeAuthoritative={makeThisDeviceAuthoritative} pushStatus={pushStatus} writeFailover={writeFailover} onTakeServerCatalog={takeServerCatalog} pendingWrites={pendingWrites} onCheckServerSync={checkServerSync} onAcceptServerVersion={acceptServerVersion} onUpdateOrder={updateOrder} onNew={()=>navigate({page:"form"})} onHist={()=>navigate({page:"history"})} onManage={()=>navigate({page:"manage"})} onExpense={()=>navigate({page:"expense"})} onWoodStock={()=>navigate({page:"woodstock",view:"list"})} onPayroll={()=>navigate({page:"payroll"})} onPLReport={()=>navigate({page:"plreport"})} onView={o=>navigate({page:"preview",orderNo:o.no,slip:0})} onViewDelivery={o=>navigate({page:"preview",orderNo:o.no,slip:5})} online={online} connError={connError} onResetConfig={onResetConfig} folderStatus={folderStatus} connectFolder={connectFolder} highlightNo={highlightNo} onBackupData={backupData} projectId={firebaseConfig?.projectId||""} appId={firebaseConfig?.appId||""} permanentSyncFailures={permanentSyncFailures} autoStuckStatus={autoStuckStatus} dbGaps={dbGaps} setDbGaps={setDbGaps} fsRef={fsRef}/>;
+  return<Home syncInfo={syncInfo} devices={devices} dbAudit={dbAudit} dbHistory={dbHistory} handoffReport={handoffReport} onRestoreDbVersion={restoreDbVersion} onDownloadDbVersion={downloadDbVersion} deviceId={deviceIdRef.current} lastPageCrash={lastPageCrash} orders={orders} expenses={expenses} woodLots={woodLots} db={db} woodSettings={woodSettings} laborSettings={laborSettings} workers={workers} payrollWeeks={payrollWeeks} alertSettings={alertSettings} saveAlertSettings={saveAlertSettings} backupFailed={backupFailed} lastSyncAt={lastSyncAt} onManualRefresh={manualRefresh} onWriteTest={writeTest} catalogCheck={catalogCheck} onCheckCatalog={checkCatalog} onPushLocalModels={pushLocalOnlyModels} onMakeAuthoritative={makeThisDeviceAuthoritative} pushStatus={pushStatus} writeFailover={writeFailover} onTakeServerCatalog={takeServerCatalog} pendingWrites={pendingWrites} onCheckServerSync={checkServerSync} onAcceptServerVersion={acceptServerVersion} onUpdateOrder={updateOrder} onNew={()=>navigate({page:"form"})} onHist={()=>navigate({page:"history"})} onManage={()=>navigate({page:"manage"})} onExpense={()=>navigate({page:"expense"})} onWoodStock={()=>navigate({page:"woodstock",view:"list"})} onPayroll={()=>navigate({page:"payroll"})} onPLReport={()=>navigate({page:"plreport"})} onView={o=>navigate({page:"preview",orderNo:o.no,slip:0})} onViewDelivery={o=>navigate({page:"preview",orderNo:o.no,slip:5})} online={online} connError={connError} onResetConfig={onResetConfig} folderStatus={folderStatus} connectFolder={connectFolder} highlightNo={highlightNo} onBackupData={backupData} projectId={firebaseConfig?.projectId||""} appId={firebaseConfig?.appId||""} permanentSyncFailures={permanentSyncFailures} autoStuckStatus={autoStuckStatus} dbGaps={dbGaps} setDbGaps={setDbGaps} fsRef={fsRef}/>;
   };
   return<PageErrorBoundary resetKey={navStack.length+"|"+page+"|"+(curScreen.tab||"")} canGoBack={navStack.length>1} onError={onPageCrash}>{renderPage()}</PageErrorBoundary>;
 }
 
 /* ── HOME / DASHBOARD ── */
-function Home({syncInfo,devices,dbAudit,dbHistory,onRestoreDbVersion,onDownloadDbVersion,deviceId,lastPageCrash,orders,expenses,woodLots,db,woodSettings,laborSettings,workers,payrollWeeks,alertSettings,saveAlertSettings,backupFailed,lastSyncAt,onManualRefresh,onWriteTest,catalogCheck,onCheckCatalog,onPushLocalModels,onMakeAuthoritative,pushStatus,writeFailover,onTakeServerCatalog,pendingWrites,onCheckServerSync,onAcceptServerVersion,onUpdateOrder,onNew,onHist,onManage,onExpense,onWoodStock,onPayroll,onPLReport,onView,onViewDelivery,online,connError,onResetConfig,folderStatus,connectFolder,highlightNo,onBackupData,projectId,appId,permanentSyncFailures,autoStuckStatus,dbGaps,setDbGaps,fsRef}){
+function Home({syncInfo,devices,dbAudit,dbHistory,handoffReport,onRestoreDbVersion,onDownloadDbVersion,deviceId,lastPageCrash,orders,expenses,woodLots,db,woodSettings,laborSettings,workers,payrollWeeks,alertSettings,saveAlertSettings,backupFailed,lastSyncAt,onManualRefresh,onWriteTest,catalogCheck,onCheckCatalog,onPushLocalModels,onMakeAuthoritative,pushStatus,writeFailover,onTakeServerCatalog,pendingWrites,onCheckServerSync,onAcceptServerVersion,onUpdateOrder,onNew,onHist,onManage,onExpense,onWoodStock,onPayroll,onPLReport,onView,onViewDelivery,online,connError,onResetConfig,folderStatus,connectFolder,highlightNo,onBackupData,projectId,appId,permanentSyncFailures,autoStuckStatus,dbGaps,setDbGaps,fsRef}){
   const now=new Date();
   const[showAllRunning,setShowAllRunning]=useState(false);
   const[showSystemZone,setShowSystemZone]=useState(false);
@@ -5924,6 +6102,15 @@ function Home({syncInfo,devices,dbAudit,dbHistory,onRestoreDbVersion,onDownloadD
           })()}
         </div>
 
+        {handoffReport&&(handoffReport.restored?.length||handoffReport.differs?.length||handoffReport.models)?
+          <div style={{marginTop:12,background:"#fffbeb",border:"1px solid #fde68a",borderRadius:10,padding:"11px 12px"}}>
+            <div style={{fontSize:12,fontWeight:800,color:"#92400e",marginBottom:4}}>📦 পুরনো অফলাইন-ক্যাশ থেকে উদ্ধার</div>
+            <div style={{fontSize:9.5,color:"#92400e",lineHeight:1.6,marginBottom:6}}>এই সংস্করণ আর অফলাইন-ক্যাশ ব্যবহার করে না। পুরনো ক্যাশে আটকে থাকা যা সার্ভারে ছিল না, তা একবারের জন্য পাঠিয়ে দেওয়া হয়েছে — তারপর ক্যাশটা মুছে ফেলা হয়েছে।</div>
+            {handoffReport.restored?.length?<div style={{fontSize:10.5,color:"#166534",fontWeight:700}}>✅ {toBnDigits(handoffReport.restored.length)}টা নথি সার্ভারে পাঠানো হয়েছে</div>:null}
+            {handoffReport.models?<div style={{fontSize:10.5,color:"#166534",fontWeight:700}}>✅ {toBnDigits(handoffReport.models)}টা মডেল তালিকায় যোগ হয়েছে</div>:null}
+            {handoffReport.differs?.length?<div style={{fontSize:10,color:"#92400e",fontWeight:600,marginTop:4,lineHeight:1.6}}>⚠️ {toBnDigits(handoffReport.differs.length)}টা নথি এই ডিভাইসের পুরনো ক্যাশে সার্ভারের চেয়ে ভিন্ন ছিল। নিজে থেকে কোনোটাই বদলানো হয়নি — কারণ বদলালে অন্য ডিভাইসে করা কাজ মুছে যেত। কোনো অর্ডারে কিছু কম মনে হলে জানাবেন:<div style={{marginTop:3,fontFamily:"monospace",fontSize:9}}>{handoffReport.differs.slice(0,12).map(d=>d.col+"/"+d.id).join(", ")}</div></div>:null}
+          </div>:null}
+
         {(()=>{
           // ── v4.53: এই ডেটাবেসে যুক্ত ডিভাইস — প্রত্যেকে নিজের দেখা সংখ্যা জানায়; সব মিলে থাকার কথা ──
           // (ফার্নিচার তালিকা মেলানোর টুলটা এর ঠিক উপরে — নিচের renderCatalogTool-এ)
@@ -6921,7 +7108,7 @@ function WoodStockPage({woodLots,saveWoodLots,addLotPayment,woodSettings,saveWoo
         <div style={{fontWeight:700,fontSize:13,marginBottom:8}}>গুড়ির তালিকা ({selLot.logs.length})</div>
         <div style={{background:"white",borderRadius:11,overflow:"hidden",marginBottom:12,boxShadow:"0 1px 4px rgba(0,0,0,.07)"}}>
           {selLot.logs.length===0?<div style={{textAlign:"center",color:"#aaa",padding:16,fontSize:12}}>এখনো কোনো গুড়ি যোগ করা হয়নি</div>:
-          selLot.logs.map((log,i)=>{
+          sortLogs(selLot.logs).map((log,i)=>{
             const lcode=log.code||String(i+1);
             const label=`${lcode} (ক্রমিক #${i+1}) — ${log.lengthFt}ft × ${log.diameterIn}″`;
             const stateColor=log.sold?"#7c3aed":log.cut?"#94a3b8":"#065f46";
