@@ -124,7 +124,7 @@ function compressImage(file,maxDim=1200,quality=0.82,maxBytes=110000){
 /* ── FULL-RESOLUTION LOCAL FOLDER STORAGE (desktop Chrome/Edge/Brave only) ──
    Original, uncompressed images are saved as real files in a folder you choose
    on your computer. Only a small compressed thumbnail syncs to the cloud/mobile. */
-const BUILD_TAG="4.96";
+const BUILD_TAG="4.99";
 const FS_SUPPORTED=typeof window!=="undefined"&&"showDirectoryPicker" in window;
 function idbOpen(){
   return new Promise((resolve,reject)=>{
@@ -2250,8 +2250,9 @@ function App({firebaseConfig,onResetConfig}){
     if(tabActive||!fsRef.current)return;
     const f=fsRef.current;
     (async()=>{
-      try{await Promise.race([f.waitForPendingWrites(),new Promise(r=>setTimeout(r,120000))])}catch(e){}
-      try{await f.terminate()}catch(e){}
+      const fp=fsPersistRef.current||f;
+      try{await Promise.race([fp.waitForPendingWrites(),new Promise(r=>setTimeout(r,120000))])}catch(e){}
+      try{await fp.terminate()}catch(e){}
       if(fsRef.current===f)fsRef.current=null;
     })();
   },[tabActive]);
@@ -2354,7 +2355,7 @@ function App({firebaseConfig,onResetConfig}){
       // থাকে) আর পর্দায় স্পষ্ট করে জানিয়ে দেয় — জোর করে কিছু ভাঙার চেষ্টা করে না ──
       if(staleFor>45000&&rc.stage<1){
         rc.stage=1;
-        try{await f.disableNetwork();await new Promise(r=>setTimeout(r,800));await f.enableNetwork()}catch(e){}
+        const fp1=fsPersistRef.current||f;try{await fp1.disableNetwork();await new Promise(r=>setTimeout(r,800));await fp1.enableNetwork()}catch(e){}
         return;
       }
       if(staleFor>180000&&rc.stage<2){
@@ -2367,11 +2368,12 @@ function App({firebaseConfig,onResetConfig}){
         const last=+(localStorage.getItem("rf_recover_clear_at")||0);
         if(Date.now()-last>60*60000){
           let flushed=false;
-          try{await Promise.race([f.waitForPendingWrites().then(()=>{flushed=true}),new Promise(r=>setTimeout(r,8000))])}catch(e){}
+          const fp2=fsPersistRef.current||f;
+          try{await Promise.race([fp2.waitForPendingWrites().then(()=>{flushed=true}),new Promise(r=>setTimeout(r,8000))])}catch(e){}
           if(flushed){
             localStorage.setItem("rf_recover_clear_at",String(Date.now()));
-            try{await f.terminate()}catch(e){}
-            try{await f.clearPersistence()}catch(e){}
+            try{await fp2.terminate()}catch(e){}
+            try{await fp2.clearPersistence()}catch(e){}
             window.location.reload();
           }
         }
@@ -2910,6 +2912,41 @@ function App({firebaseConfig,onResetConfig}){
       return{ok:true,n};
     }catch(e){return{ok:false,msg:(e&&e.message)||"পাঠানো যায়নি"}}
   };
+  // ── v4.97: "এই ডিভাইসেরটাই চূড়ান্ত" — সার্ভারকে হুবহু এই ডিভাইসের তালিকার মতো করা।
+  // এটাই একমাত্র কাজ যেটা সার্ভার থেকে কিছু সরাতেও পারে, তাই এটা কখনো নিজে থেকে চলে না —
+  // শুধু আপনি চাপলে, কী কী সরবে তার নাম দেখিয়ে অনুমতি নিয়ে। ক্যাশ-বিহীন সংযোগ দিয়ে যায়,
+  // তাই জ্যামে আটকে থাকা সারির পেছনে দাঁড়াতে হয় না। ভুল হলে সংস্করণ-ইতিহাস থেকে ফেরানো যায় ──
+  const makeThisDeviceAuthoritative=async()=>{
+    if(!catalogCheck||catalogCheck==="loading"||!catalogCheck.onlyServer)return{ok:false,msg:"আগে মিলিয়ে দেখুন"};
+    const removing=catalogCheck.onlyServer||[],adding=catalogCheck.onlyLocal||[];
+    if(!removing.length&&!adding.length)return{ok:false,msg:"সার্ভার এই ডিভাইসের সাথে এমনিতেই মিলছে"};
+    const names=removing.slice(0,10).map(x=>`• ${x.cat} · ${x.name}`).join("\n");
+    if(!window.confirm(`সার্ভারকে হুবহু এই ডিভাইসের মতো করা হবে:\n\n➕ যোগ হবে: ${adding.length}টা মডেল\n➖ সার্ভার থেকে সরবে: ${removing.length}টা মডেল\n\n${names}${removing.length>10?`\n…আরও ${removing.length-10}টা`:""}\n\nএর পর সব ডিভাইসে ঠিক এই তালিকাই থাকবে।\nভুল হলে ⚙️-র সংস্করণ-ইতিহাস থেকে ফেরানো যাবে।\n\nচালিয়ে যেতে চান?`))return{ok:false,msg:"বাতিল করা হয়েছে"};
+    try{
+      const fs2=getRescueFs();
+      const FP=firebase.firestore.FieldPath,FV=firebase.firestore.FieldValue;
+      const local=dbRef.current||{};
+      const args=[];
+      // সার্ভারে আছে কিন্তু এখানে নেই — সরানো হবে
+      removing.forEach(({ck,vk})=>{args.push(new FP(ck,"variants",vk),FV.delete())});
+      // সার্ভারে যে ক্যাটাগরি পুরোপুরি এখানে নেই, সেটা পুরোটাই সরানো হবে
+      dbCats(catalogCheck.server||{}).forEach(([ck])=>{if(!local[ck])args.push(new FP(ck),FV.delete())});
+      // এখানে আছে কিন্তু সার্ভারে নেই — যোগ হবে
+      adding.forEach(({ck,vk})=>{
+        const cat=local[ck];if(!cat)return;
+        const v=((cat.variants)||{})[vk];if(!v)return;
+        if(cat.bn!==undefined)args.push(new FP(ck,"bn"),cat.bn);
+        args.push(new FP(ck,"variants",vk),JSON.parse(JSON.stringify(v)));
+      });
+      if(!args.length)return{ok:false,msg:"পাঠানোর মতো কিছু নেই"};
+      await Promise.race([
+        fs2.doc("meta/db").update(...args),
+        new Promise((_,rej)=>setTimeout(()=>rej(new Error("৬০ সেকেন্ডেও সার্ভার নিশ্চিত করেনি")),60000))
+      ]);
+      await checkCatalog();
+      return{ok:true,added:adding.length,removed:removing.length};
+    }catch(e){return{ok:false,msg:(e&&e.message)||"করা যায়নি"}}
+  };
   // ── উল্টো দিক: সার্ভারেরটাই ঠিক, এই ডিভাইসের ক্যাশ পুরনো। ক্যাশ মুছে নতুন করে লোড করা হয়।
   // কিন্তু এই ডিভাইসে না-পাঠানো লেখা জমে থাকলে ক্যাশ মোছা মানে সেগুলো চিরতরে হারানো — তাই
   // আগে waitForPendingWrites() দিয়ে নিশ্চিত হওয়া হয়, না হলে কাজটা করাই হয় না ──
@@ -2917,11 +2954,12 @@ function App({firebaseConfig,onResetConfig}){
     const f=fsRef.current;
     if(!f)return{ok:false,msg:"সংযোগ তৈরি হয়নি"};
     let flushed=false;
-    try{await Promise.race([f.waitForPendingWrites().then(()=>{flushed=true}),new Promise(r=>setTimeout(r,10000))])}catch(e){}
+    const fp=fsPersistRef.current||f;
+    try{await Promise.race([fp.waitForPendingWrites().then(()=>{flushed=true}),new Promise(r=>setTimeout(r,10000))])}catch(e){}
     if(!flushed)return{ok:false,msg:"এই ডিভাইসে এখনো কিছু পরিবর্তন সার্ভারে পৌঁছায়নি। ক্যাশ মুছলে সেগুলো হারিয়ে যাবে, তাই কাজটা করা হয়নি। আগে সেগুলো পাঠান, নয়তো আমাকে জানান।"};
     try{
-      await f.terminate();
-      await f.clearPersistence();
+      await fp.terminate();
+      await fp.clearPersistence();
       window.location.reload();
       return{ok:true};
     }catch(e){return{ok:false,msg:(e&&e.message)||"ক্যাশ মোছা যায়নি"}}
@@ -2967,6 +3005,15 @@ function App({firebaseConfig,onResetConfig}){
     const t=syncTrackRef.current;
     if(!t||!t.pending||!t.pendingSince||Date.now()-t.pendingSince<60000)return;
     if(!navigator.onLine||!fsRef.current)return;
+    // ── v4.99: তিন মিনিটের বেশি কিছু সার্ভারে পৌঁছায়নি মানে এই ডিভাইসের মূল সংযোগের
+    // লেখার সারি জ্যাম। তখন এখন থেকে সব লেখা ক্যাশ-বিহীন সংযোগ দিয়ে যাবে — যেটা এই
+    // ডিভাইসেই কাজ করে (লেখার পরীক্ষায় প্রমাণিত)। মূল সংযোগ পড়ার জন্য আগের মতোই থাকে ──
+    if(!writeFailoverRef.current&&Date.now()-t.pendingSince>180000){
+      try{
+        const alt=getRescueFs();
+        if(alt){writeFailoverRef.current=true;fsRef.current=alt;setWriteFailover(true)}
+      }catch(e){}
+    }
     pushWorkerRef.current.running=true;
     let sent=0,failed=0,models=0,err=null;
     try{
@@ -2979,6 +3026,15 @@ function App({firebaseConfig,onResetConfig}){
         workers:(id)=>(d.workers||[]).find(x=>x&&x.id===id),
         payrollWeeks:(id)=>(d.payrollWeeks||{})[id]
       };
+      // v4.99: পরিচয়-বার্তাও (devices) সরাসরি পাঠানো হয়, নাহলে অন্য ডিভাইসের তালিকায়
+      // এই ডিভাইসটা কখনোই দেখা যায় না — আর সেটাই সবচেয়ে বড় সূত্র ছিল
+      try{
+        const dd=latestDataRef.current||{};
+        await fs2.collection("devices").doc(deviceIdRef.current).set({
+          id:deviceIdRef.current,label:deviceLabel(),version:BUILD_TAG,lastSeen:new Date().toISOString(),
+          viaDirect:true,counts:{orders:(dd.orders||[]).length,models:catalogModelList(dd.db||{}).length,cats:dbCats(dd.db||{}).length}
+        },{merge:true});
+      }catch(e){}
       for(const col of["orders","expenses","woodlots","workers","payrollWeeks"]){
         const ids=[...(pendingDocsRef.current[col]||new Set())].slice(0,25);
         for(const id of ids){
@@ -3009,6 +3065,14 @@ function App({firebaseConfig,onResetConfig}){
   const[rackSplits,setRackSplits]=useState([]);
   const[rackBands,setRackBands]=useState([]);
   const fsRef=useRef(null);
+  // ── v4.99: fsRef হলো "যে সংযোগ দিয়ে লেখা হবে"। স্বাভাবিক অবস্থায় সেটা মূল সংযোগ
+  // (অফলাইন-ক্যাশসহ, তাই নেট না থাকলেও লেখা জমা থাকে)। কিন্তু কোনো ডিভাইসে যদি ওই
+  // সংযোগের লেখার সারি জ্যাম হয়ে যায়, তখন fsRef ক্যাশ-বিহীন সংযোগে বদলে যায় — আর
+  // ক্যাশ/লাইফসাইকেলের কাজগুলো (waitForPendingWrites/terminate/clearPersistence/
+  // disableNetwork) সবসময় মূল সংযোগেই চলে, তাই সেগুলোর জন্য এই আলাদা রেফারেন্স ──
+  const fsPersistRef=useRef(null);
+  const writeFailoverRef=useRef(false);
+  const[writeFailover,setWriteFailover]=useState(false);
   // ── উদ্ধার-সংযোগ: আলাদা একটা Firebase অ্যাপ, যেখানে অফলাইন-ক্যাশ ইচ্ছাকৃতভাবে চালু করা হয়নি।
   // মূল সংযোগে (fsRef) অফলাইন-ক্যাশ চালু থাকায় কোনো লেখা সার্ভারে আটকে গেলে সেটা লোকাল
   // সারিতে জমা হয়ে পরের সব লেখাকে আটকে দেয়, আর .set() কখনো সফল/ব্যর্থ কিছুই জানায় না —
@@ -3185,7 +3249,7 @@ function App({firebaseConfig,onResetConfig}){
       // সব নেটওয়ার্কে কাজ করে। এটা অবশ্যই অন্য যেকোনো Firestore কাজের আগে বসাতে হয় ──
       try{firestore.settings({experimentalForceLongPolling:true,experimentalAutoDetectLongPolling:false,merge:true})}catch(e){console.warn("firestore settings",e)}
       try{firestore.enablePersistence().catch(()=>{})}catch(e){}
-      fsRef.current=firestore;
+      fsRef.current=firestore;fsPersistRef.current=firestore;
       // v4.96: স্বয়ংক্রিয় পুরনো-ব্যর্থতা মাইগ্রেশন বন্ধ — নিজে থেকে কিছু লেখা হবে না
       // migrateLegacyPermanentFailures();
 
@@ -4330,13 +4394,13 @@ function App({firebaseConfig,onResetConfig}){
   if(page==="expense")return<ExpensePage expenses={expenses} onSave={saveExpense} onBack={goBack}/>;
   if(page==="payroll")return<PayrollPage workers={workers} saveWorker={saveWorker} deleteWorker={deleteWorker} payrollWeeks={payrollWeeks} savePayrollWeek={savePayrollWeek} updateAttendance={updateAttendance} addAdvanceEntry={addAdvanceEntry} removeAdvanceEntry={removeAdvanceEntry} onBack={goBack}/>;
   if(page==="plreport")return<PLReportPage orders={orders} expenses={expenses} workers={workers} payrollWeeks={payrollWeeks} woodLots={woodLots} woodSettings={woodSettings} laborSettings={laborSettings} onBack={goBack}/>;
-  return<Home syncInfo={syncInfo} devices={devices} dbAudit={dbAudit} dbHistory={dbHistory} onRestoreDbVersion={restoreDbVersion} onDownloadDbVersion={downloadDbVersion} deviceId={deviceIdRef.current} lastPageCrash={lastPageCrash} orders={orders} expenses={expenses} woodLots={woodLots} db={db} woodSettings={woodSettings} laborSettings={laborSettings} workers={workers} payrollWeeks={payrollWeeks} alertSettings={alertSettings} saveAlertSettings={saveAlertSettings} backupFailed={backupFailed} lastSyncAt={lastSyncAt} onManualRefresh={manualRefresh} onWriteTest={writeTest} catalogCheck={catalogCheck} onCheckCatalog={checkCatalog} onPushLocalModels={pushLocalOnlyModels} pushStatus={pushStatus} onTakeServerCatalog={takeServerCatalog} pendingWrites={pendingWrites} onCheckServerSync={checkServerSync} onAcceptServerVersion={acceptServerVersion} onUpdateOrder={updateOrder} onNew={()=>navigate({page:"form"})} onHist={()=>navigate({page:"history"})} onManage={()=>navigate({page:"manage"})} onExpense={()=>navigate({page:"expense"})} onWoodStock={()=>navigate({page:"woodstock",view:"list"})} onPayroll={()=>navigate({page:"payroll"})} onPLReport={()=>navigate({page:"plreport"})} onView={o=>navigate({page:"preview",orderNo:o.no,slip:0})} onViewDelivery={o=>navigate({page:"preview",orderNo:o.no,slip:5})} online={online} connError={connError} onResetConfig={onResetConfig} folderStatus={folderStatus} connectFolder={connectFolder} highlightNo={highlightNo} onBackupData={backupData} projectId={firebaseConfig?.projectId||""} appId={firebaseConfig?.appId||""} permanentSyncFailures={permanentSyncFailures} autoStuckStatus={autoStuckStatus} dbGaps={dbGaps} setDbGaps={setDbGaps} fsRef={fsRef}/>;
+  return<Home syncInfo={syncInfo} devices={devices} dbAudit={dbAudit} dbHistory={dbHistory} onRestoreDbVersion={restoreDbVersion} onDownloadDbVersion={downloadDbVersion} deviceId={deviceIdRef.current} lastPageCrash={lastPageCrash} orders={orders} expenses={expenses} woodLots={woodLots} db={db} woodSettings={woodSettings} laborSettings={laborSettings} workers={workers} payrollWeeks={payrollWeeks} alertSettings={alertSettings} saveAlertSettings={saveAlertSettings} backupFailed={backupFailed} lastSyncAt={lastSyncAt} onManualRefresh={manualRefresh} onWriteTest={writeTest} catalogCheck={catalogCheck} onCheckCatalog={checkCatalog} onPushLocalModels={pushLocalOnlyModels} onMakeAuthoritative={makeThisDeviceAuthoritative} pushStatus={pushStatus} writeFailover={writeFailover} onTakeServerCatalog={takeServerCatalog} pendingWrites={pendingWrites} onCheckServerSync={checkServerSync} onAcceptServerVersion={acceptServerVersion} onUpdateOrder={updateOrder} onNew={()=>navigate({page:"form"})} onHist={()=>navigate({page:"history"})} onManage={()=>navigate({page:"manage"})} onExpense={()=>navigate({page:"expense"})} onWoodStock={()=>navigate({page:"woodstock",view:"list"})} onPayroll={()=>navigate({page:"payroll"})} onPLReport={()=>navigate({page:"plreport"})} onView={o=>navigate({page:"preview",orderNo:o.no,slip:0})} onViewDelivery={o=>navigate({page:"preview",orderNo:o.no,slip:5})} online={online} connError={connError} onResetConfig={onResetConfig} folderStatus={folderStatus} connectFolder={connectFolder} highlightNo={highlightNo} onBackupData={backupData} projectId={firebaseConfig?.projectId||""} appId={firebaseConfig?.appId||""} permanentSyncFailures={permanentSyncFailures} autoStuckStatus={autoStuckStatus} dbGaps={dbGaps} setDbGaps={setDbGaps} fsRef={fsRef}/>;
   };
   return<PageErrorBoundary resetKey={navStack.length+"|"+page+"|"+(curScreen.tab||"")} canGoBack={navStack.length>1} onError={onPageCrash}>{renderPage()}</PageErrorBoundary>;
 }
 
 /* ── HOME / DASHBOARD ── */
-function Home({syncInfo,devices,dbAudit,dbHistory,onRestoreDbVersion,onDownloadDbVersion,deviceId,lastPageCrash,orders,expenses,woodLots,db,woodSettings,laborSettings,workers,payrollWeeks,alertSettings,saveAlertSettings,backupFailed,lastSyncAt,onManualRefresh,onWriteTest,catalogCheck,onCheckCatalog,onPushLocalModels,pushStatus,onTakeServerCatalog,pendingWrites,onCheckServerSync,onAcceptServerVersion,onUpdateOrder,onNew,onHist,onManage,onExpense,onWoodStock,onPayroll,onPLReport,onView,onViewDelivery,online,connError,onResetConfig,folderStatus,connectFolder,highlightNo,onBackupData,projectId,appId,permanentSyncFailures,autoStuckStatus,dbGaps,setDbGaps,fsRef}){
+function Home({syncInfo,devices,dbAudit,dbHistory,onRestoreDbVersion,onDownloadDbVersion,deviceId,lastPageCrash,orders,expenses,woodLots,db,woodSettings,laborSettings,workers,payrollWeeks,alertSettings,saveAlertSettings,backupFailed,lastSyncAt,onManualRefresh,onWriteTest,catalogCheck,onCheckCatalog,onPushLocalModels,onMakeAuthoritative,pushStatus,writeFailover,onTakeServerCatalog,pendingWrites,onCheckServerSync,onAcceptServerVersion,onUpdateOrder,onNew,onHist,onManage,onExpense,onWoodStock,onPayroll,onPLReport,onView,onViewDelivery,online,connError,onResetConfig,folderStatus,connectFolder,highlightNo,onBackupData,projectId,appId,permanentSyncFailures,autoStuckStatus,dbGaps,setDbGaps,fsRef}){
   const now=new Date();
   const[showAllRunning,setShowAllRunning]=useState(false);
   const[showSystemZone,setShowSystemZone]=useState(false);
@@ -5805,6 +5869,9 @@ function Home({syncInfo,devices,dbAudit,dbHistory,onRestoreDbVersion,onDownloadD
         <div style={{marginTop:12,background:"white",border:"1px solid #e5e7eb",borderRadius:10,padding:"12px 13px"}}>
           <div style={{fontSize:12,fontWeight:800,color:"#334155",marginBottom:3}}>🔄 ফার্নিচার তালিকা সার্ভারের সাথে মেলানো</div>
           <div style={{fontSize:9.5,color:"#888",lineHeight:1.6,marginBottom:9}}>এক ডিভাইসে বেশি মডেল আর অন্যটায় কম দেখালে এখানে চাপুন। এটা এই ডিভাইসের ক্যাশ নয়, <strong>সরাসরি সার্ভারের আসল নথি</strong> পড়ে পার্থক্যটা দেখাবে — তারপরই সিদ্ধান্ত নেবেন কোন দিকে মেলাতে হবে।</div>
+          {writeFailover&&<div style={{background:"#eff6ff",border:"1px solid #bfdbfe",borderRadius:8,padding:"8px 10px",fontSize:10,lineHeight:1.6,marginBottom:9,color:"#1d4ed8",fontWeight:600}}>
+            🔀 এই ডিভাইসের স্বাভাবিক লেখার পথটা আটকে ছিল, তাই এখন থেকে সব পরিবর্তন সরাসরি সার্ভারে পাঠানো হচ্ছে। এখন থেকে যা করবেন তা সাথে সাথেই অন্য ডিভাইসে যাবে।
+          </div>}
           {pushStatus&&<div style={{background:pushStatus.err?"#fffbeb":"#f0fdf4",border:`1px solid ${pushStatus.err?"#fde68a":"#bbf7d0"}`,borderRadius:8,padding:"8px 10px",fontSize:10,lineHeight:1.6,marginBottom:9,color:pushStatus.err?"#92400e":"#166534",fontWeight:600}}>
             🤖 স্বয়ংক্রিয়ভাবে আটকে থাকা তথ্য পাঠানো হয়েছে ({new Date(pushStatus.at).toLocaleTimeString("bn-BD",{hour:"numeric",minute:"2-digit"})}) — {toBnDigits(pushStatus.sent)}টা নথি{pushStatus.models?`, ${toBnDigits(pushStatus.models)}টা মডেল`:""}{pushStatus.failed?`, ${toBnDigits(pushStatus.failed)}টা পারেনি`:""}{pushStatus.err?` · ${pushStatus.err}`:""}
           </div>}
@@ -5847,6 +5914,11 @@ function Home({syncInfo,devices,dbAudit,dbHistory,onRestoreDbVersion,onDownloadD
                 <button onClick={async()=>{if(!window.confirm("এই ডিভাইসের সংরক্ষিত কপি মুছে সার্ভার থেকে নতুন করে নামানো হবে। চালিয়ে যেতে চান?"))return;setCatalogBusy(true);const r=await onTakeServerCatalog?.();if(!(r&&r.ok))setCatalogMsg({ok:false,t:"⚠️ "+((r&&r.msg)||"করা যায়নি")});setCatalogBusy(false)}} disabled={catalogBusy} style={{width:"100%",background:catalogBusy?"#93c5fd":"#1d4ed8",color:"white",border:"none",borderRadius:8,padding:"9px",fontSize:11.5,fontWeight:700}}>{catalogBusy?"কাজ চলছে…":"⬇️ সার্ভারের কপি নামিয়ে নিন"}</button>
               </div>}
 
+              {!same&&<div style={{background:"#f8fafc",border:"1.5px solid #cbd5e1",borderRadius:9,padding:"10px 11px",marginBottom:8}}>
+                <div style={{fontSize:11.5,fontWeight:800,color:"#334155",marginBottom:3}}>⚖️ এই ডিভাইসের তালিকাটাই সবখানে বসান</div>
+                <div style={{fontSize:9.5,color:"#64748b",lineHeight:1.6,marginBottom:8}}>উপরের দুটো বাটন শুধু <strong>যোগ</strong> করে। কিন্তু আপনি যদি এই ডিভাইস থেকে কিছু <strong>ইচ্ছে করে সরিয়ে থাকেন</strong> আর সেটা এখনো সার্ভারে পৌঁছায়নি, তাহলে এটাই দরকার — সার্ভার হুবহু এই ডিভাইসের মতো হয়ে যাবে ({toBnDigits(c.localModels)}টা মডেল)। <strong>কী কী সরবে তার নাম দেখিয়ে জিজ্ঞেস করা হবে</strong>, আর ভুল হলে উপরের সংস্করণ-ইতিহাস থেকে ফেরানো যাবে।</div>
+                <button onClick={async()=>{setCatalogBusy(true);const r=await onMakeAuthoritative?.();setCatalogMsg(r&&r.ok?{ok:true,t:`✅ সার্ভার এখন এই ডিভাইসের মতোই — ${toBnDigits(r.added)}টা যোগ, ${toBnDigits(r.removed)}টা সরানো হয়েছে।`}:{ok:false,t:"⚠️ "+((r&&r.msg)||"করা যায়নি")});setCatalogBusy(false)}} disabled={catalogBusy} style={{width:"100%",background:catalogBusy?"#cbd5e1":"#334155",color:"white",border:"none",borderRadius:8,padding:"9px",fontSize:11.5,fontWeight:700}}>{catalogBusy?"কাজ চলছে…":"⚖️ সার্ভারকে এই ডিভাইসের মতো করুন"}</button>
+              </div>}
               {catalogMsg&&<div style={{background:catalogMsg.ok?"#f0fdf4":"#fef2f2",border:`1px solid ${catalogMsg.ok?"#bbf7d0":"#fca5a5"}`,borderRadius:8,padding:"9px 11px",fontSize:10.5,fontWeight:600,lineHeight:1.6,color:catalogMsg.ok?"#166534":"#991b1b"}}>{catalogMsg.t}</div>}
             </div>;
           })()}
