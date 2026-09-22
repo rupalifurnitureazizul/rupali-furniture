@@ -124,7 +124,7 @@ function compressImage(file,maxDim=1200,quality=0.82,maxBytes=110000){
 /* ── FULL-RESOLUTION LOCAL FOLDER STORAGE (desktop Chrome/Edge/Brave only) ──
    Original, uncompressed images are saved as real files in a folder you choose
    on your computer. Only a small compressed thumbnail syncs to the cloud/mobile. */
-const BUILD_TAG="4.90";
+const BUILD_TAG="4.96";
 const FS_SUPPORTED=typeof window!=="undefined"&&"showDirectoryPicker" in window;
 function idbOpen(){
   return new Promise((resolve,reject)=>{
@@ -2477,6 +2477,54 @@ function App({firebaseConfig,onResetConfig}){
   const[db,setDb]=useState(null);
   const dbRef=useRef(null);
   dbRef.current=db;
+  // ── v4.96: ফার্নিচার তালিকার সংস্করণ-ইতিহাস। তালিকা বদলালেই এই ডিভাইসে একটা কপি
+  // রেখে দেওয়া হয় (শেষ ৩০টা)। কিছু হারিয়ে গেলে এক চাপেই আগের যেকোনো সংস্করণ ফিরিয়ে
+  // আনা যায় — আর কখনো "ম্যানুয়ালি ঠিক করা অসম্ভব" অবস্থায় পড়তে হবে না ──
+  const[dbHistory,setDbHistory]=useState(()=>{try{return JSON.parse(localStorage.getItem("rf_db_history")||"[]")}catch(e){return[]}});
+  const dbHistRef=useRef(null);
+  useEffect(()=>{
+    if(!db)return;
+    const models=catalogModelList(db).length,cats=dbCats(db).length;
+    if(!models&&!cats)return;
+    const sig=models+"/"+cats;
+    if(dbHistRef.current===sig)return;
+    dbHistRef.current=sig;
+    setDbHistory(prev=>{
+      const next=[{at:new Date().toISOString(),models,cats,db:JSON.parse(JSON.stringify(db))},...(prev||[])].slice(0,30);
+      try{localStorage.setItem("rf_db_history",JSON.stringify(next))}catch(e){
+        try{localStorage.setItem("rf_db_history",JSON.stringify(next.slice(0,10)))}catch(e2){}
+      }
+      return next;
+    });
+  },[db]);
+  const restoreDbVersion=(idx)=>{
+    const v=(dbHistory||[])[idx];
+    if(!v||!v.db)return;
+    if(!window.confirm(`এই সংস্করণে ফিরে যেতে চান?\n\n${new Date(v.at).toLocaleString("bn-BD")}\n${v.models}টা মডেল, ${v.cats}টা ক্যাটাগরি\n\nএখনকার তালিকায় যা বেশি আছে তা মুছবে না — এটা শুধু যোগ করবে।`))return;
+    // শুধু যোগ: এখনকার তালিকার উপর পুরনো সংস্করণের অনুপস্থিত মডেলগুলো বসানো হয়
+    const cur=JSON.parse(JSON.stringify(dbRef.current||{}));
+    let added=0;
+    dbCats(v.db).forEach(([ck,c])=>{
+      if(!cur[ck])
+        {cur[ck]={bn:c.bn,...(c.en?{en:c.en}:{}),variants:{}};}
+      if(!cur[ck].variants)cur[ck].variants={};
+      Object.entries(c.variants||{}).forEach(([vk,vv])=>{
+        if(!cur[ck].variants[vk]){cur[ck].variants[vk]=JSON.parse(JSON.stringify(vv));added++}
+      });
+    });
+    if(!added){alert("এই সংস্করণে বাড়তি কিছু নেই — সব মডেল এখনকার তালিকাতেও আছে।");return}
+    saveDb(cur,{intentional:true});
+    alert(`✅ ${added}টা মডেল ফিরিয়ে আনা হয়েছে।`);
+  };
+  const downloadDbVersion=(idx)=>{
+    const v=(dbHistory||[])[idx];if(!v)return;
+    try{
+      const blob=new Blob([JSON.stringify(v.db,null,2)],{type:"application/json"});
+      const a=document.createElement("a");a.href=URL.createObjectURL(blob);
+      a.download=`RupaliFurniture_তালিকা_${String(v.at).slice(0,19).replace(/[:T]/g,"-")}_${v.models}মডেল.json`;
+      a.click();setTimeout(()=>URL.revokeObjectURL(a.href),4000);
+    }catch(e){alert("ডাউনলোড করা যায়নি: "+e.message)}
+  };
   // ── ইচ্ছাকৃতভাবে মুছে ফেলা মডেল/ক্যাটাগরির রেকর্ড — যাতে অন্য ডিভাইস সেগুলো আবার
   // স্বয়ংক্রিয়ভাবে ফিরিয়ে না আনে ──
   const deletedRecordRef=useRef({});
@@ -2495,6 +2543,7 @@ function App({firebaseConfig,onResetConfig}){
   const markPending=(col,snap)=>{try{pendingDocsRef.current[col]=new Set(snap.docs.filter(d=>d.metadata&&d.metadata.hasPendingWrites).map(d=>d.id))}catch(e){}};
   // ── v4.53: এই ডেটাবেসে যুক্ত সব ডিভাইস আর তারা কী দেখছে — পার্থক্য এক নজরে ধরা পড়ে ──
   const[devices,setDevices]=useState([]);
+  const[dbAudit,setDbAudit]=useState([]);
   const deviceIdRef=useRef((()=>{try{let id=localStorage.getItem("rf_device_id");if(!id){id="dev_"+Date.now()+"_"+Math.random().toString(36).slice(2,7);localStorage.setItem("rf_device_id",id)}return id}catch(e){return"dev_tmp"}})());
   // ── v4.53: এই কপিটা পুরনো সংস্করণ হলে এখান থেকে আর কিছু লেখা হবে না ──
   const[verBlock,setVerBlock]=useState(null);
@@ -2515,7 +2564,10 @@ function App({firebaseConfig,onResetConfig}){
   useEffect(()=>{
     if(!syncInfo.fresh||syncChoresDoneRef.current)return;
     syncChoresDoneRef.current=true;
-    const t=setTimeout(()=>{try{migrateLogCodes()}catch(e){}backfillDeliveredWood(null)},8000);
+    // ── v4.96: এই দুটো (গুড়ির কোড বসানো ও ডেলিভারড অর্ডারে কাঠের মাপ ভরাট) আগে অ্যাপ
+    // খোলার ৮ সেকেন্ড পর নিজে থেকেই ডেটা লিখত। ষোলো রাউন্ডে জমা হওয়া এমন স্বয়ংক্রিয়
+    // "মেরামত"গুলোই একে অপরের লেখা মুছে দিচ্ছিল। এখন আপনার নিজের কাজ ছাড়া কিছুই লেখে না ──
+    const t=setTimeout(()=>{},8000);
     return()=>clearTimeout(t);
   },[syncInfo.fresh]);
   otherDataRef.current={expenses,woodLots,workers,payrollWeeks,db};
@@ -3134,7 +3186,8 @@ function App({firebaseConfig,onResetConfig}){
       try{firestore.settings({experimentalForceLongPolling:true,experimentalAutoDetectLongPolling:false,merge:true})}catch(e){console.warn("firestore settings",e)}
       try{firestore.enablePersistence().catch(()=>{})}catch(e){}
       fsRef.current=firestore;
-      migrateLegacyPermanentFailures();
+      // v4.96: স্বয়ংক্রিয় পুরনো-ব্যর্থতা মাইগ্রেশন বন্ধ — নিজে থেকে কিছু লেখা হবে না
+      // migrateLegacyPermanentFailures();
 
       const unsubOrders=firestore.collection("orders").onSnapshot({includeMetadataChanges:true},snap=>{
         clearTimeout(timer);setTimedOut(false);
@@ -3219,7 +3272,9 @@ function App({firebaseConfig,onResetConfig}){
           // এইভাবেই হয়তো কিছু ডিভাইসে সব মডেল দেখা যাচ্ছিল না। এখন saveDb-এর মতোই শুধু
           // বদলানো অংশটুকু (topLevelPatch দিয়ে) পাঠানো হয়, আর শুধু সার্ভার-নিশ্চিত (ক্যাশ
           // নয়) স্ন্যাপশটেই — বাকি নথি (অন্য ডিভাইসের যোগ করা মডেলসহ) সবসময় অক্ষত থাকে ──
-          if((hadLegacyImages||hadLegacyDelField)&&!(snap.metadata&&snap.metadata.fromCache)){
+          // v4.96: পুরনো ফিল্ড পরিষ্কারের এই স্বয়ংক্রিয় লেখাটাও বন্ধ — কোনো পটভূমির কাজ আর
+          // ফার্নিচার তালিকার নথিতে হাত দেবে না
+          if(false&&(hadLegacyImages||hadLegacyDelField)&&!(snap.metadata&&snap.metadata.fromCache)){
             const cleanPatch=topLevelPatch(data,slim,["zz_deletedRecord",LEGACY_DEL_FIELD]);
             if(hadLegacyDelField)cleanPatch[LEGACY_DEL_FIELD]=firebase.firestore.FieldValue.delete();
             if(Object.keys(cleanPatch).length){
@@ -3286,9 +3341,13 @@ function App({firebaseConfig,onResetConfig}){
           return;
         }
         try{sessionStorage.removeItem("rf_ver_reloads")}catch(e){}
-        if(isSite&&(cmp>0||!d.url))firestore.doc("meta/appVersion").set({min:cmp>0?BUILD_TAG:min,url:location.origin+location.pathname,at:new Date().toISOString()},{merge:true}).catch(()=>{});
+        if(isSite&&cmp>0)firestore.doc("meta/appVersion").set({min:BUILD_TAG,url:location.origin+location.pathname,at:new Date().toISOString()},{merge:true}).catch(()=>{}); // v4.96: শুধু সংস্করণ এগোলে
       },()=>{});
       const unsubDevices=firestore.collection("devices").onSnapshot(snap=>{setDevices(snap.docs.map(d=>d.data()))},()=>{});
+      // v4.93: ফার্নিচার তালিকার পরিবর্তনের খাতা — কে কখন কী যোগ/মুছল
+      const unsubAudit=firestore.collection("dbAudit").onSnapshot(snap=>{
+        setDbAudit(snap.docs.map(d=>d.data()).filter(Boolean).sort((a,b)=>String(b.at||"").localeCompare(String(a.at||""))).slice(0,20));
+      },()=>{});
 
       const unsubCarp=firestore.doc("meta/carpenters").onSnapshot(snap=>{
         setCarpenters(snap.exists?(snap.data().list||[]):[]);
@@ -3325,6 +3384,8 @@ function App({firebaseConfig,onResetConfig}){
         // ── সার্ভারের আসল অবস্থা জানতে উদ্ধার-সংযোগ (লোকাল সারি ছাড়া) ব্যবহার করা হয়।
         // মূল সংযোগ দিয়ে পড়লে এই ডিভাইসের আটকে থাকা লেখাও ফলাফলে মিশে যায়, ফলে সফলভাবে
         // পাঠানোর পরেও সংখ্যা কমত না ──
+        // v4.93: অর্ডারের হিসাব মূল সংযোগ দিয়েই, কিন্তু ফার্নিচার তালিকাটা ক্যাশ-বিহীন
+        // সংযোগ দিয়ে — নাহলে এই ডিভাইসের অপেক্ষমাণ লেখাই "সার্ভারে আছে" বলে গোনা হয়
         const fs2=fsRef.current;
         setAutoStuckStatus(prev=>({...(prev||{}),running:true,lastRunAt:new Date().toISOString(),lastError:!fs2?"সংযোগ তৈরিই হয়নি":null}));
         if(!fs2)return;
@@ -3571,7 +3632,7 @@ function App({firebaseConfig,onResetConfig}){
       const firstStuckCheck=setTimeout(autoStuckCheck,15000);
       const stuckCheckInterval=setInterval(autoStuckCheck,60000);
 
-      return()=>{clearTimeout(timer);clearTimeout(firstStuckCheck);clearInterval(stuckCheckInterval);try{unsubVer();unsubDevices()}catch(e){}unsubOrders();unsubExpenses();unsubLots();unsubDb();unsubGalleries();unsubWoodSettings();unsubLaborSettings();unsubAlertSettings();unsubRackSplits();unsubRackBands();unsubCarp();unsubWorkers();unsubPayroll()};
+      return()=>{clearTimeout(timer);clearTimeout(firstStuckCheck);clearInterval(stuckCheckInterval);try{unsubVer();unsubDevices();unsubAudit()}catch(e){}unsubOrders();unsubExpenses();unsubLots();unsubDb();unsubGalleries();unsubWoodSettings();unsubLaborSettings();unsubAlertSettings();unsubRackSplits();unsubRackBands();unsubCarp();unsubWorkers();unsubPayroll()};
     }catch(e){
       clearTimeout(timer);
       setConnError(e.message);
@@ -3664,7 +3725,7 @@ function App({firebaseConfig,onResetConfig}){
     // সেকেন্ডের ওই পুরো-ডেটা পড়াটা তার উপরে সম্পূর্ণ বাড়তি অপচয় ছিল, যা দিনের কোটা শেষ করে
     // দিচ্ছিল। এখন সার্ভারের সাথে পুরো মিলিয়ে দেখা হয় শুধু তখনই যখন অ্যাপটা খোলা/সামনে আনা হয়
     // (লিংকে ক্লিক করা, ট্যাবে ফেরা, নেট ফিরে আসা) — তখন একবার, তাতেই সব ডিভাইসে এক তথ্য নিশ্চিত ──
-    const onWake=()=>{refreshFromServer();retryPendingWrites()};
+    const onWake=()=>{refreshFromServer()}; // v4.96: জেগে ওঠার সময় আর নিজে থেকে কিছু পাঠানো হয় না
     document.addEventListener("visibilitychange",onWake);
     window.addEventListener("focus",onWake);
     window.addEventListener("online",onWake);
@@ -3679,6 +3740,16 @@ function App({firebaseConfig,onResetConfig}){
   // বাকি ডিভাইসের সব মডেল মুছে যেত। এখন সেটা অসম্ভব — শুধু আপনার করা পরিবর্তনটাই যায় ──
   const saveDb=(newDb,opts)=>{
     const oldDb=dbRef.current||{};
+    // ── v4.96: হঠাৎ-ছোট-হয়ে-যাওয়ার বেড়া। তালিকা এক ধাক্কায় অনেকটা ছোট হয়ে গেলে সেটা
+    // প্রায় সবসময়ই ভুল (পুরনো/অসম্পূর্ণ কপি থেকে লেখা) — আপনাকে না জানিয়ে সেটা আর
+    // সার্ভারে যাবে না। ইচ্ছাকৃত মুছে ফেলা/মার্জে (intentional) এটা প্রযোজ্য নয় ──
+    if(!(opts&&opts.intentional)){
+      const before=catalogModelList(oldDb).length,after=catalogModelList(newDb).length;
+      if(before>=10&&after<before*0.7){
+        const ok=window.confirm(`🛡️ থামুন — এই সেভে তালিকা ${before}টা মডেল থেকে ${after}টায় নেমে যাবে (${before-after}টা কমে যাবে)।\n\nএটা সাধারণত ভুল করে হয়। সত্যিই চালিয়ে যেতে চান?\n\n"বাতিল" চাপলে কিছুই বদলাবে না, আর আপনার তালিকা যেমন আছে তেমনই থাকবে।`);
+        if(!ok)return;
+      }
+    }
     setDb(newDb);
     const fs=fsRef.current;
     if(!fs)return;
@@ -3731,9 +3802,15 @@ function App({firebaseConfig,onResetConfig}){
     // ── ভর-মুছে-ফেলার রক্ষাকবচ: একবারে ৩টার বেশি মুছে যাওয়ার কথা এলে মোছার অংশটা বাতিল হয়
     // (যোগ/সম্পাদনা ঠিকই সেভ হয়)। আপনি নিজে ইচ্ছা করে একসাথে কয়েকটা মেশালে এটা প্রযোজ্য নয় ──
     const realDeletes=pendingVarDeletes.filter(d=>!d.movedElsewhere).length+pendingCatDeletes.length;
-    if(realDeletes>3&&!(opts&&opts.intentional)){
-      alert(`🛡️ নিরাপত্তা: এই সেভে ${realDeletes}টা মডেল/ক্যাটাগরি মুছে যেত।\n\nএকবারে এতগুলো মোছা স্বাভাবিক নয় — সম্ভবত এই ডিভাইসের কপি পুরনো ছিল। মোছার অংশটা বাতিল করা হলো।\n\nআপনার যোগ/নাম-বদল/কাঠের মাপ ঠিকই সেভ হয়েছে।`);
-    }else{
+    // ── v4.93: আগে নিয়ম ছিল "৩টার বেশি মুছে গেলে আটকাও"। অর্থাৎ প্রতিটা সেভে ৩টা পর্যন্ত
+    // মডেল নিঃশব্দে মুছে যেতে পারত — বারবার সেভ হলে ধীরে ধীরে তালিকা ক্ষয়ে যাওয়ার পথ।
+    // এখন মোছা মানেই আপনাকে জিজ্ঞেস করা হবে; "হ্যাঁ" না বললে শুধু যোগ/সম্পাদনা সেভ হবে ──
+    let allowDeletes=realDeletes===0||(opts&&opts.intentional);
+    if(realDeletes>0&&!allowDeletes){
+      allowDeletes=window.confirm(`⚠️ এই সেভে ${realDeletes}টা মডেল/ক্যাটাগরি মুছে যাবে:\n\n${[...pendingVarDeletes.filter(d=>!d.movedElsewhere).map(d=>((oldDb[d.ck]||{}).variants||{})[d.vk]?.bn||d.vk),...pendingCatDeletes.map(ck=>(oldDb[ck]||{}).bn||ck)].slice(0,10).join("\n")}\n\nসত্যিই মুছতে চান?\n\n"বাতিল" চাপলে মোছার অংশটুকু বাদ যাবে, আপনার যোগ/নাম-বদল/কাঠের মাপ ঠিকই সেভ হবে।`);
+    }
+    // মোছা শুধু তখনই, যখন সত্যিই অনুমতি আছে (realDeletes===0, intentional, বা আপনি "হ্যাঁ" বলেছেন)
+    if(allowDeletes){
       pendingVarDeletes.filter(d=>!d.movedElsewhere).forEach(({ck,vk})=>{
         writes.push([[ck,"variants",vk],DEL]);
         tombstones[vk]=Date.now();
@@ -3744,6 +3821,31 @@ function App({firebaseConfig,onResetConfig}){
       });
     }
     deletedRecordRef.current=tombstones;
+    // ── v4.93: কী যোগ হলো আর কী মুছল — একটা আলাদা খাতায় লিখে রাখা হয়, যাতে পরে
+    // নিশ্চিতভাবে বলা যায় কোন ডিভাইস কখন কী সরিয়েছে। খাতাটা ক্যাশ-বিহীন সংযোগ দিয়ে
+    // যায়, তাই মূল সারি জ্যাম থাকলেও রেকর্ডটা আটকে থাকে না ──
+    try{
+      const addedNames=[],removedNames=[];
+      Object.entries(newDb).forEach(([ck,cat])=>{
+        if(!isCatEntry(ck,cat))return;
+        const oldCat=oldDb[ck];
+        Object.entries(cat.variants||{}).forEach(([vk,v])=>{
+          if(!oldCat||!((oldCat.variants)||{})[vk])addedNames.push(((v&&v.bn)||vk));
+        });
+      });
+      pendingVarDeletes.filter(d=>!d.movedElsewhere).forEach(({ck,vk})=>{
+        removedNames.push((((oldDb[ck]||{}).variants||{})[vk]||{}).bn||vk);
+      });
+      pendingCatDeletes.forEach(ck=>removedNames.push("[ক্যাটাগরি] "+((oldDb[ck]||{}).bn||ck)));
+      if(addedNames.length||removedNames.length||writes.length){
+        const entry={at:new Date().toISOString(),device:deviceLabel(),deviceId:deviceIdRef.current,version:BUILD_TAG,
+          added:addedNames.length,removed:removedNames.length,allowedDeletes:!!allowDeletes,
+          removedNames:removedNames.slice(0,25),addedNames:addedNames.slice(0,25),
+          localModels:catalogModelList(newDb).length,localCats:dbCats(newDb).length};
+        try{getRescueFs().collection("dbAudit").doc(String(Date.now())+"_"+deviceIdRef.current).set(entry).catch(()=>{})}
+        catch(e){}
+      }
+    }catch(e){}
     Object.keys(tombstones).forEach(k=>{if(prevTomb[k]!==tombstones[k])writes.push([["zz_deletedRecord",k],tombstones[k]])});
     Object.keys(prevTomb).forEach(k=>{if(!(k in tombstones))writes.push([["zz_deletedRecord",k],DEL])});
     if(!writes.length)return;
@@ -4228,13 +4330,13 @@ function App({firebaseConfig,onResetConfig}){
   if(page==="expense")return<ExpensePage expenses={expenses} onSave={saveExpense} onBack={goBack}/>;
   if(page==="payroll")return<PayrollPage workers={workers} saveWorker={saveWorker} deleteWorker={deleteWorker} payrollWeeks={payrollWeeks} savePayrollWeek={savePayrollWeek} updateAttendance={updateAttendance} addAdvanceEntry={addAdvanceEntry} removeAdvanceEntry={removeAdvanceEntry} onBack={goBack}/>;
   if(page==="plreport")return<PLReportPage orders={orders} expenses={expenses} workers={workers} payrollWeeks={payrollWeeks} woodLots={woodLots} woodSettings={woodSettings} laborSettings={laborSettings} onBack={goBack}/>;
-  return<Home syncInfo={syncInfo} devices={devices} deviceId={deviceIdRef.current} lastPageCrash={lastPageCrash} orders={orders} expenses={expenses} woodLots={woodLots} db={db} woodSettings={woodSettings} laborSettings={laborSettings} workers={workers} payrollWeeks={payrollWeeks} alertSettings={alertSettings} saveAlertSettings={saveAlertSettings} backupFailed={backupFailed} lastSyncAt={lastSyncAt} onManualRefresh={manualRefresh} onWriteTest={writeTest} catalogCheck={catalogCheck} onCheckCatalog={checkCatalog} onPushLocalModels={pushLocalOnlyModels} pushStatus={pushStatus} onTakeServerCatalog={takeServerCatalog} pendingWrites={pendingWrites} onCheckServerSync={checkServerSync} onAcceptServerVersion={acceptServerVersion} onUpdateOrder={updateOrder} onNew={()=>navigate({page:"form"})} onHist={()=>navigate({page:"history"})} onManage={()=>navigate({page:"manage"})} onExpense={()=>navigate({page:"expense"})} onWoodStock={()=>navigate({page:"woodstock",view:"list"})} onPayroll={()=>navigate({page:"payroll"})} onPLReport={()=>navigate({page:"plreport"})} onView={o=>navigate({page:"preview",orderNo:o.no,slip:0})} onViewDelivery={o=>navigate({page:"preview",orderNo:o.no,slip:5})} online={online} connError={connError} onResetConfig={onResetConfig} folderStatus={folderStatus} connectFolder={connectFolder} highlightNo={highlightNo} onBackupData={backupData} projectId={firebaseConfig?.projectId||""} appId={firebaseConfig?.appId||""} permanentSyncFailures={permanentSyncFailures} autoStuckStatus={autoStuckStatus} dbGaps={dbGaps} setDbGaps={setDbGaps} fsRef={fsRef}/>;
+  return<Home syncInfo={syncInfo} devices={devices} dbAudit={dbAudit} dbHistory={dbHistory} onRestoreDbVersion={restoreDbVersion} onDownloadDbVersion={downloadDbVersion} deviceId={deviceIdRef.current} lastPageCrash={lastPageCrash} orders={orders} expenses={expenses} woodLots={woodLots} db={db} woodSettings={woodSettings} laborSettings={laborSettings} workers={workers} payrollWeeks={payrollWeeks} alertSettings={alertSettings} saveAlertSettings={saveAlertSettings} backupFailed={backupFailed} lastSyncAt={lastSyncAt} onManualRefresh={manualRefresh} onWriteTest={writeTest} catalogCheck={catalogCheck} onCheckCatalog={checkCatalog} onPushLocalModels={pushLocalOnlyModels} pushStatus={pushStatus} onTakeServerCatalog={takeServerCatalog} pendingWrites={pendingWrites} onCheckServerSync={checkServerSync} onAcceptServerVersion={acceptServerVersion} onUpdateOrder={updateOrder} onNew={()=>navigate({page:"form"})} onHist={()=>navigate({page:"history"})} onManage={()=>navigate({page:"manage"})} onExpense={()=>navigate({page:"expense"})} onWoodStock={()=>navigate({page:"woodstock",view:"list"})} onPayroll={()=>navigate({page:"payroll"})} onPLReport={()=>navigate({page:"plreport"})} onView={o=>navigate({page:"preview",orderNo:o.no,slip:0})} onViewDelivery={o=>navigate({page:"preview",orderNo:o.no,slip:5})} online={online} connError={connError} onResetConfig={onResetConfig} folderStatus={folderStatus} connectFolder={connectFolder} highlightNo={highlightNo} onBackupData={backupData} projectId={firebaseConfig?.projectId||""} appId={firebaseConfig?.appId||""} permanentSyncFailures={permanentSyncFailures} autoStuckStatus={autoStuckStatus} dbGaps={dbGaps} setDbGaps={setDbGaps} fsRef={fsRef}/>;
   };
   return<PageErrorBoundary resetKey={navStack.length+"|"+page+"|"+(curScreen.tab||"")} canGoBack={navStack.length>1} onError={onPageCrash}>{renderPage()}</PageErrorBoundary>;
 }
 
 /* ── HOME / DASHBOARD ── */
-function Home({syncInfo,devices,deviceId,lastPageCrash,orders,expenses,woodLots,db,woodSettings,laborSettings,workers,payrollWeeks,alertSettings,saveAlertSettings,backupFailed,lastSyncAt,onManualRefresh,onWriteTest,catalogCheck,onCheckCatalog,onPushLocalModels,pushStatus,onTakeServerCatalog,pendingWrites,onCheckServerSync,onAcceptServerVersion,onUpdateOrder,onNew,onHist,onManage,onExpense,onWoodStock,onPayroll,onPLReport,onView,onViewDelivery,online,connError,onResetConfig,folderStatus,connectFolder,highlightNo,onBackupData,projectId,appId,permanentSyncFailures,autoStuckStatus,dbGaps,setDbGaps,fsRef}){
+function Home({syncInfo,devices,dbAudit,dbHistory,onRestoreDbVersion,onDownloadDbVersion,deviceId,lastPageCrash,orders,expenses,woodLots,db,woodSettings,laborSettings,workers,payrollWeeks,alertSettings,saveAlertSettings,backupFailed,lastSyncAt,onManualRefresh,onWriteTest,catalogCheck,onCheckCatalog,onPushLocalModels,pushStatus,onTakeServerCatalog,pendingWrites,onCheckServerSync,onAcceptServerVersion,onUpdateOrder,onNew,onHist,onManage,onExpense,onWoodStock,onPayroll,onPLReport,onView,onViewDelivery,online,connError,onResetConfig,folderStatus,connectFolder,highlightNo,onBackupData,projectId,appId,permanentSyncFailures,autoStuckStatus,dbGaps,setDbGaps,fsRef}){
   const now=new Date();
   const[showAllRunning,setShowAllRunning]=useState(false);
   const[showSystemZone,setShowSystemZone]=useState(false);
@@ -5657,6 +5759,48 @@ function Home({syncInfo,devices,deviceId,lastPageCrash,orders,expenses,woodLots,
           <div>{new Date(lastPageCrash.at).toLocaleString("bn-BD")} · পাতা: {lastPageCrash.page}</div>
           <div style={{fontFamily:"monospace",fontSize:9,color:"#94a3b8",wordBreak:"break-word"}}>{lastPageCrash.msg}</div>
         </div>}
+        {/* ── v4.96: তালিকার সংস্করণ-ইতিহাস — এক চাপে যেকোনো আগের অবস্থায় ফেরা যায় ── */}
+        {dbHistory&&dbHistory.length>0&&(()=>{
+          const best=dbHistory.reduce((a,b)=>(b.models>a.models?b:a),dbHistory[0]);
+          const now=dbHistory[0];
+          const lost=best.models-now.models;
+          return<div style={{marginTop:12,background:lost>0?"#fffbeb":"white",border:`1px solid ${lost>0?"#fde68a":"#e5e7eb"}`,borderRadius:10,padding:"12px 13px"}}>
+            <div style={{fontSize:12,fontWeight:800,color:lost>0?"#92400e":"#334155",marginBottom:3}}>🕘 ফার্নিচার তালিকার সংস্করণ-ইতিহাস</div>
+            <div style={{fontSize:9.5,color:"#888",lineHeight:1.6,marginBottom:9}}>তালিকা বদলালেই এই ডিভাইসে একটা কপি রাখা হয় (শেষ ৩০টা)। কিছু হারিয়ে গেলে এখান থেকে এক চাপেই ফিরিয়ে আনা যায় — <strong>ফেরানোর সময় শুধু অনুপস্থিত মডেলগুলো যোগ হয়, এখনকার কিছু মুছে যায় না।</strong></div>
+            {lost>0&&<div style={{background:"white",border:"1px solid #fcd34d",borderRadius:8,padding:"9px 11px",fontSize:10.5,color:"#92400e",fontWeight:700,lineHeight:1.6,marginBottom:9}}>
+              ⚠️ এই ডিভাইসে এক সময় <strong>{toBnDigits(best.models)}টা</strong> মডেল ছিল, এখন <strong>{toBnDigits(now.models)}টা</strong> — {toBnDigits(lost)}টা কম। নিচের তালিকা থেকে ওই সংস্করণটা ফিরিয়ে আনতে পারেন।
+            </div>}
+            <div style={{maxHeight:230,overflowY:"auto"}}>
+              {dbHistory.slice(0,15).map((v,i)=><div key={i} style={{display:"flex",alignItems:"center",gap:7,borderTop:i?"1px solid #f1f5f9":"none",padding:"7px 0"}}>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontSize:11,fontWeight:700,color:v.models===best.models?"#166534":"#334155"}}>{toBnDigits(v.models)}টা মডেল · {toBnDigits(v.cats)}টা ক্যাটাগরি{i===0?"  (এখনকার)":""}{v.models===best.models&&i!==0?"  ⭐ সর্বোচ্চ":""}</div>
+                  <div style={{fontSize:9,color:"#94a3b8"}}>{new Date(v.at).toLocaleString("bn-BD",{day:"numeric",month:"short",hour:"numeric",minute:"2-digit"})}</div>
+                </div>
+                <button onClick={()=>onDownloadDbVersion?.(i)} style={{background:"#f1f5f9",border:"none",borderRadius:6,padding:"6px 9px",fontSize:10,fontWeight:700,color:"#475569",flexShrink:0}}>⬇</button>
+                {i!==0&&<button onClick={()=>onRestoreDbVersion?.(i)} style={{background:"#166534",color:"white",border:"none",borderRadius:6,padding:"6px 11px",fontSize:10,fontWeight:700,flexShrink:0}}>ফেরান</button>}
+              </div>)}
+            </div>
+          </div>;
+        })()}
+
+        {/* ── v4.93: তালিকার পরিবর্তনের খাতা — কোন ডিভাইস কখন কী যোগ করল বা মুছল ── */}
+        {dbAudit&&dbAudit.length>0&&<div style={{marginTop:12,background:"white",border:"1px solid #e5e7eb",borderRadius:10,padding:"12px 13px"}}>
+          <div style={{fontSize:12,fontWeight:800,color:"#334155",marginBottom:3}}>🧾 ফার্নিচার তালিকার পরিবর্তনের খাতা</div>
+          <div style={{fontSize:9.5,color:"#888",lineHeight:1.6,marginBottom:9}}>তালিকায় কিছু যোগ বা মোছা হলেই এখানে লেখা থাকে — কোন ডিভাইস থেকে, কখন। কোনো মডেল হারিয়ে গেলে এখান থেকেই ধরা যাবে কে সরিয়েছে।</div>
+          {dbAudit.slice(0,10).map((a,i)=><div key={i} style={{borderTop:i?"1px solid #f1f5f9":"none",padding:"7px 0"}}>
+            <div style={{display:"flex",justifyContent:"space-between",gap:6,fontSize:10.5,fontWeight:700,color:"#334155"}}>
+              <span style={{minWidth:0}}>{a.device||"ডিভাইস"}{a.deviceId===deviceId?" (এই ডিভাইস)":""}</span>
+              <span style={{color:"#94a3b8",fontWeight:600,flexShrink:0}}>{a.at?new Date(a.at).toLocaleString("bn-BD",{day:"numeric",month:"short",hour:"numeric",minute:"2-digit"}):""}</span>
+            </div>
+            <div style={{fontSize:10,marginTop:2,lineHeight:1.55}}>
+              {a.added>0&&<span style={{color:"#166534",fontWeight:700}}>+{toBnDigits(a.added)} যোগ </span>}
+              {a.removed>0&&<span style={{color:"#991b1b",fontWeight:800}}>−{toBnDigits(a.removed)} মুছেছে </span>}
+              <span style={{color:"#94a3b8"}}>· এরপর তালিকায় {toBnDigits(a.localModels||0)}টা মডেল</span>
+            </div>
+            {a.removed>0&&a.removedNames&&a.removedNames.length>0&&<div style={{fontSize:9.5,color:"#991b1b",marginTop:2,lineHeight:1.5}}>মুছেছে: {a.removedNames.slice(0,6).join(" · ")}{a.removedNames.length>6?` …আরও ${toBnDigits(a.removedNames.length-6)}টা`:""}</div>}
+          </div>)}
+        </div>}
+
         {/* ── v4.83: ফার্নিচার তালিকা সার্ভারের সাথে মিলিয়ে দেখা ও মেলানো ── */}
         <div style={{marginTop:12,background:"white",border:"1px solid #e5e7eb",borderRadius:10,padding:"12px 13px"}}>
           <div style={{fontSize:12,fontWeight:800,color:"#334155",marginBottom:3}}>🔄 ফার্নিচার তালিকা সার্ভারের সাথে মেলানো</div>
