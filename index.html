@@ -30,6 +30,17 @@ button{cursor:pointer}
   *{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;color-adjust:exact!important}
 }
 .ref-img{max-width:100%;max-height:120px;object-fit:contain;border-radius:6px;border:1px solid #eee}
+/* কার্পেন্টার + ট্রান্সপোর্ট এক পাতায় — ছোট স্ক্রিনে উপরে-নিচে, বড় স্ক্রিনে ও প্রিন্টে পাশাপাশি */
+.combo-wrap{display:flex;flex-direction:column}
+.combo-half{width:100%;min-width:0}
+.combo-cut{height:0;border-top:1.5px dashed #94a3b8;margin:13px 0;position:relative;flex-shrink:0}
+.combo-cut span{position:absolute;left:50%;top:-9px;transform:translateX(-50%);background:white;padding:0 7px;font-size:13px;line-height:1}
+@media print,(min-width:660px){
+  .combo-wrap{flex-direction:row;align-items:stretch}
+  .combo-half{flex:1 1 0;width:auto}
+  .combo-cut{height:auto;width:0;border-top:none;border-left:1.5px dashed #94a3b8;margin:0 9px}
+  .combo-cut span{left:0;top:10px;transform:translateX(-50%) rotate(90deg);padding:7px 0}
+}
 </style>
 </head>
 <body>
@@ -48,6 +59,15 @@ const CHART_SOFT_PURPLE="#a695c4";
 const CHART_SOFT_TEAL="#7fa8a3";
 const CHART_SOFT_GREY="#a8b0ba";
 const CHART_SOFT_PINK="#c98fa0";
+// ── v4.72: কাঠভেদে চার্টের রঙ — এক জায়গায়। "কাঠের মজুদ" পাই আর "কাঠের ব্যবহার" চার্ট
+// দুটোই ঠিক এই একই রঙ ব্যবহার করে, তাই দুই জায়গায় একই কাঠ সবসময় একই রঙে দেখাবে ──
+const WOOD_CHART_COLORS={
+  S:CHART_SOFT_ORANGE,  // সেগুন — হালকা কমলা
+  M:CHART_SOFT_RED,     // মেহগনি
+  A:CHART_SOFT_BLUE,    // আকাশমণি — হালকা আকাশী
+  K:CHART_SOFT_GREY,    // কড়ই — হালকা ধুসর
+  E:CHART_SOFT_GREEN    // ইউক্যালিপটাস — হালকা সবুজ
+};
 const PAY="#0E7490";
 const PAY_DARK="#155E75";
 const PAY_LIGHT="#ECFEFF";
@@ -104,7 +124,7 @@ function compressImage(file,maxDim=1200,quality=0.82,maxBytes=110000){
 /* ── FULL-RESOLUTION LOCAL FOLDER STORAGE (desktop Chrome/Edge/Brave only) ──
    Original, uncompressed images are saved as real files in a folder you choose
    on your computer. Only a small compressed thumbnail syncs to the cloud/mobile. */
-const BUILD_TAG="4.69";
+const BUILD_TAG="4.75";
 const FS_SUPPORTED=typeof window!=="undefined"&&"showDirectoryPicker" in window;
 function idbOpen(){
   return new Promise((resolve,reject)=>{
@@ -357,11 +377,18 @@ const deviceLabel=()=>{
 };
 const cmpVersion=(a,b)=>{const x=parseFloat(a)||0,y=parseFloat(b)||0;return x>y?1:x<y?-1:0};
 // ── সার্ভারের সাথে মেলানোর অবস্থা — ছোট একটা চিহ্ন, সবসময় সত্যি কথা বলে ──
+// ── v4.75: লেখা আটকে থাকলে কত মিনিট ধরে আটকে — এক জায়গায় হিসাব ──
+const pendingMinutes=(info)=>(info&&info.pending&&info.pendingSince)?Math.floor((Date.now()-info.pendingSince)/60000):0;
+const PENDING_WARN_MS=60000; // ১ মিনিটের বেশি আটকে থাকলে আর "স্বাভাবিক" বলা হবে না
 function SyncChip({info,online,compact}){
   const now=Date.now();
   let bg,fg,txt;
+  const stuckMs=(info&&info.pending&&info.pendingSince)?now-info.pendingSince:0;
   if(!online){bg="#fef2f2";fg="#991b1b";txt="📴 অফলাইন — দেখানো তথ্য পুরনো হতে পারে"}
   else if(info&&info.fresh&&!info.pending){bg="#f0fdf4";fg="#166534";txt="✓ সার্ভারের সাথে মেলানো"}
+  // ── আগে এখানে যত সময়ই লাগুক শান্ত নীল রঙে "পরিবর্তন সার্ভারে যাচ্ছে…" লেখা থাকত — দেখে
+  // মনে হতো সব ঠিক আছে, অথচ লেখাটা আসলে কখনোই পৌঁছাত না। এখন এক মিনিট পেরোলেই সত্যিটা বলে ──
+  else if(info&&info.fresh&&info.pending&&stuckMs>PENDING_WARN_MS){bg="#fef2f2";fg="#991b1b";txt=`⚠️ পরিবর্তন সার্ভারে আটকে আছে (${toBnDigits(Math.max(1,Math.floor(stuckMs/60000)))} মিনিট) — অন্য ডিভাইসে যায়নি`}
   else if(info&&info.fresh&&info.pending){bg="#eff6ff";fg="#1d4ed8";txt="↑ পরিবর্তন সার্ভারে যাচ্ছে…"}
   else if(info&&now-(info.staleSince||now)<30000){bg="#fffbeb";fg="#92400e";txt="⏳ সার্ভারের সাথে মেলানো হচ্ছে…"}
   else{bg="#fef2f2";fg="#991b1b";txt="⚠️ সার্ভারের সাথে মেলানো যায়নি — তথ্য পুরনো হতে পারে"}
@@ -1279,8 +1306,12 @@ function S3({order,onPrint,onUpdateOrder,workers}){
   </div>
 }
 
-/* ── SLIP 4: CARPENTER (editable wood, saves as new variant) ── */
-function S4({order,onPrint,db,saveDb,onUpdateOrder}){
+/* ── SLIP 4+5: CARPENTER + TRANSPORT, এক পাতায় (v4.72) ──
+   আগে এই দুটো আলাদা ট্যাব ছিল, আর একসাথে ছাপতে একটা বাড়তি বাটন লাগত। এখন দুটো মিলে
+   একটাই পাতা — বাম অর্ধে কার্পেন্টার কপি, ডান অর্ধে ট্রান্সপোর্ট কপি, মাঝে ডটেড কাটার
+   দাগ ও কেচি। বাকি সব স্লিপের মতোই সাধারণ "এই স্লিপ প্রিন্ট করুন" বাটনেই ছাপা হয়।
+   কার্পেন্টার অংশের কাঠের মাপ এডিট করার সুবিধাটা আগের মতোই আছে (শুধু স্ক্রিনে) ── */
+function S4T5({order,onPrint,db,saveDb,onUpdateOrder,woodSettings,rackSplits}){
   const{cust,items,no,printLogs,refImg,refImgs}=order;
   const images=refImgs&&refImgs.length?refImgs:(refImg?[{src:refImg,caption:"রেফারেন্স ছবি"}]:[]);
   const[editIdx,setEditIdx]=useState(null);
@@ -1290,13 +1321,11 @@ function S4({order,onPrint,db,saveDb,onUpdateOrder}){
   const updatePiece=(si,pi,field,val)=>{const ns=JSON.parse(JSON.stringify(editSections));ns[si].pieces[pi][field]=field==="bn"?val:(parseFloat(val)||0);setEditSections(ns)};
   const removePiece=(si,pi)=>{const ns=JSON.parse(JSON.stringify(editSections));ns[si].pieces.splice(pi,1);setEditSections(ns)};
   const addPieceToSection=(si)=>{const ns=JSON.parse(JSON.stringify(editSections));ns[si].pieces.push({bn:"নতুন কাঠ",pc:1,h:24,l:12,w:1});setEditSections(ns)};
-
   const saveEditedItem=()=>{
     const item=items[editIdx];
     const suffix=String(Math.floor(Math.random()*900+100));
     const newCode=`${item.code}-M${suffix}`;
     const newName=`${item.variantBn.replace(/ \(কাস্টম.*\)/,"")} (কাস্টম-${suffix})`;
-    // Save new variant to DB
     if(item.catKey&&db[item.catKey]){
       const vKey=`${item.varKey||item.catKey}_mod_${suffix}`;
       const nd=JSON.parse(JSON.stringify(db));
@@ -1309,147 +1338,101 @@ function S4({order,onPrint,db,saveDb,onUpdateOrder}){
     setEditIdx(null);setEditSections(null);
   };
 
+  // ── ট্রান্সপোর্ট অংশ: র‍্যাক কোড অনুযায়ী একই মাপের কাঠ একসাথে যোগ করা ──
+  const map={};
+  items.forEach(it=>{(it.sections||[]).forEach(sec=>{(sec.pieces||[]).forEach(p=>{const pw=pieceWoodType(p,sec,it.wood);const info=pieceRackInfo(pw,p.w,p.h,p.l,woodSettings,rackSplits);const code=info.code;const key=`${code}__${p.h}__${p.l}__${p.w}`;const pc=p.pc*it.qty;const cv=cft(pc,p.h,p.l,p.w);const jointCount=parseInt((p.jointRules||{})[pw])||1;if(map[key]){map[key].pc+=pc;map[key].cv+=cv}else map[key]={code,name:p.bn,pc,h:p.h,l:p.l,w:p.w,cv,isSplit:info.isSplit,wood:pw,jointCount}})})});
+  const list=Object.values(map).sort((a,b)=>a.code.localeCompare(b.code));
+  const tot=list.reduce((s,w)=>s+w.cv,0);
+  // আগের আলাদা কার্পেন্টার/ট্রান্সপোর্ট প্রিন্টের ইতিহাসও এখানেই দেখানো হয়, যাতে পুরনো রেকর্ড হারিয়ে না যায়
+  const mergedLog=[...((printLogs||{}).s4||[]),...((printLogs||{}).s5||[]),...((printLogs||{}).s4t5||[])].sort();
+  const sign=(a,b)=><div style={{marginTop:11,display:"grid",gridTemplateColumns:"1fr 1fr",gap:9}}>{[a,b].map(t=><div key={t} style={{borderTop:"1px solid #ddd",paddingTop:4,textAlign:"center",fontSize:8,color:"#888"}}>{t}</div>)}</div>;
+
   return<div style={{fontSize:10}}>
-    <div className="no-print" style={{padding:"8px 14px",background:"#fff",borderBottom:"1px solid #eee",display:"flex",justifyContent:"flex-end",color:"#92400e"}}><PrintBtn onPrint={()=>onPrint("s4")}/></div>
-    <Hdr title="কার্পেন্টারের কপি" sub="Carpenter Copy" no={no} bg="#92400e"/>{(order.items||[]).some(it=>it.woodFilledAt)&&<div style={{margin:"6px 14px 0",background:"#f1f5f9",color:"#475569",borderRadius:6,padding:"5px 8px",fontSize:8.5,lineHeight:1.5}}>ℹ️ কিছু ফার্নিচারের কাঠের মাপ ডেলিভারির পরে ডেটাবেস থেকে বসানো ({fmtDate((order.items.find(it=>it.woodFilledAt)||{}).woodFilledAt)}) — তৈরির সময়ের মাপ থেকে সামান্য আলাদা হতে পারে</div>}
-    <div style={{padding:"10px 14px"}}>
-      <div style={{background:"#fef3c7",borderRadius:7,padding:"8px",marginBottom:10}}><IR l="গ্রাহক" v={cust.name}/><IR l="ডেলিভারি" v={fmtDate(cust.delivery)}/></div>
-      {images.length>0&&<div style={{marginBottom:10}}>
-        <div style={{fontSize:9,color:"#92400e",fontWeight:700,marginBottom:5,textAlign:"center"}}>গ্রাহকের রেফারেন্স ছবি — এই অনুযায়ী তৈরি করুন</div>
-        <div style={{display:"flex",flexWrap:"wrap",gap:6,justifyContent:"center"}}>
-          {images.map((img,i)=><div key={i} style={{textAlign:"center"}}><img src={img.src} className="ref-img" alt="ref" onClick={()=>(img.fileName&&FS_SUPPORTED)?openFullResImageForPrint(img.fileName):openLightbox(img.src)} style={{maxHeight:120,cursor:"pointer"}}/><div style={{fontSize:8,color:"#888",marginTop:2}}>{img.caption}</div></div>)}
-        </div>
-      </div>}
-      {items.map((it,i)=><div key={i} style={{border:"1.5px solid #92400e",borderRadius:8,overflow:"hidden",marginBottom:8}}>
-        <div style={{background:"#92400e",color:"white",padding:"7px 11px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-          <div><div style={{fontWeight:700,fontSize:11}}>[{it.code}] {it.variantBn}</div><div style={{fontSize:9,opacity:.9,marginTop:1}}>কাঠ: {it.woodBn} ({it.wood}) | পরিমাণ: {it.qty}</div></div>
-          {editIdx!==i&&<button className="no-print" onClick={()=>startEdit(i)} style={{background:"white",color:"#92400e",border:"none",borderRadius:5,padding:"4px 8px",fontSize:9,fontWeight:700}}>✏️ এডিট</button>}
-        </div>
-        <div style={{padding:"8px 11px"}}>
-          {it.notes&&<div style={{background:"#fef9c3",borderRadius:5,padding:"5px 8px",marginBottom:6,fontSize:9,fontWeight:600}}>⚠ {it.notes}</div>}
-          {editIdx===i?<>
-            {editSections.map((sec,si)=><div key={si} style={{marginBottom:7,background:"#fffbeb",borderRadius:6,padding:6}} className="no-print">
-              <div style={{fontWeight:700,fontSize:9,color:"#92400e",marginBottom:4}}>{sec.name}</div>
-              {sec.pieces.map((p,pi)=><div key={pi} style={{background:"white",border:"1px solid #f0e0c0",borderRadius:6,padding:6,marginBottom:5}}>
-                <input value={p.bn} onChange={e=>updatePiece(si,pi,"bn",e.target.value)} placeholder="কাঠের নাম" style={{width:"100%",fontSize:11,border:"1px solid #e5e5e5",borderRadius:4,padding:"5px 7px",marginBottom:4,boxSizing:"border-box"}}/>
-                <div style={{display:"flex",gap:4,alignItems:"center",flexWrap:"wrap"}}>
-                  {["w","h","l","pc"].map((f,fi)=><div key={f} style={{display:"flex",alignItems:"center",gap:2,flex:"1 1 21%",minWidth:44}}>
-                    <span style={{fontSize:8,color:"#92400e",flexShrink:0}}>{["W","H","L","পিস"][fi]}</span>
-                    <input type="number" step="0.25" value={p[f]} onChange={e=>updatePiece(si,pi,f,e.target.value)} style={{width:"100%",fontSize:11,border:"1px solid #e5e5e5",borderRadius:4,padding:"5px 3px",minWidth:0,boxSizing:"border-box"}}/>
-                  </div>)}
-                  <button onClick={()=>removePiece(si,pi)} style={{background:"#fee2e2",border:"none",borderRadius:5,color:RED,fontSize:12,padding:"6px 9px",flexShrink:0}}>✕</button>
-                </div>
+    <div className="no-print" style={{padding:"8px 14px",background:"#fff",borderBottom:"1px solid #eee",display:"flex",justifyContent:"flex-end",color:"#334155"}}><PrintBtn onPrint={()=>onPrint("s4t5")}/></div>
+    <Hdr title="কার্পেন্টার + ট্রান্সপোর্ট কপি" sub="Carpenter + Transport — one page" no={no} bg="#334155"/>
+    {(order.items||[]).some(it=>it.woodFilledAt)&&<div style={{margin:"6px 14px 0",background:"#f1f5f9",color:"#475569",borderRadius:6,padding:"5px 8px",fontSize:8.5,lineHeight:1.5}}>ℹ️ কিছু ফার্নিচারের কাঠের মাপ ডেলিভারির পরে ডেটাবেস থেকে বসানো ({fmtDate((order.items.find(it=>it.woodFilledAt)||{}).woodFilledAt)}) — তৈরির সময়ের মাপ থেকে সামান্য আলাদা হতে পারে</div>}
+    <div className="no-print" style={{margin:"6px 14px 0",background:"#f8fafc",color:"#64748b",borderRadius:6,padding:"5px 8px",fontSize:8.5,lineHeight:1.5}}>✂️ প্রিন্টে বাম পাশে কার্পেন্টার কপি, ডান পাশে ট্রান্সপোর্ট কপি — মাঝের ডটেড দাগ বরাবর কেটে দুই ভাগ করে দিন। (ছোট স্ক্রিনে পড়ার সুবিধায় উপরে-নিচে দেখানো হচ্ছে, প্রিন্টে পাশাপাশিই আসবে।)</div>
+
+    <div className="combo-wrap" style={{padding:"10px 14px"}}>
+      {/* ── বাম অর্ধ: কার্পেন্টার ── */}
+      <div className="combo-half">
+        <div style={{textAlign:"center",fontWeight:800,fontSize:11,color:"#92400e",borderBottom:"2px solid #92400e",paddingBottom:4,marginBottom:7}}>কার্পেন্টারের কপি<div style={{fontSize:7.5,fontWeight:400,color:"#888"}}>Carpenter Copy — #{no}</div></div>
+        <div style={{background:"#fef3c7",borderRadius:6,padding:"6px 8px",marginBottom:8,fontSize:9}}><IR l="গ্রাহক" v={cust.name}/><IR l="ডেলিভারি" v={fmtDate(cust.delivery)}/></div>
+        {images.length>0&&<div style={{marginBottom:9}}>
+          <div style={{fontSize:8.5,color:"#92400e",fontWeight:700,marginBottom:4,textAlign:"center"}}>গ্রাহকের রেফারেন্স ছবি — এই অনুযায়ী তৈরি করুন</div>
+          <div style={{display:"flex",flexWrap:"wrap",gap:5,justifyContent:"center"}}>
+            {images.map((img,i)=><div key={i} style={{textAlign:"center"}}><img src={img.src} className="ref-img" alt="ref" onClick={()=>(img.fileName&&FS_SUPPORTED)?openFullResImageForPrint(img.fileName):openLightbox(img.src)} style={{maxHeight:95,cursor:"pointer"}}/><div style={{fontSize:7.5,color:"#888",marginTop:2}}>{img.caption}</div></div>)}
+          </div>
+        </div>}
+        {items.map((it,i)=><div key={i} style={{border:"1.5px solid #92400e",borderRadius:7,overflow:"hidden",marginBottom:7,breakInside:"avoid"}}>
+          <div style={{background:"#92400e",color:"white",padding:"5px 8px",display:"flex",justifyContent:"space-between",alignItems:"center",gap:6}}>
+            <div style={{minWidth:0}}><div style={{fontWeight:700,fontSize:9.5}}>[{it.code}] {it.variantBn}</div><div style={{fontSize:8,opacity:.9,marginTop:1}}>কাঠ: {it.woodBn} ({it.wood}) | পরিমাণ: {it.qty}</div></div>
+            {editIdx!==i&&<button className="no-print" onClick={()=>startEdit(i)} style={{background:"white",color:"#92400e",border:"none",borderRadius:5,padding:"3px 7px",fontSize:8.5,fontWeight:700,flexShrink:0}}>✏️ এডিট</button>}
+          </div>
+          <div style={{padding:"6px 8px"}}>
+            {it.notes&&<div style={{background:"#fef9c3",borderRadius:5,padding:"4px 7px",marginBottom:5,fontSize:8.5,fontWeight:600}}>⚠ {it.notes}</div>}
+            {editIdx===i?<>
+              {editSections.map((sec,si)=><div key={si} style={{marginBottom:6,background:"#fffbeb",borderRadius:6,padding:5}} className="no-print">
+                <div style={{fontWeight:700,fontSize:8.5,color:"#92400e",marginBottom:3}}>{sec.name}</div>
+                {sec.pieces.map((p,pi)=><div key={pi} style={{background:"white",border:"1px solid #f0e0c0",borderRadius:6,padding:5,marginBottom:4}}>
+                  <input value={p.bn} onChange={e=>updatePiece(si,pi,"bn",e.target.value)} placeholder="কাঠের নাম" style={{width:"100%",fontSize:11,border:"1px solid #e5e5e5",borderRadius:4,padding:"5px 7px",marginBottom:4,boxSizing:"border-box"}}/>
+                  <div style={{display:"flex",gap:4,alignItems:"center",flexWrap:"wrap"}}>
+                    {["w","h","l","pc"].map((f,fi)=><div key={f} style={{display:"flex",alignItems:"center",gap:2,flex:"1 1 21%",minWidth:44}}>
+                      <span style={{fontSize:8,color:"#92400e",flexShrink:0}}>{["W","H","L","পিস"][fi]}</span>
+                      <input type="number" step="0.25" value={p[f]} onChange={e=>updatePiece(si,pi,f,e.target.value)} style={{width:"100%",fontSize:11,border:"1px solid #e5e5e5",borderRadius:4,padding:"5px 3px",minWidth:0,boxSizing:"border-box"}}/>
+                    </div>)}
+                    <button onClick={()=>removePiece(si,pi)} style={{background:"#fee2e2",border:"none",borderRadius:5,color:RED,fontSize:12,padding:"6px 9px",flexShrink:0}}>✕</button>
+                  </div>
+                </div>)}
+                <button onClick={()=>addPieceToSection(si)} style={{fontSize:9,background:"#fef3c7",border:"1px dashed #92400e",borderRadius:4,padding:"3px 8px",marginTop:3,color:"#92400e"}}>+ পিস যোগ</button>
               </div>)}
-              <button onClick={()=>addPieceToSection(si)} style={{fontSize:9,background:"#fef3c7",border:"1px dashed #92400e",borderRadius:4,padding:"3px 8px",marginTop:3,color:"#92400e"}}>+ পিস যোগ</button>
+              <div className="no-print" style={{display:"flex",gap:6,marginTop:6}}>
+                <button onClick={()=>{setEditIdx(null);setEditSections(null)}} style={{flex:1,background:"#f3f4f6",border:"none",borderRadius:6,padding:"7px",fontSize:10}}>বাতিল</button>
+                <button onClick={saveEditedItem} style={{flex:2,background:"#92400e",color:"white",border:"none",borderRadius:6,padding:"7px",fontSize:10,fontWeight:700}}>নতুন কোডে সংরক্ষণ করুন</button>
+              </div>
+            </>:(it.sections||[]).map((sec,j)=><div key={j} style={{marginBottom:6}}>
+              <div style={{fontWeight:700,fontSize:8.5,color:"#92400e",borderBottom:"1px solid #fde68a",paddingBottom:2,marginBottom:3}}>{sec.name}{sec.woodOverride&&<span style={{marginLeft:5,background:"#ede9fe",color:"#6d28d9",borderRadius:4,padding:"1px 5px",fontSize:7.5,fontWeight:700}}>সবসময় {WOOD[sec.woodOverride]?.bn}</span>}</div>
+              {sec.pieces.map((p,k)=>{
+                const effWood=pieceWoodType(p,sec,it.wood);
+                const jointCount=parseInt((p.jointRules||{})[effWood])||1;
+                return<div key={k} style={{display:"flex",justifyContent:"space-between",gap:5,fontSize:8.5,padding:"2px 0",borderBottom:"1px dotted #f0f0f0"}}>
+                  <span style={{minWidth:0}}>{p.bn}{jointCount>1&&<strong style={{marginLeft:3,color:"#b45309"}}>🔗 এই পিসে জোড়া: {jointCount} তক্তা</strong>}</span>
+                  <span style={{color:"#555",fontFamily:"monospace",flexShrink:0}}>{p.w}″×{p.h}″×{p.l}″ × {p.pc}</span>
+                </div>
+              })}
             </div>)}
-            <div className="no-print" style={{display:"flex",gap:6,marginTop:6}}>
-              <button onClick={()=>{setEditIdx(null);setEditSections(null)}} style={{flex:1,background:"#f3f4f6",border:"none",borderRadius:6,padding:"7px",fontSize:10}}>বাতিল</button>
-              <button onClick={saveEditedItem} style={{flex:2,background:"#92400e",color:"white",border:"none",borderRadius:6,padding:"7px",fontSize:10,fontWeight:700}}>নতুন কোডে সংরক্ষণ করুন</button>
-            </div>
-          </>:it.sections.map((sec,j)=><div key={j} style={{marginBottom:7}}>
-            <div style={{fontWeight:700,fontSize:9,color:"#92400e",borderBottom:"1px solid #fde68a",paddingBottom:2,marginBottom:3}}>{sec.name}{sec.woodOverride&&<span style={{marginLeft:6,background:"#ede9fe",color:"#6d28d9",borderRadius:4,padding:"1px 6px",fontSize:8,fontWeight:700}}>সবসময় {WOOD[sec.woodOverride]?.bn}</span>}</div>
-            {sec.pieces.map((p,k)=>{
-              const effWood=pieceWoodType(p,sec,it.wood);
-              const jointCount=parseInt((p.jointRules||{})[effWood])||1;
-              return<div key={k} style={{display:"flex",justifyContent:"space-between",fontSize:9,padding:"2px 0",borderBottom:"1px dotted #f0f0f0"}}>
-                <span>{p.bn}{jointCount>1&&<strong style={{marginLeft:4,color:"#b45309"}}>🔗 এই পিসে জোড়া: {jointCount} তক্তা</strong>}</span>
-                <span style={{color:"#555",fontFamily:"monospace"}}>{p.w}″×{p.h}″×{p.l}″ × {p.pc}</span>
-              </div>
-            })}
-          </div>)}
-          {editIdx!==i&&<div style={{background:"#fef3c7",borderRadius:5,padding:"5px 8px",fontSize:9,marginTop:4}}>মোট CFT: <strong>{(totalCft(it.sections)*it.qty).toFixed(3)}</strong></div>}
-        </div>
-      </div>)}
-      <div style={{marginTop:10,display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>{["প্রধান কার্পেন্টারের স্বাক্ষর","পরিচালকের স্বাক্ষর"].map(t=><div key={t} style={{borderTop:"1px solid #ddd",paddingTop:5,textAlign:"center",fontSize:9,color:"#888"}}>{t}</div>)}</div>
-      <div className="no-print"><PrintLog log={printLogs?.s4}/></div>
-    </div>
-  </div>
-}
-
-/* ── SLIP 5: TRANSPORT ── */
-function S5({order,onPrint,woodSettings,rackSplits}){
-  const{cust,items,no,printLogs}=order;
-  const map={};
-  items.forEach(it=>{it.sections.forEach(sec=>{sec.pieces.forEach(p=>{const pw=pieceWoodType(p,sec,it.wood);const info=pieceRackInfo(pw,p.w,p.h,p.l,woodSettings,rackSplits);const code=info.code;const key=`${code}__${p.h}__${p.l}__${p.w}`;const pc=p.pc*it.qty;const cv=cft(pc,p.h,p.l,p.w);const jointCount=parseInt((p.jointRules||{})[pw])||1;if(map[key]){map[key].pc+=pc;map[key].cv+=cv}else map[key]={code,name:p.bn,pc,h:p.h,l:p.l,w:p.w,cv,isSplit:info.isSplit,wood:pw,jointCount}})})});
-  const list=Object.values(map).sort((a,b)=>a.code.localeCompare(b.code));
-  const tot=list.reduce((s,w)=>s+w.cv,0);
-  return<div style={{fontSize:10}}>
-    <div className="no-print" style={{padding:"8px 14px",background:"#fff",borderBottom:"1px solid #eee",display:"flex",justifyContent:"flex-end",color:"#065f46"}}><PrintBtn onPrint={()=>onPrint("s5")}/></div>
-    <Hdr title="ট্রান্সপোর্ট কপি — কাঠের তালিকা" sub="Transport Wood List" no={no} bg="#065f46"/>{(order.items||[]).some(it=>it.woodFilledAt)&&<div style={{margin:"6px 14px 0",background:"#f1f5f9",color:"#475569",borderRadius:6,padding:"5px 8px",fontSize:8.5,lineHeight:1.5}}>ℹ️ কিছু ফার্নিচারের কাঠের মাপ ডেলিভারির পরে ডেটাবেস থেকে বসানো ({fmtDate((order.items.find(it=>it.woodFilledAt)||{}).woodFilledAt)}) — তৈরির সময়ের মাপ থেকে সামান্য আলাদা হতে পারে</div>}
-    <div style={{padding:"10px 14px"}}>
-      <div style={{background:"#f0fdf4",borderRadius:7,padding:"8px",marginBottom:10}}>
-        <IR l="গ্রাহক" v={cust.name}/><IR l="তারিখ" v={fmtDate(cust.date)}/>
-        {items.map((it,i)=><IR key={i} l={`ফার্নিচার ${i+1}`} v={`[${it.code}] ${it.variantBn} (${it.woodBn}) × ${it.qty}`}/>)}
+            {editIdx!==i&&<div style={{background:"#fef3c7",borderRadius:5,padding:"4px 7px",fontSize:8.5,marginTop:4}}>মোট CFT: <strong>{(totalCft(it.sections||[])*it.qty).toFixed(3)}</strong></div>}
+          </div>
+        </div>)}
+        {sign("প্রধান কার্পেন্টারের স্বাক্ষর","পরিচালকের স্বাক্ষর")}
       </div>
-      <div style={{fontWeight:700,fontSize:10,color:"#065f46",marginBottom:6}}>গোডাউনের র‍্যাক থেকে নিন:</div>
-      <table style={{width:"100%",borderCollapse:"collapse",fontSize:9}}>
-        <thead><tr style={{background:"#065f46",color:"white"}}>{["র‍্যাক কোড","কাঠের নাম","W×H×L","পিস","CFT"].map((h,i)=><th key={h} style={{padding:"5px 4px",textAlign:i<2?"left":"center",fontWeight:700}}>{h}</th>)}</tr></thead>
-        <tbody>{list.map((w,i)=><tr key={i} style={{background:i%2===0?"#f0fdf4":"white",borderBottom:"1px solid #d1fae5"}}>
-          <td style={{padding:"5px 4px",fontWeight:800,color:"#065f46",fontFamily:"monospace",fontSize:10}}>{w.code}{w.isSplit&&<span style={{marginLeft:4,fontSize:7,background:"#1d4ed8",color:"white",borderRadius:6,padding:"1px 4px",fontWeight:700,fontFamily:"sans-serif"}}>বিভক্ত</span>}</td>
-          <td style={{padding:"5px 4px"}}>{w.name}{w.jointCount>1&&<div style={{fontSize:7.5,color:"#b45309",fontWeight:700,marginTop:1}}>🔗 এই পিসে জোড়া: {w.jointCount} তক্তা</div>}</td>
-          <td style={{padding:"5px 4px",textAlign:"center",fontFamily:"monospace",color:"#555"}}>{w.w}×{w.h}×{w.l}</td>
-          <td style={{padding:"5px 4px",textAlign:"center",fontWeight:700}}>{w.pc}</td>
-          <td style={{padding:"5px 4px",textAlign:"center"}}>{w.cv.toFixed(3)}</td>
-        </tr>)}</tbody>
-        <tfoot><tr style={{background:"#065f46",color:"white"}}><td colSpan={4} style={{padding:"7px 4px",fontWeight:700}}>মোট CFT</td><td style={{padding:"7px 4px",textAlign:"center",fontWeight:800,fontSize:11}}>{tot.toFixed(3)}</td></tr></tfoot>
-      </table>
-      <div style={{marginTop:14,display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>{["ট্রান্সপোর্ট কর্মীর স্বাক্ষর","পরিচালকের স্বাক্ষর"].map(t=><div key={t} style={{borderTop:"1px solid #ddd",paddingTop:5,textAlign:"center",fontSize:9,color:"#888"}}>{t}</div>)}</div>
-      <div className="no-print"><PrintLog log={printLogs?.s5}/></div>
-    </div>
-  </div>
-}
 
-/* ── v4.69: কার্পেন্টার + ট্রান্সপোর্ট কপি একসাথে, এক A4-তে (বাম=কার্পেন্টার, ডান=
-   ট্রান্সপোর্ট), মাঝে ডটেড লাইন ও কেচির আইকন — একবার প্রিন্ট করে মাঝ বরাবর কেটে দুই
-   কপি আলাদা করা যায়। এটা শুধু প্রিন্টের জন্য — এডিট এখানে হয় না (এডিট লাগলে আলাদা
-   ট্যাব থেকে করতে হবে), তাই S4-এর এডিট-যোগ্য অংশ বাদ দিয়ে শুধু পড়ার-উপযোগী তালিকা ── */
-function S4T5Combo({order,woodSettings,rackSplits}){
-  const{cust,items,no}=order;
-  const map={};
-  items.forEach(it=>{it.sections.forEach(sec=>{sec.pieces.forEach(p=>{const pw=pieceWoodType(p,sec,it.wood);const info=pieceRackInfo(pw,p.w,p.h,p.l,woodSettings,rackSplits);const code=info.code;const key=`${code}__${p.h}__${p.l}__${p.w}`;const pc=p.pc*it.qty;const cv=cft(pc,p.h,p.l,p.w);const jointCount=parseInt((p.jointRules||{})[pw])||1;if(map[key]){map[key].pc+=pc;map[key].cv+=cv}else map[key]={code,name:p.bn,pc,h:p.h,l:p.l,w:p.w,cv,isSplit:info.isSplit,wood:pw,jointCount}})})});
-  const list=Object.values(map).sort((a,b)=>a.code.localeCompare(b.code));
-  const tot=list.reduce((s,w)=>s+w.cv,0);
-  return<div style={{display:"flex",fontSize:8.5,padding:"8px 10px"}}>
-    <div style={{flex:1,paddingRight:8,minWidth:0}}>
-      <div style={{textAlign:"center",fontWeight:800,fontSize:11,color:"#92400e",borderBottom:"2px solid #92400e",paddingBottom:4,marginBottom:6}}>কার্পেন্টার কপি<div style={{fontSize:7.5,fontWeight:400,color:"#666"}}>Carpenter Copy — #{no}</div></div>
-      <div style={{marginBottom:6,fontSize:8}}><b>গ্রাহক:</b> {cust.name} · <b>ডেলিভারি:</b> {fmtDate(cust.delivery)}</div>
-      {items.map((it,i)=><div key={i} style={{marginBottom:6,border:"1px solid #e5c98a",borderRadius:4,overflow:"hidden",breakInside:"avoid"}}>
-        <div style={{background:"#92400e",color:"white",padding:"3px 6px",fontWeight:700,fontSize:8}}>[{it.code}] {it.variantBn} × {it.qty}</div>
-        <div style={{padding:"3px 6px"}}>
-          {it.sections.map((sec,j)=><div key={j} style={{marginBottom:3}}>
-            <div style={{fontWeight:700,fontSize:7,color:"#92400e"}}>{sec.name}</div>
-            {sec.pieces.map((p,k)=>{
-              const effWood=pieceWoodType(p,sec,it.wood);
-              const jointCount=parseInt((p.jointRules||{})[effWood])||1;
-              return<div key={k} style={{display:"flex",justifyContent:"space-between",fontSize:7,borderBottom:"1px dotted #eee",padding:"1px 0",gap:4}}>
-                <span style={{minWidth:0}}>{p.bn}{jointCount>1&&<span style={{color:"#b45309",fontWeight:700}}> 🔗{jointCount}তক্তা</span>}</span>
-                <span style={{fontFamily:"monospace",color:"#555",flexShrink:0}}>{p.w}″×{p.h}″×{p.l}″×{p.pc}</span>
-              </div>
-            })}
-          </div>)}
-          <div style={{fontSize:7.5,fontWeight:700,color:"#92400e"}}>মোট CFT: {(totalCft(it.sections)*it.qty).toFixed(3)}</div>
+      {/* ── মাঝের কাটার দাগ ── */}
+      <div className="combo-cut"><span>✂️</span></div>
+
+      {/* ── ডান অর্ধ: ট্রান্সপোর্ট ── */}
+      <div className="combo-half">
+        <div style={{textAlign:"center",fontWeight:800,fontSize:11,color:"#065f46",borderBottom:"2px solid #065f46",paddingBottom:4,marginBottom:7}}>ট্রান্সপোর্ট কপি — কাঠের তালিকা<div style={{fontSize:7.5,fontWeight:400,color:"#888"}}>Transport Wood List — #{no}</div></div>
+        <div style={{background:"#f0fdf4",borderRadius:6,padding:"6px 8px",marginBottom:8,fontSize:9}}>
+          <IR l="গ্রাহক" v={cust.name}/><IR l="তারিখ" v={fmtDate(cust.date)}/>
+          {items.map((it,i)=><IR key={i} l={`ফার্নিচার ${i+1}`} v={`[${it.code}] ${it.variantBn} (${it.woodBn}) × ${it.qty}`}/>)}
         </div>
-      </div>)}
+        <div style={{fontWeight:700,fontSize:9.5,color:"#065f46",marginBottom:5}}>গোডাউনের র‍্যাক থেকে নিন:</div>
+        <table style={{width:"100%",borderCollapse:"collapse",fontSize:8}}>
+          <thead><tr style={{background:"#065f46",color:"white"}}>{["র‍্যাক","কাঠের নাম","W×H×L","পিস","CFT"].map((h,i)=><th key={h} style={{padding:"4px 3px",textAlign:i<2?"left":"center",fontWeight:700}}>{h}</th>)}</tr></thead>
+          <tbody>{list.map((w,i)=><tr key={i} style={{background:i%2===0?"#f0fdf4":"white",borderBottom:"1px solid #d1fae5"}}>
+            <td style={{padding:"4px 3px",fontWeight:800,color:"#065f46",fontFamily:"monospace",fontSize:9}}>{w.code}{w.isSplit&&<span style={{marginLeft:3,fontSize:6.5,background:"#1d4ed8",color:"white",borderRadius:6,padding:"1px 4px",fontWeight:700,fontFamily:"sans-serif"}}>বিভক্ত</span>}</td>
+            <td style={{padding:"4px 3px"}}>{w.name}{w.jointCount>1&&<div style={{fontSize:7,color:"#b45309",fontWeight:700,marginTop:1}}>🔗 এই পিসে জোড়া: {w.jointCount} তক্তা</div>}</td>
+            <td style={{padding:"4px 3px",textAlign:"center",fontFamily:"monospace",color:"#555"}}>{w.w}×{w.h}×{w.l}</td>
+            <td style={{padding:"4px 3px",textAlign:"center",fontWeight:700}}>{w.pc}</td>
+            <td style={{padding:"4px 3px",textAlign:"center"}}>{w.cv.toFixed(3)}</td>
+          </tr>)}</tbody>
+          <tfoot><tr style={{background:"#065f46",color:"white"}}><td colSpan={4} style={{padding:"5px 3px",fontWeight:700}}>মোট CFT</td><td style={{padding:"5px 3px",textAlign:"center",fontWeight:800,fontSize:10}}>{tot.toFixed(3)}</td></tr></tfoot>
+        </table>
+        {sign("ট্রান্সপোর্ট কর্মীর স্বাক্ষর","পরিচালকের স্বাক্ষর")}
+      </div>
     </div>
-    <div style={{width:0,borderLeft:"1.5px dashed #999",position:"relative",margin:"0 6px",flexShrink:0}}>
-      <span style={{position:"absolute",top:-3,left:"50%",transform:"translateX(-50%) rotate(90deg)",fontSize:13,background:"white",lineHeight:1}}>✂️</span>
-    </div>
-    <div style={{flex:1,paddingLeft:8,minWidth:0}}>
-      <div style={{textAlign:"center",fontWeight:800,fontSize:11,color:"#065f46",borderBottom:"2px solid #065f46",paddingBottom:4,marginBottom:6}}>ট্রান্সপোর্ট কপি<div style={{fontSize:7.5,fontWeight:400,color:"#666"}}>Transport Copy — #{no}</div></div>
-      <div style={{marginBottom:6,fontSize:8}}><b>গ্রাহক:</b> {cust.name} · <b>তারিখ:</b> {fmtDate(cust.date)}</div>
-      <table style={{width:"100%",borderCollapse:"collapse",fontSize:7}}>
-        <thead><tr style={{background:"#065f46",color:"white"}}>{["র‍্যাক","কাঠ","WxHxL","পিস","CFT"].map(h=><th key={h} style={{padding:"3px 2px",fontWeight:700}}>{h}</th>)}</tr></thead>
-        <tbody>{list.map((w,i)=><tr key={i} style={{background:i%2===0?"#f0fdf4":"white"}}>
-          <td style={{padding:"3px 2px",fontWeight:800,color:"#065f46",fontFamily:"monospace"}}>{w.code}</td>
-          <td style={{padding:"3px 2px"}}>{w.name}{w.jointCount>1&&<div style={{fontSize:6,color:"#b45309",fontWeight:700}}>🔗এই পিসে জোড়া: {w.jointCount} তক্তা</div>}</td>
-          <td style={{padding:"3px 2px",textAlign:"center",fontFamily:"monospace"}}>{w.w}×{w.h}×{w.l}</td>
-          <td style={{padding:"3px 2px",textAlign:"center"}}>{w.pc}</td>
-          <td style={{padding:"3px 2px",textAlign:"center"}}>{w.cv.toFixed(3)}</td>
-        </tr>)}</tbody>
-        <tfoot><tr style={{background:"#065f46",color:"white"}}><td colSpan={4} style={{padding:"4px 2px",fontWeight:700}}>মোট CFT</td><td style={{padding:"4px 2px",textAlign:"center",fontWeight:800}}>{tot.toFixed(3)}</td></tr></tfoot>
-      </table>
-      <div style={{marginTop:10,display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>{["ট্রান্সপোর্ট স্বাক্ষর","পরিচালকের স্বাক্ষর"].map(t=><div key={t} style={{borderTop:"1px solid #ddd",paddingTop:4,textAlign:"center",fontSize:7}}>{t}</div>)}</div>
-    </div>
+    <div className="no-print" style={{padding:"0 14px 12px"}}><PrintLog log={mergedLog}/></div>
   </div>
 }
 
@@ -1896,90 +1879,113 @@ function TripleBarChart({data,height=150,labelA,labelB,labelC}){
   </div>
 }
 
-// ── v4.69: "কাঠ ও মজুদ"-এ নতুন — একাধিক সময়সীমা (চলমান/৬ মাস/বছরভিত্তিক) একসাথে বেছে
-// কোন কাঠ কত CFT লাগছে/লেগেছে তুলনা করার চার্ট। প্রথমে একটা সাধারণ multi-series bar
-// (যত সিরিজ লাগবে ততই আঁকতে পারে — নির্দিষ্ট ২/৩টা সিরিজে বাঁধা না), তারপর সেটা
-// ব্যবহার করে আসল WoodDemandChart ──
-function MultiSeriesBarChart({data,series,height=170}){
-  const max=Math.max(1,...data.flatMap(d=>series.map(sg=>d.values[sg.id]||0)));
-  const w=100/Math.max(1,data.length);
-  const n=Math.max(1,series.length);
-  const gap=0.8;
-  const bw=(w*0.86)/n;
-  return<div style={{width:"100%"}}>
-    <svg viewBox={`0 0 100 ${height}`} style={{width:"100%",height,display:"block"}} preserveAspectRatio="none">
-      {data.map((d,i)=><g key={i}>
-        {series.map((sg,si)=>{
-          const val=d.values[sg.id]||0;
-          const h=(val/max)*(height-26);
-          const x=i*w+w*0.07+si*(bw+gap);
-          return<rect key={sg.id} x={x} y={height-24-h} width={Math.max(0,bw)} height={h} fill={sg.color} rx="1"/>
-        })}
-        <text x={i*w+w*0.5} y={height-10} fontSize="4.2" textAnchor="middle" fill="#666">{d.label}</text>
-      </g>)}
-    </svg>
-    <div style={{display:"flex",gap:10,justifyContent:"center",marginTop:4,flexWrap:"wrap"}}>
-      {series.map(sg=><div key={sg.id} style={{display:"flex",alignItems:"center",gap:4,fontSize:9.5,color:"#666"}}><div style={{width:9,height:9,background:sg.color,borderRadius:2}}></div>{sg.label}</div>)}
-    </div>
-  </div>
+// ── v4.72: কাঠের ব্যবহার — শেষ ৩ বছর। আগে এখানে বক্স-সিলেক্ট করা SVG বার-চার্ট ছিল।
+// দুটো সমস্যা ছিল: (১) SVG-তে preserveAspectRatio="none" থাকায় ভেতরের লেখা আড়াআড়ি টেনে
+// বিকৃত হয়ে যেত আর বাংলা ফন্টও পেত না — তাই বাকি অ্যাপের থেকে আলাদা দেখাত; (২) একাধিক
+// বক্স বেছে তুলনা করতে হতো, এক নজরে পুরো চিত্র পাওয়া যেত না।
+// এখন পুরো চার্টটাই সাধারণ HTML/CSS — তাই বাকি অ্যাপের একই "Noto Sans Bengali" ফন্ট।
+// কোনো বাছাই ছাড়াই শেষ ৩ বছর একসাথে, প্রতিটা বারের পাশে আসল CFT সংখ্যা, আর প্রতিটা
+// কাঠের প্রবৃদ্ধির শতকরা হিসাব। কাঠভেদে রঙ WOOD_CHART_COLORS থেকে — অর্থাৎ ঠিক নিচের
+// "কাঠের মজুদ" পাই চার্টের হুবহু একই রঙ ──
+function WoodGrowthBadge({pct,hasNow}){
+  // তুলনা সম্ভব না: গত বছর এই সময় পর্যন্ত কিছু ব্যবহার হয়নি। এ বছর ব্যবহার থাকলে "নতুন",
+  // আর দুই বছরেই কিছু না থাকলে শুধু একটা ড্যাশ — ভুল করে "নতুন" লেখা হয় না
+  if(pct===null||pct===undefined)return<span style={{fontSize:9,color:"#cbd5e1",fontWeight:700,flexShrink:0}}>{hasNow?"নতুন":"—"}</span>;
+  const up=pct>=0;
+  return<span style={{fontSize:9.5,fontWeight:800,flexShrink:0,whiteSpace:"nowrap",borderRadius:20,padding:"2px 7px",
+    color:up?"#b45309":"#475569",background:up?"#fffbeb":"#f1f5f9",border:`1px solid ${up?"#fde68a":"#e2e8f0"}`}}>
+    {up?"↑":"↓"} {toBnDigits(Math.abs(pct).toFixed(0))}%
+  </span>;
 }
-const WOOD_DEMAND_PERIOD_COLORS=["#065f46","#1d4ed8","#b45309","#7c3aed","#dc2626","#0891b2","#65a30d","#db2777"];
-function WoodDemandChart({orders}){
-  const nowY=new Date().getFullYear();
-  const PERIODS=useMemo(()=>{
-    const yearIds=Array.from({length:6},(_,i)=>nowY-i);
-    return[
-      {id:"running",label:"চলমান"},
-      {id:"6m",label:"৬ মাস"},
-      ...yearIds.map((y,i)=>({id:`y${y}`,label:i===0?`চলতি বছর (${toBnDigits(y)})`:toBnDigits(y)}))
-    ];
-  },[nowY]);
-  const[sel,setSel]=useState(()=>new Set(["running"]));
-  const toggle=(id)=>{
-    setSel(prev=>{
-      const ns=new Set(prev);
-      if(ns.has(id))ns.delete(id);else ns.add(id);
-      if(ns.size===0)ns.add("running"); // অন্তত একটা সবসময় বাছাই থাকা লাগবে
-      return ns;
-    });
-  };
-  const data=useMemo(()=>{
-    const sixMoAgo=monthsAgo(todayStr(),6);
-    const totals={};
-    PERIODS.forEach(p=>{totals[p.id]={}});
+function WoodUsageChart({orders}){
+  const st=useMemo(()=>{
+    const today=todayStr();
+    const curY=+String(today).slice(0,4);
+    const years=[curY-2,curY-1,curY];          // পুরনো → নতুন
+    const md=String(today).slice(5);            // "MM-DD" — বছরের একই সময় পর্যন্ত তুলনার জন্য
+    const byWood={};
+    const ensure=(w)=>byWood[w]||(byWood[w]={y:{},ytdNow:0,ytdPrev:0,running:0});
     (orders||[]).forEach(o=>{
       if(!o||o.cancelled)return;
+      const ip=effectiveItemProgress(o);
       const isRunning=!o.delivered&&!isOrderFullyProgressed(o);
-      const d=o.cust&&o.cust.date;
-      const y=d?String(d).slice(0,4):null;
-      (o.items||[]).forEach(it=>{
+      (o.items||[]).forEach((it,idx)=>{
+        // কাঠ কবে গেল — পরিবহন বিভাগের তারিখ, না থাকলে অর্ডারের তারিখ (খরচের হিসাবেও এই নিয়ম)
+        const wd=itemWoodDate(o,it,idx,ip);
+        const yr=wd?+String(wd).slice(0,4):null;
+        const dayPart=wd?String(wd).slice(5):null;
         (it.sections||[]).forEach(sec=>{
           (sec.pieces||[]).forEach(p=>{
             const pw=pieceWoodType(p,sec,it.wood);
             const cv=cft((p.pc||0)*(it.qty||1),p.h,p.l,p.w);
-            if(!pw||cv<=0)return;
-            if(isRunning)totals.running[pw]=(totals.running[pw]||0)+cv;
-            if(d&&d>=sixMoAgo)totals["6m"][pw]=(totals["6m"][pw]||0)+cv;
-            if(y){const yid=`y${y}`;if(totals[yid])totals[yid][pw]=(totals[yid][pw]||0)+cv}
+            if(!pw||!(cv>0))return;
+            const rec=ensure(pw);
+            if(yr&&years.indexOf(yr)>=0)rec.y[yr]=(rec.y[yr]||0)+cv;
+            // প্রবৃদ্ধি সৎভাবে মাপতে: চলতি বছরের আজ পর্যন্ত বনাম গত বছরের ঠিক এই দিন পর্যন্ত
+            if(yr===curY&&dayPart&&dayPart<=md)rec.ytdNow+=cv;
+            if(yr===curY-1&&dayPart&&dayPart<=md)rec.ytdPrev+=cv;
+            if(isRunning)rec.running+=cv;
           });
         });
       });
     });
-    return Object.keys(WOOD).map(wt=>({
-      label:WOOD[wt].bn,
-      values:Object.fromEntries(PERIODS.map(p=>[p.id,totals[p.id][wt]||0]))
-    }));
-  },[orders,PERIODS]);
-  const activePeriods=PERIODS.filter(p=>sel.has(p.id));
-  const seriesList=activePeriods.map((p,i)=>({id:p.id,label:p.label,color:WOOD_DEMAND_PERIOD_COLORS[i%WOOD_DEMAND_PERIOD_COLORS.length]}));
+    const rows=Object.keys(WOOD).map(wt=>{
+      const rec=byWood[wt]||{y:{},ytdNow:0,ytdPrev:0,running:0};
+      const vals=years.map(yy=>rec.y[yy]||0);
+      const total=vals.reduce((a,b)=>a+b,0);
+      const growth=rec.ytdPrev>0?((rec.ytdNow-rec.ytdPrev)/rec.ytdPrev)*100:null;
+      return{key:wt,bn:WOOD[wt].bn,color:WOOD_CHART_COLORS[wt]||"#888",vals,total,growth,
+        ytdNow:rec.ytdNow,ytdPrev:rec.ytdPrev,running:rec.running};
+    }).filter(r=>r.total>0||r.running>0).sort((a,b)=>b.total-a.total);
+    const max=Math.max(1,...rows.map(r=>Math.max(...r.vals)));
+    const yearTotals=years.map((_,i)=>rows.reduce((t,r)=>t+r.vals[i],0));
+    const ytdNow=rows.reduce((t,r)=>t+r.ytdNow,0),ytdPrev=rows.reduce((t,r)=>t+r.ytdPrev,0);
+    const grandGrowth=ytdPrev>0?((ytdNow-ytdPrev)/ytdPrev)*100:null;
+    const runRows=rows.filter(r=>r.running>0).sort((a,b)=>b.running-a.running);
+    const runTotal=rows.reduce((t,r)=>t+r.running,0);
+    return{years,rows,max,yearTotals,grandGrowth,ytdNowAll:ytdNow,runRows,runTotal,curY};
+  },[orders]);
+
   return<div style={{marginBottom:18}}>
-    <div style={{fontWeight:700,fontSize:13,color:"#222",marginBottom:3}}>🪚 কাঠের চাহিদা — সময় অনুযায়ী (CFT)</div>
-    <div style={{fontSize:9,color:"#999",marginBottom:8,lineHeight:1.55}}>কোন কাঠ কত CFT প্রয়োজন হচ্ছে/হয়েছে — একাধিক সময়সীমা একসাথে বেছে তুলনা করুন। "চলমান" মানে এখনো তৈরি চলছে এমন অর্ডারের কাঠের চাহিদা, বাকিগুলো ওই সময়ে অর্ডার হওয়া কাঠের হিসাব।</div>
-    <div style={{display:"flex",gap:6,marginBottom:10,flexWrap:"wrap"}}>
-      {PERIODS.map(p=><button key={p.id} onClick={()=>toggle(p.id)} style={{padding:"6px 11px",borderRadius:20,border:sel.has(p.id)?"none":"1px solid #ddd",background:sel.has(p.id)?"#065f46":"white",color:sel.has(p.id)?"white":"#666",fontSize:10.5,fontWeight:700}}>{p.label}</button>)}
-    </div>
-    <div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"14px 8px"}}>
-      {seriesList.length>0?<MultiSeriesBarChart data={data} series={seriesList}/>:<div style={{fontSize:11,color:"#999",textAlign:"center",padding:20}}>অন্তত একটা সময়সীমা বেছে নিন</div>}
+    <div style={{fontWeight:700,fontSize:13,color:"#222",marginBottom:3}}>🪚 কাঠের ব্যবহার — শেষ ৩ বছর (CFT)</div>
+    <div style={{fontSize:9,color:"#999",marginBottom:8,lineHeight:1.6}}>কোন কাঠ কত CFT লেগেছে, বছরভেদে। কাঠ যেদিন পরিবহন বিভাগ থেকে বেরিয়েছে সেই তারিখ ধরা হয়। শতকরা = চলতি বছরের আজ পর্যন্ত বনাম গত বছরের একই সময় পর্যন্ত।</div>
+    <div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"12px 13px"}}>
+      {st.rows.length===0?<div style={{fontSize:11,color:"#999",textAlign:"center",padding:"18px 0"}}>এখনো কাঠ ব্যবহারের কোনো হিসাব নেই</div>:<>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:6,marginBottom:11}}>
+          {st.years.map((yy,i)=><div key={yy} style={{background:yy===st.curY?"#f0fdf4":"#f8fafc",border:`1px solid ${yy===st.curY?"#bbf7d0":"#eef2f7"}`,borderRadius:8,padding:"7px 6px",textAlign:"center"}}>
+            <div style={{fontSize:9,color:"#94a3b8",fontWeight:700}}>{toBnDigits(yy)}{yy===st.curY?" • চলতি":""}</div>
+            <div style={{fontSize:14,fontWeight:800,color:"#334155",lineHeight:1.35}}>{st.yearTotals[i].toFixed(1)}</div>
+            <div style={{fontSize:8,color:"#b6c2cf",fontWeight:600}}>CFT</div>
+          </div>)}
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:7,fontSize:10,color:"#64748b",background:"#f8fafc",borderRadius:7,padding:"6px 9px",marginBottom:11}}>
+          <span style={{flex:1}}>সব কাঠ মিলিয়ে — গত বছরের একই সময়ের তুলনায়</span>
+          <WoodGrowthBadge pct={st.grandGrowth} hasNow={st.ytdNowAll>0}/>
+        </div>
+        {st.rows.map((r,ri)=><div key={r.key} style={{paddingTop:ri===0?0:9,marginTop:ri===0?0:9,borderTop:ri===0?"none":"1px solid #f1f5f9"}}>
+          <div style={{display:"flex",alignItems:"center",gap:7,marginBottom:6}}>
+            <span style={{width:11,height:11,borderRadius:3,background:r.color,flexShrink:0}}></span>
+            <span style={{fontSize:12.5,fontWeight:700,color:"#333",flex:1,minWidth:0}}>{r.bn}</span>
+            <span style={{fontSize:12,fontWeight:800,color:"#334155",flexShrink:0}}>{r.total.toFixed(1)}<span style={{fontSize:8.5,fontWeight:600,color:"#b6c2cf"}}> CFT</span></span>
+            <WoodGrowthBadge pct={r.growth} hasNow={r.ytdNow>0}/>
+          </div>
+          {st.years.map((yy,i)=>{
+            const v=r.vals[i];
+            const w=st.max>0?(v/st.max)*100:0;
+            return<div key={yy} style={{display:"flex",alignItems:"center",gap:7,marginBottom:i<st.years.length-1?4:0}}>
+              <span style={{fontSize:9.5,color:yy===st.curY?"#475569":"#a8b3c0",fontWeight:700,width:36,flexShrink:0}}>{toBnDigits(yy)}</span>
+              <div style={{flex:1,height:11,background:"#f4f4f5",borderRadius:3,overflow:"hidden",minWidth:0}}>
+                <div style={{width:`${v>0?Math.max(2,w):0}%`,height:"100%",background:r.color,borderRadius:3,opacity:yy===st.curY?1:0.6}}></div>
+              </div>
+              <span style={{fontSize:10,fontWeight:700,color:v>0?"#475569":"#cbd5e1",width:48,textAlign:"right",flexShrink:0}}>{v>0?v.toFixed(1):"—"}</span>
+            </div>
+          })}
+        </div>)}
+        {st.runTotal>0&&<div style={{marginTop:11,paddingTop:9,borderTop:"1px dashed #e2e8f0",fontSize:9.5,color:"#64748b",lineHeight:1.6}}>
+          🔄 <strong style={{color:"#475569"}}>চলমান অর্ডারে এখনো দরকার:</strong> {st.runRows.map(r=>`${r.bn} ${r.running.toFixed(1)}`).join(" · ")} — মোট <strong style={{color:"#475569"}}>{st.runTotal.toFixed(1)} CFT</strong>
+        </div>}
+        <div style={{marginTop:7,fontSize:8.5,color:"#b6c2cf",lineHeight:1.55}}>চলতি বছর এখনো চলছে, তাই এর বার পূর্ণ বছরের চেয়ে ছোট দেখাবে — সেজন্যই প্রবৃদ্ধি "একই সময় পর্যন্ত" ধরে হিসাব করা হয়েছে।</div>
+      </>}
     </div>
   </div>
 }
@@ -2324,23 +2330,31 @@ function App({firebaseConfig,onResetConfig}){
   useEffect(()=>{
     const iv=setInterval(async()=>{
       const t=syncTrackRef.current;
-      if(!t.fresh)setSyncTick(x=>x+1);
+      if(!t.fresh||t.pending)setSyncTick(x=>x+1); // v4.75: লেখা আটকে থাকলেও ঘড়িটা চলবে
       const f=fsRef.current;
       if(!f||!tabActiveRef.current||!navigator.onLine)return;
-      if(t.fresh){recoverRef.current={stage:0};return}
-      const staleFor=Date.now()-(t.staleSince||Date.now());
+      // ── v4.75: এখানেই আসল বাগটা ছিল। আগে লেখা ছিল `if(t.fresh){...return}` — অর্থাৎ
+      // "পড়া" ঠিক থাকলেই মেরামতের চেষ্টা থেমে যেত। কিন্তু Firestore-এ পড়া আর লেখা আলাদা
+      // দুটো সংযোগে চলে; মোবাইল নেটওয়ার্কে পড়ারটা দিব্যি চলতে পারে অথচ লেখারটা আটকে
+      // থাকতে পারে। তখন এই ডিভাইসে পরিবর্তন দেখা যেত (স্থানীয়ভাবে বসানো), কিন্তু সার্ভারে
+      // কখনোই পৌঁছাত না — আর অন্য ডিভাইসে পুরনো তথ্যই থেকে যেত। এখন পড়া আটকে থাকা আর
+      // লেখা আটকে থাকা — দুটোই একইভাবে মেরামতের চেষ্টা চালু করে ──
+      const staleFor=t.fresh?0:Date.now()-(t.staleSince||Date.now());
+      const pendingFor=(t.pending&&t.pendingSince)?Date.now()-t.pendingSince:0;
+      const stuckFor=Math.max(staleFor,pendingFor);
+      if(stuckFor===0){recoverRef.current={stage:0};return}
       const rc=recoverRef.current;
-      if(staleFor>45000&&rc.stage<1){
+      if(stuckFor>45000&&rc.stage<1){
         rc.stage=1;
         try{await f.disableNetwork();await new Promise(r=>setTimeout(r,800));await f.enableNetwork()}catch(e){}
         return;
       }
-      if(staleFor>180000&&rc.stage<2){
+      if(stuckFor>180000&&rc.stage<2){
         rc.stage=2;
         const last=+(localStorage.getItem("rf_recover_reload_at")||0);
         if(Date.now()-last>15*60000){localStorage.setItem("rf_recover_reload_at",String(Date.now()));window.location.reload();return}
       }
-      if(staleFor>360000&&rc.stage<3){
+      if(staleFor>360000&&rc.stage<3){ // ইচ্ছাকৃতভাবে staleFor — অপেক্ষমাণ লেখা থাকলে ক্যাশ মোছা যাবে না
         rc.stage=3;
         const last=+(localStorage.getItem("rf_recover_clear_at")||0);
         if(Date.now()-last>60*60000){
@@ -2464,8 +2478,8 @@ function App({firebaseConfig,onResetConfig}){
   // ── v4.53: এই ডিভাইস সত্যিই সার্ভারের সাথে মেলানো কিনা — প্রতিটা প্রধান লিসেনার নিজেই জানায়
   // (fromCache=false মানে তথ্যটা সার্ভার নিশ্চিত করেছে)। আগে শুধু "ইন্টারনেট আছে কিনা" দেখে
   // "সিঙ্ক সক্রিয়" লেখা দেখাত — আটকে থাকা ডিভাইসও তাই সঠিক দাবি করত ──
-  const syncTrackRef=useRef({lst:{},fresh:false,pending:false,staleSince:Date.now(),lastServerAt:0});
-  const[syncInfo,setSyncInfo]=useState({fresh:false,pending:false,lastServerAt:0,staleSince:Date.now()});
+  const syncTrackRef=useRef({lst:{},fresh:false,pending:false,staleSince:Date.now(),pendingSince:0,lastServerAt:0});
+  const[syncInfo,setSyncInfo]=useState({fresh:false,pending:false,lastServerAt:0,staleSince:Date.now(),pendingSince:0});
   const[syncTick,setSyncTick]=useState(0);
   const pendingOrderNosRef=useRef(new Set());
   // ── v4.53: এই ডেটাবেসে যুক্ত সব ডিভাইস আর তারা কী দেখছে — পার্থক্য এক নজরে ধরা পড়ে ──
@@ -2481,8 +2495,10 @@ function App({firebaseConfig,onResetConfig}){
     const pending=Object.keys(t.lst).some(n=>t.lst[n].pending);
     if(fresh)t.lastServerAt=Date.now();
     if(fresh!==t.fresh){t.fresh=fresh;if(!fresh)t.staleSince=Date.now()}
-    t.pending=pending;
-    setSyncInfo(prev=>(prev.fresh===t.fresh&&prev.pending===t.pending&&(!t.fresh||Date.now()-prev.lastServerAt<30000))?prev:{fresh:t.fresh,pending:t.pending,lastServerAt:t.lastServerAt,staleSince:t.staleSince});
+    // ── v4.75: লেখা কখন থেকে আটকে আছে সেটাও মনে রাখা হয়। আগে শুধু "আটকে আছে কি না"
+    // জানা যেত, "কতক্ষণ ধরে" নয় — ফলে কেউ বুঝতেই পারত না লেখাটা আসলে পৌঁছাচ্ছে না ──
+    if(pending!==t.pending){t.pending=pending;t.pendingSince=pending?Date.now():0}
+    setSyncInfo(prev=>(prev.fresh===t.fresh&&prev.pending===t.pending&&(!t.fresh||Date.now()-prev.lastServerAt<30000))?prev:{fresh:t.fresh,pending:t.pending,lastServerAt:t.lastServerAt,staleSince:t.staleSince,pendingSince:t.pendingSince});
   };
   // v4.61: সার্ভারের সাথে মেলানো নিশ্চিত হলে একবারই: আগের গুড়ির স্থায়ী কোড + ডেলিভারড অর্ডারের ফাঁকা কাঠের মাপ ভরাট
   useEffect(()=>{
@@ -2729,6 +2745,15 @@ function App({firebaseConfig,onResetConfig}){
     if(draft&&draft.no===orderNo)setDraft(serverData);
   };
   const manualRefresh=()=>refreshFromServerRef.current?refreshFromServerRef.current(true):Promise.resolve();
+  // ── v4.75: লেখার সংযোগটা ভেঙে আবার জোড়া দেওয়া। Firestore-এ পড়া আর লেখা আলাদা সংযোগে
+  // চলে; লেখারটা আটকে গেলে এভাবে নতুন করে সংযোগ হলে আটকে থাকা লেখা আবার যাওয়ার সুযোগ পায়।
+  // অপেক্ষমাণ লেখা এতে হারায় না — সেগুলো ডিভাইসেই জমা থাকে, সংযোগ ফিরলেই চলে যায় ──
+  const forceReconnect=async()=>{
+    const f=fsRef.current;
+    if(!f)return false;
+    try{await f.disableNetwork();await new Promise(r=>setTimeout(r,800));await f.enableNetwork();return true}
+    catch(e){return false}
+  };
   const[rackSplits,setRackSplits]=useState([]);
   const[rackBands,setRackBands]=useState([]);
   const fsRef=useRef(null);
@@ -4002,13 +4027,13 @@ function App({firebaseConfig,onResetConfig}){
   if(page==="expense")return<ExpensePage expenses={expenses} onSave={saveExpense} onBack={goBack}/>;
   if(page==="payroll")return<PayrollPage workers={workers} saveWorker={saveWorker} deleteWorker={deleteWorker} payrollWeeks={payrollWeeks} savePayrollWeek={savePayrollWeek} updateAttendance={updateAttendance} addAdvanceEntry={addAdvanceEntry} removeAdvanceEntry={removeAdvanceEntry} onBack={goBack}/>;
   if(page==="plreport")return<PLReportPage orders={orders} expenses={expenses} workers={workers} payrollWeeks={payrollWeeks} woodLots={woodLots} woodSettings={woodSettings} laborSettings={laborSettings} onBack={goBack}/>;
-  return<Home syncInfo={syncInfo} devices={devices} deviceId={deviceIdRef.current} lastPageCrash={lastPageCrash} orders={orders} expenses={expenses} woodLots={woodLots} db={db} woodSettings={woodSettings} laborSettings={laborSettings} workers={workers} payrollWeeks={payrollWeeks} alertSettings={alertSettings} saveAlertSettings={saveAlertSettings} backupFailed={backupFailed} lastSyncAt={lastSyncAt} onManualRefresh={manualRefresh} pendingWrites={pendingWrites} onCheckServerSync={checkServerSync} onAcceptServerVersion={acceptServerVersion} onUpdateOrder={updateOrder} onNew={()=>navigate({page:"form"})} onHist={()=>navigate({page:"history"})} onManage={()=>navigate({page:"manage"})} onExpense={()=>navigate({page:"expense"})} onWoodStock={()=>navigate({page:"woodstock",view:"list"})} onPayroll={()=>navigate({page:"payroll"})} onPLReport={()=>navigate({page:"plreport"})} onView={o=>navigate({page:"preview",orderNo:o.no,slip:0})} onViewDelivery={o=>navigate({page:"preview",orderNo:o.no,slip:5})} online={online} connError={connError} onResetConfig={onResetConfig} folderStatus={folderStatus} connectFolder={connectFolder} highlightNo={highlightNo} onBackupData={backupData} projectId={firebaseConfig?.projectId||""} appId={firebaseConfig?.appId||""} permanentSyncFailures={permanentSyncFailures} autoStuckStatus={autoStuckStatus} dbGaps={dbGaps} setDbGaps={setDbGaps} fsRef={fsRef}/>;
+  return<Home syncInfo={syncInfo} devices={devices} deviceId={deviceIdRef.current} lastPageCrash={lastPageCrash} orders={orders} expenses={expenses} woodLots={woodLots} db={db} woodSettings={woodSettings} laborSettings={laborSettings} workers={workers} payrollWeeks={payrollWeeks} alertSettings={alertSettings} saveAlertSettings={saveAlertSettings} backupFailed={backupFailed} lastSyncAt={lastSyncAt} onManualRefresh={manualRefresh} onForceReconnect={forceReconnect} pendingWrites={pendingWrites} onCheckServerSync={checkServerSync} onAcceptServerVersion={acceptServerVersion} onUpdateOrder={updateOrder} onNew={()=>navigate({page:"form"})} onHist={()=>navigate({page:"history"})} onManage={()=>navigate({page:"manage"})} onExpense={()=>navigate({page:"expense"})} onWoodStock={()=>navigate({page:"woodstock",view:"list"})} onPayroll={()=>navigate({page:"payroll"})} onPLReport={()=>navigate({page:"plreport"})} onView={o=>navigate({page:"preview",orderNo:o.no,slip:0})} onViewDelivery={o=>navigate({page:"preview",orderNo:o.no,slip:5})} online={online} connError={connError} onResetConfig={onResetConfig} folderStatus={folderStatus} connectFolder={connectFolder} highlightNo={highlightNo} onBackupData={backupData} projectId={firebaseConfig?.projectId||""} appId={firebaseConfig?.appId||""} permanentSyncFailures={permanentSyncFailures} autoStuckStatus={autoStuckStatus} dbGaps={dbGaps} setDbGaps={setDbGaps} fsRef={fsRef}/>;
   };
   return<PageErrorBoundary resetKey={navStack.length+"|"+page+"|"+(curScreen.tab||"")} canGoBack={navStack.length>1} onError={onPageCrash}>{renderPage()}</PageErrorBoundary>;
 }
 
 /* ── HOME / DASHBOARD ── */
-function Home({syncInfo,devices,deviceId,lastPageCrash,orders,expenses,woodLots,db,woodSettings,laborSettings,workers,payrollWeeks,alertSettings,saveAlertSettings,backupFailed,lastSyncAt,onManualRefresh,pendingWrites,onCheckServerSync,onAcceptServerVersion,onUpdateOrder,onNew,onHist,onManage,onExpense,onWoodStock,onPayroll,onPLReport,onView,onViewDelivery,online,connError,onResetConfig,folderStatus,connectFolder,highlightNo,onBackupData,projectId,appId,permanentSyncFailures,autoStuckStatus,dbGaps,setDbGaps,fsRef}){
+function Home({syncInfo,devices,deviceId,lastPageCrash,orders,expenses,woodLots,db,woodSettings,laborSettings,workers,payrollWeeks,alertSettings,saveAlertSettings,backupFailed,lastSyncAt,onManualRefresh,onForceReconnect,pendingWrites,onCheckServerSync,onAcceptServerVersion,onUpdateOrder,onNew,onHist,onManage,onExpense,onWoodStock,onPayroll,onPLReport,onView,onViewDelivery,online,connError,onResetConfig,folderStatus,connectFolder,highlightNo,onBackupData,projectId,appId,permanentSyncFailures,autoStuckStatus,dbGaps,setDbGaps,fsRef}){
   const now=new Date();
   const[showAllRunning,setShowAllRunning]=useState(false);
   const[showSystemZone,setShowSystemZone]=useState(false);
@@ -4036,6 +4061,17 @@ function Home({syncInfo,devices,deviceId,lastPageCrash,orders,expenses,woodLots,
   const[resending,setResending]=useState({});
   // ── v4.52: খরচের একক খতিয়ান (বিস্তারিত উপরে buildSpendLedger-এ) ──
   const spendLedger=useMemo(()=>buildSpendLedger(expenses,payrollWeeks,workers,woodLots),[expenses,payrollWeeks,workers,woodLots]);
+  // ── v4.75: ফার্নিচার ডেটাবেস Firestore-এ একটাই নথিতে থাকে, আর একটা নথি সর্বোচ্চ ১ MB
+  // (১,০৪৮,৫৭৬ বাইট) হতে পারে। সীমা ছুঁয়ে গেলে ওই নথিতে আর কোনো লেখা ঢোকে না — নতুন মডেল,
+  // নাম বদল, কাঠের মাপ কিছুই সেভ হয় না, অথচ পর্দায় ঠিকই দেখা যায়। তাই আকারটা এখন চোখের
+  // সামনে রাখা হচ্ছে, যাতে সীমার কাছাকাছি গেলে আগেই ধরা পড়ে ──
+  const dbSize=useMemo(()=>{
+    let bytes=0;
+    try{bytes=new Blob([JSON.stringify(db||{})]).size}catch(e){try{bytes=unescape(encodeURIComponent(JSON.stringify(db||{}))).length}catch(e2){bytes=0}}
+    const cats=dbCats(db||{});
+    const models=cats.reduce((n,[,c])=>n+Object.keys((c&&c.variants)||{}).length,0);
+    return{bytes,cats:cats.length,models,pct:(bytes/1048576)*100};
+  },[db]);
   const salaryLedger=useMemo(()=>spendLedger.filter(e=>e.kind==="salary"),[spendLedger]);
   const cftDoneList=useMemo(()=>{
     const out=[];
@@ -4043,6 +4079,9 @@ function Home({syncInfo,devices,deviceId,lastPageCrash,orders,expenses,woodLots,
     return out;
   },[orders]);
   const[profitOpenCat,setProfitOpenCat]=useState(null);
+  const[reconnecting,setReconnecting]=useState(false);
+  // কত মিনিট ধরে লেখা আটকে আছে — ১ মিনিটের কম হলে ০ (তখন এটা স্বাভাবিক, সতর্ক করার মতো কিছু না)
+  const writeStuckMin=(syncInfo&&syncInfo.pending&&syncInfo.pendingSince&&Date.now()-syncInfo.pendingSince>60000)?Math.max(1,Math.floor((Date.now()-syncInfo.pendingSince)/60000)):0;
   const stats=useMemo(()=>{
     // Running orders (not fully paid = not delivered typically, but we track by payment completion as proxy + delivery date)
     // ── একটা অর্ডারের সব পিসের সব বিভাগ ১০০% শেষ কিনা — এটা "চলমান" থেকে বাদ দিতে
@@ -4290,8 +4329,7 @@ function Home({syncInfo,devices,deviceId,lastPageCrash,orders,expenses,woodLots,
 
     // ── ("[মাস]-এর প্রবণতা") এখন আলাদা, নেভিগেট-করা যায় এমন useMemo-তে (নিচে) সরানো হয়েছে ──
 
-    // Wood stock pie (uncut/available logs by wood type)
-    const WOOD_COLORS={S:CHART_SOFT_ORANGE,M:CHART_SOFT_RED,A:CHART_SOFT_GREEN,K:CHART_SOFT_TEAL,E:CHART_SOFT_PURPLE};
+    // Wood stock pie (uncut/available logs by wood type) — রঙ উপরের WOOD_CHART_COLORS থেকে
     const stockByType={};
     (woodLots||[]).forEach(lot=>{
       const availCft=(lot.logs||[]).filter(l=>!l.cut).reduce((s,l)=>s+l.cft,0);
@@ -4409,7 +4447,7 @@ function Home({syncInfo,devices,deviceId,lastPageCrash,orders,expenses,woodLots,
       });
     }
 
-    const stockPie=Object.entries(stockByType).map(([wt,val])=>({label:WOOD[wt].bn,value:val,color:WOOD_COLORS[wt]||"#888"}));
+    const stockPie=Object.entries(stockByType).map(([wt,val])=>({label:WOOD[wt].bn,value:val,color:WOOD_CHART_COLORS[wt]||"#888"}));
 
     // ── পুনরাবৃত্ত গ্রাহক: ফোন নম্বর ধরে কতজন একবারের বেশি অর্ডার করেছেন ──
     const byPhone={};
@@ -4704,6 +4742,13 @@ function Home({syncInfo,devices,deviceId,lastPageCrash,orders,expenses,woodLots,
       <div style={{fontSize:10,opacity:.8,marginTop:2}}>Rupali Furniture · Sirajganj | সাদমান সাকিব</div>
     </div>
     <div style={{background:"white",borderRadius:"20px 20px 0 0",minHeight:"calc(100vh - 160px)",padding:"18px 14px",maxWidth:720,margin:"0 auto"}}>
+      {/* ── v4.75: এই ডিভাইসে করা পরিবর্তন সার্ভারে পৌঁছায়নি — আগে এটা শান্ত নীল রঙে
+           "সার্ভারে যাচ্ছে…" বলে চুপচাপ পড়ে থাকত, তাই কেউ টেরই পেত না ── */}
+      {writeStuckMin>0&&<div style={{background:"#fef2f2",border:"1.5px solid #fca5a5",borderRadius:11,padding:"12px 13px",marginBottom:14}}>
+        <div style={{fontSize:13,fontWeight:800,color:"#991b1b",marginBottom:4}}>⚠️ এই ডিভাইসের পরিবর্তন সার্ভারে পৌঁছায়নি ({toBnDigits(writeStuckMin)} মিনিট ধরে)</div>
+        <div style={{fontSize:10.5,color:"#7f1d1d",lineHeight:1.6,marginBottom:9}}>এই ডিভাইসে যা দেখছেন তা এখনো <strong>শুধু এখানেই</strong> আছে — অন্য ডিভাইসে (কম্পিউটার/ফোন) পুরনো তথ্যই দেখাচ্ছে। পরিবর্তনগুলো হারায়নি, এই ডিভাইসে জমা আছে; সংযোগ ঠিক হলেই চলে যাবে। ততক্ষণ এই ব্রাউজারের ডেটা মুছবেন না।</div>
+        <button onClick={async()=>{setReconnecting(true);await onForceReconnect?.();setTimeout(()=>setReconnecting(false),2500)}} disabled={reconnecting} style={{width:"100%",background:reconnecting?"#fca5a5":"#991b1b",color:"white",border:"none",borderRadius:8,padding:"10px",fontSize:12,fontWeight:700}}>{reconnecting?"চেষ্টা চলছে…":"🔄 এখনই আবার পাঠানোর চেষ্টা করুন"}</button>
+      </div>}
       {(()=>{
         // ── ৫-সেকেন্ডের নিয়ম: এক নজরে "সব ঠিক আছে কি না" — ট্যাপ করলে সংশ্লিষ্ট অংশে চলে যাবে ──
         const issues=[];
@@ -4714,6 +4759,8 @@ function Home({syncInfo,devices,deviceId,lastPageCrash,orders,expenses,woodLots,
         if(stats.readyNotCollected&&stats.readyNotCollected.length)issues.push({t:`${stats.readyNotCollected.length}টা পণ্য পড়ে আছে`,z:"z-urgent"});
         if(stats.emptyWoodModels&&stats.emptyWoodModels.length)issues.push({t:`${stats.emptyWoodModels.length}টা মডেলে কাঠের মাপ নেই`,z:"z-wood"});
         if(permanentSyncFailures&&permanentSyncFailures.length)issues.push({t:`${permanentSyncFailures.length}টা অর্ডার সার্ভারে পাঠাতে সমস্যা হচ্ছে`,z:"z-sys"});
+        if(writeStuckMin>0)issues.push({t:`পরিবর্তন সার্ভারে আটকে আছে (${toBnDigits(writeStuckMin)} মিনিট)`,z:"z-sys"});
+        if(dbSize.pct>=80)issues.push({t:`ডেটাবেস নথি প্রায় ভরে গেছে (${toBnDigits(dbSize.pct.toFixed(0))}%)`,z:"z-sys"});
         const ok=issues.length===0;
         return<div style={{background:ok?"#f0fdf4":"#fef2f2",border:`1.5px solid ${ok?"#86efac":"#fca5a5"}`,borderRadius:11,padding:"11px 13px",marginBottom:14}}>
           <div style={{fontSize:13,fontWeight:800,color:ok?"#166534":"#991b1b",marginBottom:ok?0:6}}>{ok?"✅ সব ঠিক আছে":`⚠️ ${issues.length}টা বিষয়ে নজর দরকার`}</div>
@@ -5171,7 +5218,7 @@ function Home({syncInfo,devices,deviceId,lastPageCrash,orders,expenses,woodLots,
       </div>}
 
       <div id="z-wood" style={{scrollMarginTop:56,fontSize:11,fontWeight:800,color:"#065f46",letterSpacing:"0.3px",margin:"18px 0 8px",paddingBottom:4,borderBottom:"2px solid #065f4622"}}>🪵 কাঠ ও মজুদ</div>
-      <WoodDemandChart orders={orders}/>
+      <WoodUsageChart orders={orders}/>
       {/* Pie chart - wood stock by type */}
       {stats.stockPie&&stats.stockPie.length>0&&<div style={{marginBottom:18}}>
         <div style={{fontWeight:700,fontSize:13,color:"#222",marginBottom:8}}>🪵 কাঠের মজুদ — ধরন অনুযায়ী</div>
@@ -5320,6 +5367,18 @@ function Home({syncInfo,devices,deviceId,lastPageCrash,orders,expenses,woodLots,
         <span style={{fontSize:14}}>{showSystemZone?"▲":"▼"}</span>
       </div>
       {showSystemZone&&<>
+      {/* ── v4.75: ফার্নিচার ডেটাবেসের আকার বনাম Firestore-এর ১ MB সীমা ── */}
+      <div style={{marginTop:16,background:dbSize.pct>=80?"#fef2f2":"white",border:`1px solid ${dbSize.pct>=80?"#fca5a5":"#eee"}`,borderRadius:10,padding:"12px 14px"}}>
+        <div style={{fontSize:12,fontWeight:700,color:dbSize.pct>=80?"#991b1b":"#444",marginBottom:3}}>🗄️ ফার্নিচার ডেটাবেসের আকার</div>
+        <div style={{fontSize:9.5,color:"#888",marginBottom:8,lineHeight:1.55}}>পুরো ফার্নিচার তালিকা Firestore-এ একটাই নথিতে থাকে, আর একটা নথি সর্বোচ্চ ১ MB হতে পারে। সীমার কাছে গেলে নতুন মডেল বা কাঠের মাপ আর সেভ হবে না — পর্দায় দেখা গেলেও সার্ভারে যাবে না। প্রতিটা ডিভাইসে এই সংখ্যা একই হওয়ার কথা; আলাদা হলে বুঝবেন কোনো ডিভাইসের তালিকা অসম্পূর্ণ।</div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:6,marginBottom:8}}>
+          <div style={{background:"#f8fafc",borderRadius:8,padding:"7px 6px",textAlign:"center"}}><div style={{fontSize:9,color:"#94a3b8",fontWeight:700}}>আকার</div><div style={{fontSize:14,fontWeight:800,color:dbSize.pct>=80?"#991b1b":"#334155"}}>{(dbSize.bytes/1024).toFixed(0)}<span style={{fontSize:9,color:"#b6c2cf"}}> KB</span></div></div>
+          <div style={{background:"#f8fafc",borderRadius:8,padding:"7px 6px",textAlign:"center"}}><div style={{fontSize:9,color:"#94a3b8",fontWeight:700}}>ক্যাটাগরি</div><div style={{fontSize:14,fontWeight:800,color:"#334155"}}>{toBnDigits(dbSize.cats)}</div></div>
+          <div style={{background:"#f8fafc",borderRadius:8,padding:"7px 6px",textAlign:"center"}}><div style={{fontSize:9,color:"#94a3b8",fontWeight:700}}>মডেল</div><div style={{fontSize:14,fontWeight:800,color:"#334155"}}>{toBnDigits(dbSize.models)}</div></div>
+        </div>
+        <div style={{height:9,background:"#f1f5f9",borderRadius:5,overflow:"hidden"}}><div style={{width:`${Math.min(100,dbSize.pct)}%`,height:"100%",background:dbSize.pct>=80?"#dc2626":dbSize.pct>=60?"#f59e0b":"#16a34a",borderRadius:5}}></div></div>
+        <div style={{fontSize:9.5,color:dbSize.pct>=80?"#991b1b":"#888",marginTop:5,fontWeight:dbSize.pct>=80?700:400}}>১ MB সীমার <strong>{toBnDigits(dbSize.pct.toFixed(1))}%</strong> ব্যবহৃত{dbSize.pct>=80?" — সীমার কাছাকাছি, জানান, তালিকাটা আলাদা নথিতে ভাগ করে দিতে হবে":""}</div>
+      </div>
       {dbGaps&&dbGaps.missingFromDb.length>0&&<div style={{marginTop:16,background:"#fffbeb",border:"1.5px solid #fde68a",borderRadius:10,padding:"12px 14px"}}>
         <div style={{fontSize:12,fontWeight:700,color:"#92400e",marginBottom:6}}>⚠️ {dbGaps.missingFromDb.length}টা মডেল অর্ডারে ব্যবহৃত, কিন্তু ডেটাবেসে নেই</div>
         <div style={{fontSize:9.5,color:"#78350f",marginBottom:8,lineHeight:1.5}}>মডেল ও কাঠের মাপ সব ডিভাইসে নিজে থেকেই মিলে যায় — কিছু চাপার দরকার নেই। কিন্তু নিচের এই মডেলগুলো কোনো ডিভাইসেই ডেটাবেসে নেই, তাই ⚙️ ডেটাবেসে গিয়ে নিজে যোগ করে কাঠের মাপ বসাতে হবে।</div>
@@ -7972,23 +8031,6 @@ function Preview({syncInfo,online,order,onBack,slip,setSlip,onUpdate,onAddPaymen
     onUpdate({...order,printLogs:logs});
     setTimeout(()=>window.print(),50);
   };
-  // ── v4.69: কার্পেন্টার + ট্রান্সপোর্ট কপি একসাথে এক A4-তে প্রিন্ট — printCombo সত্য
-  // হলে স্বাভাবিক ট্যাব-ভিত্তিক স্লিপের বদলে পাশাপাশি combo লেআউট দেখানো হয়, প্রিন্ট
-  // শেষে (afterprint) আবার স্বাভাবিক ভিউতে ফিরে আসে ──
-  const[printCombo,setPrintCombo]=useState(false);
-  useEffect(()=>{
-    const h=()=>setPrintCombo(false);
-    window.addEventListener("afterprint",h);
-    return()=>window.removeEventListener("afterprint",h);
-  },[]);
-  const printCombined=()=>{
-    setPrintCombo(true);
-    const logs={...(order.printLogs||{})};
-    logs.s4t5=[...(logs.s4t5||[]),todayStr()];
-    onUpdate({...order,printLogs:logs});
-    setTimeout(()=>window.print(),80);
-    setTimeout(()=>setPrintCombo(false),8000); // afterprint না এলেও নিরাপদ ফলব্যাক
-  };
   const cancelOrder=()=>{
     if(window.confirm("আপনি কি নিশ্চিত এই অর্ডারটি বাতিল করতে চান? এই কাজটি পূর্বাবস্থায় ফেরানো যাবে না।")){
       onUpdate({...order,cancelled:true,cancelledAt:new Date().toISOString()});
@@ -8007,7 +8049,8 @@ function Preview({syncInfo,online,order,onBack,slip,setSlip,onUpdate,onAddPaymen
     }
   };
 
-  const tabs=[{id:0,l:"গ্রাহক",c:RED},{id:1,l:"অর্ডার বুক",c:"#1d4ed8"},{id:2,l:"ট্র্যাকিং",c:"#6d28d9"},{id:3,l:"কার্পেন্টার",c:"#92400e"},{id:4,l:"ট্রান্সপোর্ট",c:"#065f46"},{id:5,l:"ডেলিভারি",c:"#0f766e",locked:false}];
+  // ── v4.72: কার্পেন্টার আর ট্রান্সপোর্ট এখন একটাই ট্যাব (এক পাতায় দুই কপি) ──
+  const tabs=[{id:0,l:"গ্রাহক",c:RED},{id:1,l:"অর্ডার বুক",c:"#1d4ed8"},{id:2,l:"ট্র্যাকিং",c:"#6d28d9"},{id:3,l:"কার্পেন্টার + ট্রান্সপোর্ট",c:"#334155"},{id:5,l:"ডেলিভারি",c:"#0f766e",locked:false}];
 
   return<div className="print-bg" style={{minHeight:"100vh",background:"#eee"}}>
     {!(online!==false&&syncInfo&&syncInfo.fresh)&&<div className="no-print" style={{background:"#fef2f2",color:"#991b1b",fontSize:11.5,fontWeight:700,padding:"8px 14px",lineHeight:1.5,borderBottom:"1px solid #fecaca"}}>⚠️ এই ডিভাইস এখনো সার্ভারের সাথে মেলানো হয়নি — এই অর্ডারের পেমেন্ট, বাকি বা ডেলিভারি চূড়ান্ত ধরে নেবেন না।</div>}
@@ -8038,19 +8081,14 @@ function Preview({syncInfo,online,order,onBack,slip,setSlip,onUpdate,onAddPaymen
     <div className="no-print" style={{background:"white",display:"flex",overflowX:"auto",borderBottom:"1px solid #eee"}}>
       {tabs.map(t=><button key={t.id} onClick={()=>!t.locked&&setSlip(t.id)} style={{flexShrink:0,padding:"10px 11px",border:"none",background:"none",fontSize:11,fontWeight:slip===t.id?700:400,color:t.locked?"#ccc":slip===t.id?t.c:"#888",borderBottom:slip===t.id?`3px solid ${t.c}`:"3px solid transparent",cursor:t.locked?"not-allowed":"pointer"}}>{t.l}</button>)}
     </div>
-    {(slip===3||slip===4)&&<div className="no-print" style={{background:"#fafafa",padding:"7px 14px",borderBottom:"1px solid #eee",display:"flex",justifyContent:"flex-end"}}>
-      <button onClick={printCombined} style={{background:"#334155",color:"white",border:"none",borderRadius:7,padding:"6px 12px",fontSize:10.5,fontWeight:700,display:"flex",alignItems:"center",gap:5}}>🖨️✂️ কার্পেন্টার + ট্রান্সপোর্ট একসাথে (এক পাতায়, কেটে ভাগ করুন)</button>
-    </div>}
-    <div className="print-wrap" style={{padding:"12px",maxWidth:printCombo?960:640,margin:"0 auto"}}>
+    <div className="print-wrap" style={{padding:"12px",maxWidth:640,margin:"0 auto"}}>
       <div className="slip-card" style={{background:"white",borderRadius:10,overflow:"hidden",boxShadow:"0 2px 10px rgba(0,0,0,.1)"}}>
-        {printCombo?<S4T5Combo order={order} woodSettings={woodSettings} rackSplits={rackSplits}/>:<>
         {slip===0&&<S1 order={order} onPrint={logPrint}/>}
         {slip===1&&<S2 order={order} onPrint={logPrint} db={db} saveDb={saveDb} galleries={galleries} onUpdateOrder={onUpdate} woodSettings={woodSettings} laborSettings={laborSettings}/>}
         {slip===2&&<S3 order={order} onPrint={logPrint} onUpdateOrder={onUpdate} workers={workers}/>}
-        {slip===3&&<S4 order={order} onPrint={logPrint} db={db} saveDb={saveDb} onUpdateOrder={onUpdate}/>}
-        {slip===4&&<S5 order={order} onPrint={logPrint} woodSettings={woodSettings} rackSplits={rackSplits}/>}
+        {/* slip 4 ছিল আগের আলাদা ট্রান্সপোর্ট ট্যাব — পুরনো লিঙ্ক/হিস্ট্রি থেকে এলেও যেন ফাঁকা না দেখায় */}
+        {(slip===3||slip===4)&&<S4T5 order={order} onPrint={logPrint} db={db} saveDb={saveDb} onUpdateOrder={onUpdate} woodSettings={woodSettings} rackSplits={rackSplits}/>}
         {slip===5&&<S6 order={{...order,deliveryImgs}} onPrint={logPrint} onUpdateOrder={onUpdate} onSetDelivered={onSetDelivered} onPhotoChange={handleDeliveryImg} onRemovePhoto={removeDeliveryImg} allOrders={allOrders} printLocked={!isFullyPaid}/>}
-        </>}
       </div>
     </div>
   </div>
