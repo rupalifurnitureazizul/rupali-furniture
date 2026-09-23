@@ -169,7 +169,7 @@ function compressImage(file,maxDim=1000,quality=0.70,maxBytes=45000){
 /* ── FULL-RESOLUTION LOCAL FOLDER STORAGE (desktop Chrome/Edge/Brave only) ──
    Original, uncompressed images are saved as real files in a folder you choose
    on your computer. Only a small compressed thumbnail syncs to the cloud/mobile. */
-const BUILD_TAG="5.12";
+const BUILD_TAG="5.15";
 const FS_SUPPORTED=typeof window!=="undefined"&&"showDirectoryPicker" in window;
 function idbOpen(){
   return new Promise((resolve,reject)=>{
@@ -6260,6 +6260,44 @@ function WoodStockPage({woodLots,saveWoodLots,addLotPayment,woodSettings,saveWoo
   const cleanPrefix=(v)=>String(v||"").replace(/[\s\-]+/g,"").slice(0,8);
   const[newLog,setNewLog]=useState({lengthFt:"",diameterIn:""});
   const[newPay,setNewPay]=useState({date:today,amount:""});
+  // ── v5.15: লটের তথ্য সম্পাদনা (কাঠের ধরন, বিক্রেতা, ফোন, ঠিকানা, কোডের অক্ষর) ──
+  const[editLot,setEditLot]=useState(null);   // null = সম্পাদনা বন্ধ, নইলে খসড়া
+  const[editSupSel,setEditSupSel]=useState("");
+  const openLotEdit=()=>{
+    if(!selLot)return;
+    const nm=String(selLot.supplier||"").trim();
+    setEditSupSel(supplierList.some(x=>x.name===nm)?nm:(nm?"__new":""));
+    setEditLot({woodType:selLot.woodType,date:selLot.date,supplier:selLot.supplier||"",
+      supplierPhone:selLot.supplierPhone||"",supplierAddress:selLot.supplierAddress||"",
+      codePrefix:String(selLot.codePrefix||"").trim()});
+  };
+  const saveLotEdit=()=>{
+    if(!editLot||!String(editLot.supplier||"").trim())return;
+    updateLot({...selLot,woodType:editLot.woodType,date:editLot.date,
+      supplier:String(editLot.supplier).trim(),supplierPhone:editLot.supplierPhone,
+      supplierAddress:editLot.supplierAddress,codePrefix:cleanPrefix(editLot.codePrefix)});
+    setEditLot(null);
+  };
+  // ── v5.15: গুড়ির মাপ সংশোধন। কোড আর id অপরিবর্তিত থাকে — শুধু দৈর্ঘ্য, ব্যাস আর
+  // তা থেকে হিসাব করা CFT বদলায় ──
+  const[editingLogId,setEditingLogId]=useState(null);
+  const[logDraft,setLogDraft]=useState({lengthFt:"",diameterIn:""});
+  const startLogEdit=(log)=>{
+    setSellingLogId(null);
+    setEditingLogId(log.id);
+    setLogDraft({lengthFt:String(log.lengthFt||""),diameterIn:String(log.diameterIn||"")});
+  };
+  const saveLogEdit=(logId)=>{
+    const L=parseFloat(logDraft.lengthFt),D=parseFloat(logDraft.diameterIn);
+    if(!L||!D)return;
+    const cur=(selLot.logs||[]).find(l=>l.id===logId);
+    if(!cur)return;
+    const nextCft=cftLog(L,D);
+    // আগেই কাটা/বিক্রি হয়ে থাকলে এই বদলে কাঠের হিসাবও নড়ে — তাই আগে জানিয়ে দেওয়া
+    if((cur.cut||cur.sold)&&!window.confirm(`"${cur.code||"এই গুড়ি"}" ইতিমধ্যে ${cur.sold?"বিক্রি":"কাটা"} হয়ে গেছে।\n\nমাপ বদলালে কাঠের হিসাবও বদলে যাবে:\n${cur.cft.toFixed(3)} CFT → ${nextCft.toFixed(3)} CFT\n\nচালিয়ে যেতে চান?`))return;
+    updateLot({...selLot,logs:selLot.logs.map(l=>l.id===logId?{...l,lengthFt:L,diameterIn:D,cft:nextCft}:l)});
+    setEditingLogId(null);
+  };
   const[sellingLogId,setSellingLogId]=useState(null);
   const[sellPrice,setSellPrice]=useState("");
   const[newMilling,setNewMilling]=useState({date:today,cft:"",billAmount:"",note:""});
@@ -6902,8 +6940,38 @@ function WoodStockPage({woodLots,saveWoodLots,addLotPayment,woodSettings,saveWoo
           <IR l="ঠিকানা" v={selLot.supplierAddress}/>
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,marginTop:4}}>
             <IR l="কোডের অক্ষর" v={String(selLot.codePrefix||"").trim()||"(নেই — শুধু নম্বর)"}/>
-            <button onClick={()=>{const v=window.prompt("এই লটের নতুন গুড়ির কোডের শুরুর অক্ষর (আগের গুড়ির কোড বদলাবে না):",selLot.codePrefix||"");if(v===null)return;updateLot({...selLot,codePrefix:cleanPrefix(v)})}} style={{background:"#f3f4f6",border:"none",borderRadius:6,padding:"4px 10px",fontSize:10,color:"#374151",flexShrink:0}}>✏️ বদলান</button>
+            {/* ── v5.15: আগে এই বাটনটা শুধু কোডের অক্ষর বদলাতে পারত। এখন লটের সব তথ্য ── */}
+            <button onClick={openLotEdit} style={{background:"#f3f4f6",border:"none",borderRadius:6,padding:"4px 10px",fontSize:10,color:"#374151",flexShrink:0}}>✏️ বদলান</button>
           </div>
+          {editLot&&<div style={{marginTop:10,background:"#f0fdf4",border:"1px solid #bbf7d0",borderRadius:10,padding:"12px 12px 14px"}}>
+            <div style={{fontSize:12,fontWeight:800,color:"#065f46",marginBottom:9}}>লটের তথ্য বদলান</div>
+            {lbl("কাঠের ধরন")}
+            <select value={editLot.woodType} onChange={e=>setEditLot({...editLot,woodType:e.target.value})} style={{...inp,marginBottom:10}}>
+              {Object.entries(WOOD).map(([k,v])=><option key={k} value={k}>{v.bn} ({v.en})</option>)}
+            </select>
+            {lbl("ক্রয়ের তারিখ")}<div style={{marginBottom:10}}><DateInput value={editLot.date} onChange={v=>setEditLot({...editLot,date:v})} accent="#065f46"/></div>
+            {lbl("বিক্রেতা / সাপ্লায়ার *")}
+            {/* ── একজনকে বেছে নিলে তার ফোন, ঠিকানা আর কোডের অক্ষর নিজে থেকেই বসে যায় ── */}
+            <select value={editSupSel} onChange={e=>{const v=e.target.value;setEditSupSel(v);
+              if(v==="__new"||v===""){setEditLot({...editLot,supplier:"",supplierPhone:"",supplierAddress:""});return}
+              const sp=supplierList.find(x=>x.name===v);
+              if(sp)setEditLot({...editLot,supplier:sp.name,supplierPhone:sp.phone,supplierAddress:sp.address,codePrefix:sp.prefix||editLot.codePrefix});
+            }} style={{...inp,marginBottom:10}}>
+              <option value="">-- বিক্রেতা বেছে নিন --</option>
+              {supplierList.map(sp=><option key={sp.name} value={sp.name}>{sp.name}</option>)}
+              <option value="__new">+ নতুন বিক্রেতা</option>
+            </select>
+            {editSupSel==="__new"&&<>{lbl("নতুন বিক্রেতার নাম *")}<input value={editLot.supplier} onChange={e=>setEditLot({...editLot,supplier:e.target.value})} style={{...inp,marginBottom:10}}/></>}
+            {lbl("বিক্রেতার ফোন")}<input value={editLot.supplierPhone} onChange={e=>setEditLot({...editLot,supplierPhone:e.target.value})} style={{...inp,marginBottom:10}}/>
+            {lbl("বিক্রেতার ঠিকানা")}<input value={editLot.supplierAddress} onChange={e=>setEditLot({...editLot,supplierAddress:e.target.value})} style={{...inp,marginBottom:10}}/>
+            {lbl("গুড়ির কোডের শুরুর অক্ষর")}
+            <input value={editLot.codePrefix||""} onChange={e=>setEditLot({...editLot,codePrefix:cleanPrefix(e.target.value)})} placeholder="যেমন: RH" style={{...inp,marginBottom:4}}/>
+            <div style={{fontSize:10,color:"#065f46",lineHeight:1.55,marginBottom:12}}>আগে যোগ করা গুড়ির কোড বদলাবে না — এরপর যোগ করা গুড়িগুলো এই অক্ষর পাবে।</div>
+            <div style={{display:"flex",gap:8}}>
+              <button onClick={()=>setEditLot(null)} style={{flex:1,background:"#f3f4f6",border:"none",borderRadius:9,padding:"11px",fontSize:12.5}}>বাতিল</button>
+              <button onClick={saveLotEdit} disabled={!String(editLot.supplier||"").trim()} style={{flex:2,background:String(editLot.supplier||"").trim()?"#065f46":"#ccc",color:"white",border:"none",borderRadius:9,padding:"11px",fontSize:12.5,fontWeight:700}}>সংরক্ষণ করুন</button>
+            </div>
+          </div>}
           <button onClick={()=>deleteLot(selLot.id)} style={{background:"#fee2e2",border:"none",borderRadius:7,padding:"6px 12px",color:RED,fontSize:11,fontWeight:600,marginTop:8}}>🗑 লট মুছে ফেলুন</button>
         </div>
 
@@ -6926,9 +6994,23 @@ function WoodStockPage({woodLots,saveWoodLots,addLotPayment,woodSettings,saveWoo
                   {!log.sold&&<button onClick={()=>toggleCut(log.id,label,log.cut)} title="কাটা হয়েছে" style={{width:26,height:26,borderRadius:"50%",border:`2px solid ${log.cut?"#16a34a":"#ccc"}`,background:log.cut?"#16a34a":"white",color:"white",fontSize:13,flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center"}}>{log.cut?"✓":""}</button>}
                   {!log.cut&&!log.sold&&<button onClick={()=>startSell(log.id)} style={{background:"#f5f3ff",border:"1px solid #ddd6fe",color:"#7c3aed",borderRadius:6,padding:"5px 9px",fontSize:10,fontWeight:700}}>💰 বিক্রি</button>}
                   {log.sold&&<button onClick={()=>unsellLog(log.id,label)} style={{background:"#fef3c7",border:"1px solid #fde68a",color:"#92400e",borderRadius:6,padding:"5px 9px",fontSize:10,fontWeight:700}}>বিক্রি বাতিল</button>}
+                  {/* v5.15: ভুল মাপ বসে গেলে এখান থেকে ঠিক করা যায় */}
+                  <button onClick={()=>startLogEdit(log)} title="মাপ ঠিক করুন" style={{background:"#eff6ff",border:"1px solid #bfdbfe",color:"#1d4ed8",borderRadius:6,padding:"5px 9px",fontSize:11}}>✏️</button>
                   <button onClick={()=>removeLog(log.id,label)} style={{background:"#fee2e2",border:"none",borderRadius:6,padding:"5px 9px",color:RED,fontSize:11}}>✕</button>
                 </div>
               </div>
+              {editingLogId===log.id&&<div style={{marginTop:8,background:"#eff6ff",border:"1px solid #bfdbfe",borderRadius:8,padding:9}}>
+                <div style={{fontSize:10.5,color:"#1e40af",fontWeight:700,marginBottom:7}}>{lcode} — মাপ ঠিক করুন</div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
+                  <div>{lbl("দৈর্ঘ্য (ফুট)")}<input type="number" step="0.5" autoFocus value={logDraft.lengthFt} onChange={e=>setLogDraft({...logDraft,lengthFt:e.target.value})} style={inp}/></div>
+                  <div>{lbl("ব্যাস (ইঞ্চি)")}<input type="number" step="0.5" value={logDraft.diameterIn} onChange={e=>setLogDraft({...logDraft,diameterIn:e.target.value})} style={inp}/></div>
+                </div>
+                {logDraft.lengthFt&&logDraft.diameterIn&&<div style={{fontSize:11.5,color:"#1e40af",fontWeight:700,marginBottom:8}}>{log.cft.toFixed(3)} CFT → {cftLog(parseFloat(logDraft.lengthFt)||0,parseFloat(logDraft.diameterIn)||0).toFixed(3)} CFT</div>}
+                <div style={{display:"flex",gap:6}}>
+                  <button onClick={()=>setEditingLogId(null)} style={{flex:1,background:"#f3f4f6",border:"none",borderRadius:7,padding:"8px",fontSize:12}}>বাতিল</button>
+                  <button onClick={()=>saveLogEdit(log.id)} disabled={!logDraft.lengthFt||!logDraft.diameterIn} style={{flex:2,background:(logDraft.lengthFt&&logDraft.diameterIn)?"#1d4ed8":"#ccc",color:"white",border:"none",borderRadius:7,padding:"8px",fontSize:12,fontWeight:700}}>সংরক্ষণ করুন</button>
+                </div>
+              </div>}
               {sellingLogId===log.id&&<div style={{marginTop:8,background:"#f5f3ff",borderRadius:8,padding:9,display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
                 <input type="number" autoFocus value={sellPrice} onChange={e=>setSellPrice(e.target.value)} placeholder="বিক্রয় মূল্য (৳)" style={{flex:"1 1 140px",border:"1px solid #ddd6fe",borderRadius:7,padding:"7px 9px",fontSize:12,outline:"none"}}/>
                 <button onClick={()=>confirmSell(log.id)} style={{background:"#7c3aed",color:"white",border:"none",borderRadius:7,padding:"7px 12px",fontSize:12,fontWeight:700}}>নিশ্চিত করুন</button>
