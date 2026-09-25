@@ -175,7 +175,7 @@ function compressImage(file,maxDim=1000,quality=0.70,maxBytes=45000){
 /* ── FULL-RESOLUTION LOCAL FOLDER STORAGE (desktop Chrome/Edge/Brave only) ──
    Original, uncompressed images are saved as real files in a folder you choose
    on your computer. Only a small compressed thumbnail syncs to the cloud/mobile. */
-const BUILD_TAG="5.43";
+const BUILD_TAG="5.47";
 const FS_SUPPORTED=typeof window!=="undefined"&&"showDirectoryPicker" in window;
 function idbOpen(){
   return new Promise((resolve,reject)=>{
@@ -2199,11 +2199,14 @@ function SpendPeriodChart({icon,title,note,entries,segs,segOf,renderDetail,accen
   const completeAll=firstNZ>=0?bars.slice(firstNZ,bars.length-1):[];
   // ── v4.69: avgWindow দেওয়া থাকলে শুধু শেষ ওই কয়টা পূর্ণ সময়কাল দিয়ে গড় — নাহলে আগের
   // মতোই যত পূর্ণ সময়কাল পাওয়া যায় সব কটা দিয়ে ──
-  const complete=avgWindow?completeAll.slice(-avgWindow):completeAll;
+  // v5.47: নিয়মের জানালা থাকলে ঠিক শেষ ওই কয়টা পূর্ণ সময়কাল — কোনোটায় হিসাব না থাকলেও (৳০ ধরে) —
+  // মোট ÷ সেই সংখ্যা। জানালার সবগুলোই ফাঁকা হলে গড় দেখানো হয় না।
+  const winBars=avgWindow?bars.slice(Math.max(0,bars.length-1-avgWindow),bars.length-1):[];
+  const complete=avgWindow?(winBars.some(b=>b.total>0)?winBars:[]):completeAll;
   const sumComplete=complete.reduce((t,b)=>t+b.total,0);
   const avg=complete.length?sumComplete/complete.length:0;
   // নিয়মের জানালায় পড়েছিল, কিন্তু তখনো কোনো হিসাব শুরুই হয়নি — তাই গড়ে ধরা হয়নি
-  const avgSkipped=avgWindow?bars.slice(Math.max(0,bars.length-1-avgWindow),bars.length-1).filter(b=>completeAll.indexOf(b)<0):[];
+  const avgSkipped=avgWindow?complete.filter(b=>!(b.total>0)):[]; // জানালায় আছে, কিন্তু কোনো হিসাব নেই (৳০ ধরা)
   const chg=last&&before&&before.total>0?((last.total-before.total)/before.total)*100:null;
   const selKey=sel&&bars.some(b=>b.key===sel)?sel:(cur?cur.key:null);
   const selBar=bars.find(b=>b.key===selKey);
@@ -2241,7 +2244,7 @@ function SpendPeriodChart({icon,title,note,entries,segs,segOf,renderDetail,accen
         </>}
         <div style={{fontSize:9,color:"#4f46e5",marginTop:6,lineHeight:1.55}}>
           {cur&&<div>• চলতি {unit} ({periodLongLabel(mode,cur.key)}) এখনো শেষ হয়নি, তাই গড়ে ধরা হয়নি।</div>}
-          {avgSkipped.length>0&&<div>• {avgSkipped.map(b=>periodLongLabel(mode,b.key)).join(", ")}-এ কোনো হিসাব নেই (তখনো শুরু হয়নি), তাই {toBnDigits(complete.length)}টা {unit} দিয়েই গড়।</div>}
+          {avgSkipped.length>0&&<div>• {avgSkipped.map(b=>periodLongLabel(mode,b.key)).join(", ")}-এ কোনো হিসাব নেই — ৳০ ধরা হয়েছে, তবু {toBnDigits(complete.length)}টা {unit} দিয়েই ভাগ।</div>}
           {!avgWindow&&complete.length>0&&<div>• প্রথম হিসাবের {unit} থেকে গত {unit} পর্যন্ত সব পূর্ণ {unit} ধরা হয়েছে।</div>}
         </div>
       </div>}
@@ -2958,6 +2961,18 @@ function App({firebaseConfig,onResetConfig}){
   };
   // গুড়ির তালিকায় যাওয়া: নিচে একটানা কাঠের স্টকের পাতাগুলোর ভেতরে তালিকা থাকলে সেখানেই ফেরা
   // (নইলে নতুন করে খোলা) — তাই তালিকায় গিয়ে ব্যাক চাপলে আবার র‍্যাক/লটে ফিরে আসে না
+  // v5.45: র‍্যাকের ট্যাব — "র‍্যাক" মূল পাতা; বাকি তিনটা তার উপরে একটাই ধাপ। তাই ব্যাক:
+  // অন্য ট্যাব → র‍্যাক → কাঠের স্টক → ড্যাশবোর্ড, ট্যাবে যতবারই চাপা হোক
+  const switchRackTab=(v)=>{
+    const top=navStack[navStack.length-1],below=navStack[navStack.length-2];
+    if(!top||top.page!=="woodstock"||top.view===v)return;
+    if(v==="usage"){
+      if(below&&below.page==="woodstock"&&below.view==="usage"){goBack();return}
+      replaceTop({page:"woodstock",view:"usage"});return;
+    }
+    if(top.view==="usage")navigate({page:"woodstock",view:v});
+    else replaceTop({page:"woodstock",view:v});
+  };
   const openWoodList=()=>{
     for(let i=navStack.length-2;i>=0;i--){
       const sc=navStack[i];
@@ -4965,7 +4980,7 @@ function App({firebaseConfig,onResetConfig}){
   if(page==="form")return<Form recentRates={recentCostRates} onSave={saveOrder} onBack={goBack} db={db} saveDb={saveDb} galleries={galleries} woodSettings={woodSettings} laborSettings={laborSettings} orders={orders} getNextOrderNumber={getNextOrderNumber}/>;
   if(page==="history")return<Hist syncInfo={syncInfo} online={online} orders={orders} db={db} onBack={goBack} onView={o=>navigate({page:"preview",orderNo:o.no,slip:0})} highlightNo={highlightNo} q={curScreen.q||""} setQ={q=>replaceTop({...curScreen,q})} statusFilter={curScreen.statusFilter||"all"} setStatusFilter={statusFilter=>replaceTop({...curScreen,statusFilter})} catFilter={curScreen.catFilter||"all"} setCatFilter={catFilter=>replaceTop({...curScreen,catFilter})} sortMode={curScreen.sortMode||"recent"} setSortMode={sortMode=>replaceTop({...curScreen,sortMode})}/>;
   if(page==="manage")return<ManageDB db={db} saveDb={saveDb} galleries={galleries} saveGalleryEntry={saveGalleryEntry} onBack={goBack} navigate={navigate} goBack={goBack} replaceTop={replaceTop} curScreen={curScreen} highlightNo={highlightNo} onRenameVariant={propagateVariantRename} orders={orders} woodSettings={woodSettingsWithBands} rackSplits={rackSplits} onMergeMany={mergeManyAcrossOrders} onMoveVariant={propagateVariantMove} onRecodeVariant={propagateVariantCode} onWoodChange={propagateWoodChange} onMergeVariants={mergeVariantsAcrossOrders}/>;
-  if(page==="woodstock")return<WoodStockPage woodLots={woodLots} saveWoodLots={saveWoodLots} addLotPayment={addLotPayment} woodSettings={woodSettingsWithBands} saveWoodSettings={saveWoodSettings} laborSettings={laborSettings} saveLaborSettings={saveLaborSettings} rackSplits={rackSplits} addRackSplit={addRackSplit} rackBands={rackBands} addRackBand={addRackBand} removeRackBand={removeRackBand} changeRackBands={changeRackBands} changeRackSplits={changeRackSplits} payrollWeeks={payrollWeeks} workers={workers} orders={orders} expenses={expenses} onBack={goBack} view={curScreen.view||"list"} lotId={curScreen.lotId||null} onOpenList={openWoodList} onOpenDetail={lotId=>navigate({page:"woodstock",view:"detail",lotId})} onOpenNew={()=>navigate({page:"woodstock",view:"new"})} onOpenRates={()=>navigate({page:"woodstock",view:"rates"})} onOpenUsage={()=>navigate({page:"woodstock",view:"usage"})} onOpenView={v=>navigate({page:"woodstock",view:v})} onOpenModel={(c,v,hl)=>navigate({page:"manage",tab:"edit",selCat:c,selVar:v,hl:hl||null})} onSwitchView={v=>navigate({page:"woodstock",view:v})} db={db} rackStd={rackStd} saveRackStd={saveRackStd} highlightNo={highlightNo}/>;
+  if(page==="woodstock")return<WoodStockPage woodLots={woodLots} saveWoodLots={saveWoodLots} addLotPayment={addLotPayment} woodSettings={woodSettingsWithBands} saveWoodSettings={saveWoodSettings} laborSettings={laborSettings} saveLaborSettings={saveLaborSettings} rackSplits={rackSplits} addRackSplit={addRackSplit} rackBands={rackBands} addRackBand={addRackBand} removeRackBand={removeRackBand} changeRackBands={changeRackBands} changeRackSplits={changeRackSplits} payrollWeeks={payrollWeeks} workers={workers} orders={orders} expenses={expenses} onBack={goBack} view={curScreen.view||"list"} lotId={curScreen.lotId||null} onOpenList={openWoodList} onOpenDetail={lotId=>navigate({page:"woodstock",view:"detail",lotId})} onOpenNew={()=>navigate({page:"woodstock",view:"new"})} onOpenRates={()=>navigate({page:"woodstock",view:"rates"})} onOpenUsage={()=>navigate({page:"woodstock",view:"usage"})} onOpenView={v=>navigate({page:"woodstock",view:v})} onOpenModel={(c,v,hl)=>navigate({page:"manage",tab:"edit",selCat:c,selVar:v,hl:hl||null})} onSwitchView={switchRackTab} db={db} rackStd={rackStd} saveRackStd={saveRackStd} highlightNo={highlightNo}/>;
   if(page==="expense")return<ExpensePage expenses={expenses} onSave={saveExpense} onBack={goBack}/>;
   if(page==="payroll")return<PayrollPage workers={workers} saveWorker={saveWorker} deleteWorker={deleteWorker} payrollWeeks={payrollWeeks} savePayrollWeek={savePayrollWeek} updateAttendance={updateAttendance} addAdvanceEntry={addAdvanceEntry} removeAdvanceEntry={removeAdvanceEntry} onBack={goBack}/>;
   if(page==="plreport")return<PLReportPage orders={orders} expenses={expenses} workers={workers} payrollWeeks={payrollWeeks} woodLots={woodLots} woodSettings={woodSettings} laborSettings={laborSettings} onBack={goBack}/>;
@@ -6759,6 +6774,7 @@ function RackRuler({wood,w,sq,cards,bands,dbHs,known,selected,onSelect,onEditRan
 // v5.43: গোডাউনের র‍্যাকের চার ট্যাবের স্ক্রল-অবস্থান — ব্যাকে আগের ট্যাবে ঠিক আগের জায়গায় ফেরার জন্য
 const RACK_TABS=["usage","cutlist","labels","std"];
 const rackTabScroll={};
+const RACK_MEMO={}; // v5.45: র‍্যাকের পাতার বাছাইগুলো — পাতা ছেড়ে ফিরলে আগের মতো
 function WoodStockPage({woodLots,saveWoodLots,addLotPayment,woodSettings,saveWoodSettings,laborSettings,saveLaborSettings,rackSplits,addRackSplit,rackBands,addRackBand,removeRackBand,changeRackBands,changeRackSplits,db,rackStd,saveRackStd,onOpenView,onOpenModel,onSwitchView,payrollWeeks,workers,orders,expenses,onBack,view,lotId,onOpenList,onOpenDetail,onOpenNew,onOpenRates,onOpenUsage,highlightNo}){
   const today=todayStr();
   const setView=(v)=>{if(v==="list")onOpenList();else if(v==="new")onOpenNew();else if(v==="rates")onOpenRates();else if(v==="usage")onOpenUsage();else if(onOpenView)onOpenView(v)}; // পুরনো কল-সাইটের সাথে সামঞ্জস্যের জন্য
@@ -6821,14 +6837,16 @@ function WoodStockPage({woodLots,saveWoodLots,addLotPayment,woodSettings,saveWoo
   const[newMilling,setNewMilling]=useState({date:today,cft:"",billAmount:"",note:""});
   const[rateDraft,setRateDraft]=useState({});
   const[bandDraft,setBandDraft]=useState({});
-  const[usagePeriod,setUsagePeriod]=useState("6m");
-  const[usageTrendMode,setUsageTrendMode]=useState("prev");
-  const[usageWoodFilter,setUsageWoodFilter]=useState("all");
-  const[expandedCode,setExpandedCode]=useState(null);
-  const[totalRacksInput,setTotalRacksInput]=useState("");
-  const[rackCapacityInput,setRackCapacityInput]=useState("30");
-  const[usageSetOpen,setUsageSetOpen]=useState(false); // v5.42: সময়সীমা ও হিসাব — ভাঁজ করা থাকে, র‍্যাক আগে
+  const rackMemoInit=(k,d)=>()=>(RACK_TABS.includes(view)&&(k in RACK_MEMO))?RACK_MEMO[k]:d;
+  const[usagePeriod,setUsagePeriod]=useState(rackMemoInit("period","6m"));
+  const[usageTrendMode,setUsageTrendMode]=useState(rackMemoInit("trend","prev"));
+  const[usageWoodFilter,setUsageWoodFilter]=useState(rackMemoInit("wood","all"));
+  const[expandedCode,setExpandedCode]=useState(rackMemoInit("expanded",null));
+  const[totalRacksInput,setTotalRacksInput]=useState(rackMemoInit("total",""));
+  const[rackCapacityInput,setRackCapacityInput]=useState(rackMemoInit("cap","30"));
+  const[usageSetOpen,setUsageSetOpen]=useState(rackMemoInit("setOpen",false)); // v5.42: সময়সীমা ও হিসাব — ভাঁজ করা থাকে, র‍্যাক আগে
   const tabViewRef=useRef(null);
+  useEffect(()=>{Object.assign(RACK_MEMO,{period:usagePeriod,trend:usageTrendMode,wood:usageWoodFilter,expanded:expandedCode,total:totalRacksInput,cap:rackCapacityInput,setOpen:usageSetOpen,sort:rackSort,rview:rackView})});
   useLayoutEffect(()=>{
     const prev=tabViewRef.current;tabViewRef.current=view;
     if(prev===view)return;
@@ -6844,14 +6862,14 @@ function WoodStockPage({woodLots,saveWoodLots,addLotPayment,woodSettings,saveWoo
   },[]);
   const[editingBandFor,setEditingBandFor]=useState(null);
   // v5.23: র‍্যাকের ক্রম, মার্জ ও নাম বদল
-  const[rackSort,setRackSort]=useState("size"); // size = ছোট থেকে বড় | use = বেশি ব্যবহার আগে
+  const[rackSort,setRackSort]=useState(rackMemoInit("sort","size")); // size = ছোট থেকে বড় | use = বেশি ব্যবহার আগে
   const[mergeMode,setMergeMode]=useState(false);
   const[mergeSel,setMergeSel]=useState([]);
   const[mergeKeep,setMergeKeep]=useState(null);
   const[renamingRack,setRenamingRack]=useState(null);
   const[rackNameDraft,setRackNameDraft]=useState("");
   // v5.28–5.32: উচ্চতার দাগ, লেবেল, কাটাই তালিকা, মূল উচ্চতা
-  const[rackView,setRackView]=useState("cards"); // cards | ruler
+  const[rackView,setRackView]=useState(rackMemoInit("rview","cards")); // cards | ruler
   const[rulerSel,setRulerSel]=useState(null);
   const[labelOff,setLabelOff]=useState({});
   const[labelSize,setLabelSize]=useState("big");
@@ -7186,7 +7204,7 @@ function WoodStockPage({woodLots,saveWoodLots,addLotPayment,woodSettings,saveWoo
         const cmpStart=usageTrendMode==="prev"?monthsAgo(today,periodObj.months*2):monthsAgo(today,periodObj.months+12);
         const cmpEnd=usageTrendMode==="prev"?curStart:monthsAgo(today,12);
 
-        const computeUsage=(startDate,endDate)=>{
+        const computeUsage=(startDate,endDate,detail)=>{
           const byCode={},byWood={};let total=0,totalPieces=0;
           orders.filter(o=>!o.cancelled&&o.cust.date>=startDate&&o.cust.date<endDate).forEach(o=>{
             (o.items||[]).forEach(it=>{
@@ -7203,6 +7221,19 @@ function WoodStockPage({woodLots,saveWoodLots,addLotPayment,woodSettings,saveWoo
                   if(!byCode[code].byLength[p.l])byCode[code].byLength[p.l]={pieces:0,cft:0};
                   byCode[code].byLength[p.l].pieces+=pc;
                   byCode[code].byLength[p.l].cft+=cv;
+                  // v5.44: নাম+মাপ, আর কোন ফার্নিচারে কতখানি ও কবে (শুধু চলতি সময়ের জন্য)
+                  if(detail){
+                    const bc=byCode[code];if(!bc.sizes){bc.sizes={};bc.uses={}}
+                    const sk=(p.bn||"")+"|"+p.w+"|"+p.h+"|"+p.l;
+                    const sz=bc.sizes[sk]||(bc.sizes[sk]={bn:p.bn||"",w:p.w,h:p.h,l:p.l,pieces:0,cft:0});sz.pieces+=pc;sz.cft+=cv;
+                    const uk=(it.catKey||"")+"|"+(it.varKey||"");
+                    const u=bc.uses[uk]||(bc.uses[uk]={catKey:it.catKey||"",varKey:it.varKey||"",varBn:it.variantBn||"",cft:0,pieces:0,sizes:{},orders:{}});
+                    u.cft+=cv;u.pieces+=pc;
+                    const us=u.sizes[sk]||(u.sizes[sk]={bn:p.bn||"",w:p.w,h:p.h,l:p.l,pieces:0,cft:0});us.pieces+=pc;us.cft+=cv;
+                    const od=u.orders[o.no]||(u.orders[o.no]={no:o.no,date:o.cust.date,name:(o.cust&&o.cust.name)||"",qty:0,cft:0,items:{}});
+                    if(!od.items[it.itemId||uk]){od.items[it.itemId||uk]=1;od.qty+=(it.qty||1)}
+                    od.cft+=cv;
+                  }
                   byWood[pw]=(byWood[pw]||0)+cv;
                   total+=cv;totalPieces+=pc;
                 });
@@ -7212,7 +7243,7 @@ function WoodStockPage({woodLots,saveWoodLots,addLotPayment,woodSettings,saveWoo
           return{byCode,byWood,total,totalPieces};
         };
 
-        const cur=computeUsage(curStart,today);
+        const cur=computeUsage(curStart,today,true);
         const cmp=computeUsage(cmpStart,cmpEnd);
         const cmpHasAnyData=cmp.total>0; // তুলনার পুরো সময়টাতেই যদি কোনো অর্ডার না থাকে, তাহলে "নতুন" লেবেল ভ্রান্তিকর — তাই সেই ক্ষেত্রে প্রবণতা একেবারেই দেখানো হবে না
 
@@ -7362,11 +7393,27 @@ function WoodStockPage({woodLots,saveWoodLots,addLotPayment,woodSettings,saveWoo
           </div>
 
           <div style={{fontWeight:700,fontSize:13,marginBottom:8}}>🗄️ সব র‍্যাক ({codeList.length}টি)</div>
-          {codeList.length>0&&<div className="no-print" style={{display:"flex",gap:6,marginBottom:mergeMode?6:10,flexWrap:"wrap"}}>
-            {[["size","📏 মাপ অনুযায়ী (ছোট→বড়)"],["use","📊 বেশি ব্যবহার আগে"]].map(([k,t])=><button key={k} onClick={()=>setRackSort(k)} style={{background:rackSort===k?"#7c2d12":"#f5f0ee",color:rackSort===k?"white":"#7c2d12",border:"none",borderRadius:20,padding:"6px 11px",fontSize:10.5,fontWeight:700}}>{t}</button>)}
-            {[["cards","🗂️ কার্ড"],["ruler","📏 উচ্চতার দাগ"]].map(([k,t])=><button key={k} onClick={()=>{setRackView(k);setRulerSel(null);if(k==="ruler"){setMergeMode(false);setMergeSel([]);setRenamingRack(null)}}} style={{background:rackView===k?"#065f46":"#ecfdf5",color:rackView===k?"white":"#065f46",border:"none",borderRadius:20,padding:"6px 11px",fontSize:10.5,fontWeight:700}}>{t}</button>)}
-            {rackView!=="ruler"&&<button onClick={()=>{const on=!mergeMode;setMergeMode(on);setMergeSel([]);setMergeKeep(null);setRenamingRack(null);if(on)setRackSort("size")}} style={{background:mergeMode?"#b91c1c":"white",color:mergeMode?"white":"#7c2d12",border:"1.5px solid "+(mergeMode?"#b91c1c":"#7c2d12"),borderRadius:20,padding:"5px 11px",fontSize:10.5,fontWeight:700}}>{mergeMode?"✕ মার্জ বন্ধ করুন":"🔗 র‍্যাক মার্জ করুন"}</button>}
-          </div>}
+          {/* v5.46: তিন ভাগ — "দেখানো" আর "সাজানো" জোড়ায় একটাই বাছা যায় (রঙে আলাদা), মার্জ আলাদা কাজ */}
+          {codeList.length>0&&(()=>{
+            const ruler=rackView==="ruler";
+            const seg=(label,color,opts,val,pick,off,offNote)=><div data-seg={label} style={{display:"flex",alignItems:"center",gap:7,marginBottom:7}}>
+              <div style={{width:48,flexShrink:0,lineHeight:1.2}}><div style={{fontSize:10.5,fontWeight:800,color:off?"#bbb":color}}>{label}</div><div style={{fontSize:8,color:"#aaa"}}>একটা বাছুন</div></div>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{display:"flex",border:`1.5px solid ${off?"#ddd":color}`,borderRadius:9,overflow:"hidden",opacity:off?0.55:1}}>
+                  {opts.map(([k,t],i)=><button key={k} disabled={off} onClick={()=>pick(k)} style={{flex:1,minWidth:0,background:!off&&val===k?color:"white",color:!off&&val===k?"white":(off?"#aaa":color),border:"none",borderLeft:i?`1.5px solid ${off?"#ddd":color}`:"none",padding:"7px 4px",fontSize:10.5,fontWeight:700,lineHeight:1.25}}>{!off&&val===k?"✓ ":""}{t}</button>)}
+                </div>
+                {off&&offNote&&<div style={{fontSize:8.5,color:"#999",marginTop:2}}>{offNote}</div>}
+              </div>
+            </div>;
+            return<div className="no-print" style={{background:"white",borderRadius:10,padding:"9px 10px 3px",marginBottom:mergeMode?6:10,boxShadow:"0 1px 3px rgba(0,0,0,.06)"}}>
+              {seg("দেখানো","#065f46",[["cards","🗂️ কার্ড"],["ruler","📏 উচ্চতার দাগ"]],rackView,(k)=>{setRackView(k);setRulerSel(null);if(k==="ruler"){setMergeMode(false);setMergeSel([]);setRenamingRack(null)}},false)}
+              {seg("সাজানো","#7c2d12",[["size","🔢 মাপে ছোট→বড়"],["use","📊 বেশি ব্যবহার আগে"]],rackSort,(k)=>setRackSort(k),ruler,"উচ্চতার দাগে সবসময় মাপ অনুযায়ী সাজানো থাকে")}
+              <div style={{borderTop:"1px dashed #eee",paddingTop:7,marginBottom:6}}>
+                <button disabled={ruler} onClick={()=>{const on=!mergeMode;setMergeMode(on);setMergeSel([]);setMergeKeep(null);setRenamingRack(null);if(on)setRackSort("size")}} style={{width:"100%",background:mergeMode?"#b91c1c":(ruler?"#fafafa":"#fff7ed"),color:mergeMode?"white":(ruler?"#bbb":"#c2410c"),border:"1.5px dashed "+(mergeMode?"#b91c1c":(ruler?"#ddd":"#fb923c")),borderRadius:9,padding:"7px 10px",fontSize:11,fontWeight:800}}>{mergeMode?"✕ মার্জ বন্ধ করুন":"🔗 র‍্যাক মার্জ করুন"}</button>
+                <div style={{fontSize:8.5,color:"#999",marginTop:2,textAlign:"center"}}>{ruler?"মার্জ শুধু 🗂️ কার্ড দেখানোয় চলে":"আলাদা কাজ — কয়েকটা র‍্যাক বেছে এক র‍্যাক বানানো"}</div>
+              </div>
+            </div>;
+          })()}
           {mergeMode&&<div className="no-print" style={{background:"#fff7ed",border:"1px solid #fed7aa",borderRadius:8,padding:"7px 10px",marginBottom:10,fontSize:10,color:"#9a3412",lineHeight:1.55}}>যে র‍্যাকগুলো একসাথে রাখবেন সেগুলোতে চাপ দিন (একই কাঠ ও একই দল)। নিচের বারে ফলাফল দেখে "✓ মার্জ করুন" চাপুন। ভবিষ্যতে এই রেঞ্জের যেকোনো মাপ নিজে থেকেই এই র‍্যাকে যাবে।</div>}
           {(()=>{const bl=(rackBands||[]).filter(Boolean),pairs=[];for(let i=0;i<bl.length;i++)for(let j=i+1;j<bl.length;j++){const a=bl[i],b=bl[j];if(sameRackKind(a,b.wood,b.w,b.sq)&&!(parseFloat(a.to)<parseFloat(b.from)||parseFloat(a.from)>parseFloat(b.to)))pairs.push([a,b])}
             if(!pairs.length)return null;const cd=(b)=>rackCodeOf(b.wood,b.w,parseFloat(b.rep),!!b.sq);
@@ -7409,6 +7456,9 @@ function WoodStockPage({woodLots,saveWoodLots,addLotPayment,woodSettings,saveWoo
             const avgMonth=c.cft/periodObj.months;
             const suggested=rackAllocation[c.code];
             const isExpanded=expandedCode===c.code;
+            // v5.44: এই র‍্যাকের কাঠ কোন নাম ও মাপে, কোন ফার্নিচারে (বেশি CFT আগে)
+            const sizeRows=Object.values(c.sizes||{}).sort((a,b)=>b.cft-a.cft);
+            const useRows=Object.values(c.uses||{}).sort((a,b)=>b.cft-a.cft);
             const lengthEntries=Object.entries(c.byLength).map(([len,d])=>({len,pieces:d.pieces,cft:d.cft,pct:c.cft>0?(d.cft/c.cft)*100:0})).sort((a,b)=>b.cft-a.cft);
             const BAR_COLORS=["#ea7317","#0d9488","#eab308","#7c3aed","#94a3b8"];
             const top4=lengthEntries.slice(0,4);
@@ -7507,7 +7557,7 @@ function WoodStockPage({woodLots,saveWoodLots,addLotPayment,woodSettings,saveWoo
                     {isHigh&&<span style={{fontSize:9,background:wc.accent,color:"white",borderRadius:8,padding:"1px 6px",fontWeight:700}}>বেশি ব্যবহার</span>}
                     {c.isSplit&&<span style={{fontSize:9,background:"#0d9488",color:"white",borderRadius:8,padding:"1px 6px",fontWeight:700}}>বিভক্ত</span>}
                   </div>
-                  {c.idle?<div style={{fontSize:10,color:"#b45309",marginTop:2}}>{c.isSplit?"বিভক্ত র‍্যাক":"রেঞ্জ বসানো আছে"} — এই সময়ে কোনো অর্ডারে ব্যবহার হয়নি</div>:<div style={{fontSize:10,color:"#999",marginTop:2}}>{c.name} · {c.pieces} পিস · মাসিক গড় {avgMonth.toFixed(2)} CFT</div>}
+                  {c.idle?<div style={{fontSize:10,color:"#b45309",marginTop:2}}>{c.isSplit?"বিভক্ত র‍্যাক":"রেঞ্জ বসানো আছে"} — এই সময়ে কোনো অর্ডারে ব্যবহার হয়নি</div>:<div style={{fontSize:10,color:"#999",marginTop:2,lineHeight:1.5}}>{sizeRows.slice(0,3).map((z,zi)=><span key={zi}>{zi?", ":""}{z.bn} <span style={{fontFamily:"monospace",fontSize:9.5}}>{z.w}×{z.h}×{z.l}</span></span>)}{sizeRows.length>3?` +আরও ${toBnDigits(sizeRows.length-3)}টা মাপ`:""} · {c.pieces} পিস · মাসিক গড় {avgMonth.toFixed(2)} CFT <span className="no-print" style={{color:"#9a3412",fontWeight:700,whiteSpace:"nowrap"}}>· {isExpanded?"▲ বন্ধ":"📋 বিস্তারিত ▼"}</span></div>}
                   {!mergeMode&&childSplits.length>0&&<div className="no-print" style={{fontSize:9,color:"#0f766e",marginTop:3,display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
                     <span>✂️ এর থেকে আলাদা করা: {childSplits.map(x=>x.code).join(", ")}</span>
                     <button onClick={returnChildren} style={{background:"#f0fdfa",color:"#0f766e",border:"1px solid #99f6e4",borderRadius:6,padding:"2px 7px",fontSize:9,fontWeight:700}}>↩️ সব {c.code}-এ ফেরত নিন</button>
@@ -7591,6 +7641,26 @@ function WoodStockPage({woodLots,saveWoodLots,addLotPayment,woodSettings,saveWoo
                 </div>}
               </div>}
               {isExpanded&&<div className="no-print" style={{marginTop:9,paddingTop:9,borderTop:"1px dashed #ddd"}} onClick={e=>e.stopPropagation()}>
+                {useRows.length>0&&<div style={{marginBottom:10}}>
+                  <div style={{fontSize:10,fontWeight:700,color:"#7c2d12",marginBottom:2}}>📋 কোন ফার্নিচারে কতখানি, কবে (গত {periodObj.bn})</div>
+                  <div style={{fontSize:9,color:"#999",marginBottom:6}}>মাপের লাইনে চাপলে ডেটাবেসে সেই ফার্নিচারের সেই পিস হলুদ দাগানো অবস্থায় খুলবে</div>
+                  {useRows.map(u=>{
+                    const catObj=db&&db[u.catKey],exists=!!(catObj&&catObj.variants&&catObj.variants[u.varKey]);
+                    const varBn=(exists&&catObj.variants[u.varKey].bn)||u.varBn||"(নাম নেই)";
+                    const ords=Object.values(u.orders).sort((a,b)=>String(b.date).localeCompare(String(a.date)));
+                    return<div key={u.catKey+"|"+u.varKey} data-use-row="1" style={{background:"#fafaf9",border:"1px solid #eee",borderRadius:8,padding:"7px 9px",marginBottom:6}}>
+                      <div style={{display:"flex",justifyContent:"space-between",gap:8,fontSize:11}}>
+                        <span style={{fontWeight:700,color:"#333",minWidth:0}}>{catObj&&catObj.bn?`${catObj.bn} · `:""}{varBn}</span>
+                        <span style={{fontWeight:700,flexShrink:0}}>{u.cft.toFixed(2)} CFT <span style={{fontWeight:400,color:"#888",fontSize:9.5}}>({c.cft>0?(u.cft/c.cft*100).toFixed(0):0}%)</span></span>
+                      </div>
+                      {Object.values(u.sizes).sort((a,b)=>b.cft-a.cft).map(z=><button key={z.bn+z.w+z.h+z.l} data-db-link="1" disabled={!exists||!onOpenModel} onClick={()=>onOpenModel&&onOpenModel(u.catKey,u.varKey,{mode:"show",w:parseFloat(z.w),h:parseFloat(z.h),l:parseFloat(z.l),code:c.code,bn:z.bn})} style={{display:"flex",width:"100%",justifyContent:"space-between",alignItems:"center",gap:6,background:exists?"white":"#f5f5f5",border:exists?"1px solid #fde68a":"1px solid #eee",borderRadius:6,padding:"5px 7px",marginTop:4,fontSize:10,color:"#555",textAlign:"left"}}>
+                        <span style={{minWidth:0}}>{z.bn||"(নাম নেই)"} <span style={{fontFamily:"monospace"}}>{z.w}×{z.h}×{z.l}</span> · {z.pieces} পিস · {z.cft.toFixed(2)} CFT</span>
+                        <span style={{color:exists?"#a16207":"#aaa",fontWeight:700,flexShrink:0,fontSize:9.5}}>{exists?"ডেটাবেসে ›":"ডেটাবেসে নেই"}</span>
+                      </button>)}
+                      <div style={{fontSize:9.5,color:"#888",marginTop:5,lineHeight:1.55}}>🗓️ কবে: {ords.slice(0,6).map(od=>`${fmtDate(od.date)} — ${od.name||od.no}${od.qty>1?` (${toBnDigits(od.qty)}টা)`:""}`).join(" · ")}{ords.length>6?` · +আরও ${toBnDigits(ords.length-6)}টা অর্ডার`:""}</div>
+                    </div>;
+                  })}
+                </div>}
                 {myBand&&mergedH.length>1&&<div style={{marginBottom:9}}>
                   <div style={{fontSize:10,fontWeight:700,color:"#1d4ed8",marginBottom:5}}>এই কোডে যেসব হাইট মিশেছে</div>
                   {mergedH.map(m=><div key={m.h} style={{display:"flex",justifyContent:"space-between",fontSize:11,padding:"3px 0"}}>
@@ -8540,7 +8610,9 @@ function ManageDB({db,saveDb,galleries,saveGalleryEntry,onBack,navigate,goBack,r
   const setCopiedSection=(v)=>{window.__rfCopiedSection=v;setCopiedSectionRaw(v)};
   // ── v5.39: র‍্যাক পাতা থেকে "এই পিস ছোট করলে" দেখতে এলে কোন পিসগুলো দাগানো থাকবে ──
   const hl=curScreen.hl||null;
-  const hlMatch=(p)=>!!hl&&!!p&&parseFloat(p.w)===parseFloat(hl.w)&&parseFloat(p.h)===parseFloat(hl.h)&&isSquarePiece(p.w,p.l)===!!hl.sq;
+  const hlShow=!!hl&&hl.mode==="show"; // v5.44: র‍্যাকের "বিস্তারিত" থেকে — শুধু দেখানো, বদলের প্রস্তাব নয়
+  const hlMatch=(p)=>!!hl&&!!p&&parseFloat(p.w)===parseFloat(hl.w)&&parseFloat(p.h)===parseFloat(hl.h)&&(hlShow?parseFloat(p.l)===parseFloat(hl.l):isSquarePiece(p.w,p.l)===!!hl.sq);
+  const hlScrolledRef=useRef(null);
   // ── এক মডেলের কাঠের তালিকা (সব সেকশনসহ) কপি করে আরেক মডেলে বসানোর জন্য — কাছাকাছি মডেলের
   // পুরো তালিকা কপি করে নতুন মডেলে পেস্ট করে শুধু যেখানে দরকার এডিট করা যায় ──
   const[copiedSections,setCopiedSections]=useState(null);
@@ -8971,7 +9043,19 @@ function ManageDB({db,saveDb,galleries,saveGalleryEntry,onBack,navigate,goBack,r
       </div>}
       {tab==="edit"&&editSections&&<div>
         <div style={{fontWeight:700,fontSize:14,marginBottom:6}}>{db[selCat]?.variants[selVar]?.bn} — কাঠের তালিকা সম্পাদনা</div>
-        {hl&&(()=>{
+        {hlShow&&(()=>{
+          const n=editSections.reduce((t,sx)=>t+((sx&&sx.pieces)||[]).filter(hlMatch).length,0);
+          // পাতা খুলেই দাগানো পিসে নেমে যাওয়া (একবারই)
+          if(n>0&&hlScrolledRef.current!==hl){hlScrolledRef.current=hl;setTimeout(()=>{const el=document.querySelector('[data-hl="1"]');if(el)el.scrollIntoView({block:"center"})},250)}
+          return<div style={{background:"#fef9c3",border:"1.5px solid #facc15",borderRadius:9,padding:"9px 11px",marginBottom:10,fontSize:10.5,color:"#713f12",lineHeight:1.6}}>
+            {n>0?<>
+              <div style={{fontWeight:800,fontSize:11.5}}>🔎 হলুদ দাগানো {toBnDigits(n)}টা পিস — {hl.code} র‍্যাকের কাঠ</div>
+              <div>{hl.bn} <span style={{fontFamily:"monospace"}}>{hl.w}×{hl.h}×{hl.l}</span></div>
+              <button onClick={()=>{const el=document.querySelector('[data-hl="1"]');if(el)el.scrollIntoView({behavior:"smooth",block:"center"})}} style={{marginTop:6,background:"white",border:"1px solid #eab308",color:"#854d0e",borderRadius:7,padding:"6px 10px",fontSize:10.5,fontWeight:700}}>⬇️ দাগানো পিস দেখুন</button>
+            </>:<div>এই মডেলে এখন <span style={{fontFamily:"monospace"}}>{hl.w}×{hl.h}×{hl.l}</span> মাপের পিস নেই — অর্ডারের পরে ডেটাবেসে মাপ বদলানো হয়ে থাকতে পারে।</div>}
+          </div>;
+        })()}
+        {hl&&!hlShow&&(()=>{
           const n=editSections.reduce((t,sx)=>t+((sx&&sx.pieces)||[]).filter(hlMatch).length,0);
           const diff=parseFloat(hl.h)-parseFloat(hl.to),pc=(diff/parseFloat(hl.h)*100).toFixed(1);
           const applyHl=()=>{const ns=JSON.parse(JSON.stringify(editSections));let k=0;ns.forEach(sx=>((sx&&sx.pieces)||[]).forEach(p=>{if(hlMatch(p)){p.h=parseFloat(hl.to);k++}}));if(!k)return;setEditSections(ns);setEditingPiece(null)};
@@ -9037,7 +9121,7 @@ function ManageDB({db,saveDb,galleries,saveGalleryEntry,onBack,navigate,goBack,r
                     <button onClick={savePieceEdit} style={{flex:2,background:"#6d28d9",color:"white",border:"none",borderRadius:6,padding:"7px",fontSize:11,fontWeight:700}}>✓ ঠিক আছে</button>
                   </div>
                 </div>:<div data-hl={hlMatch(p)?"1":undefined} style={{display:"flex",gap:4,alignItems:"center",marginBottom:4,fontSize:10,...(hlMatch(p)?{background:"#fef08a",borderRadius:6,padding:"4px 5px",boxShadow:"inset 4px 0 0 #ca8a04"}:{})}}>
-                  <span style={{flex:2,color:"#333",minWidth:0}}>{p.bn}{hlMatch(p)&&<b style={{display:"block",color:"#a16207",fontSize:9}}>✏️ {hl.h}″ → {hl.to}″ করুন</b>}</span>
+                  <span style={{flex:2,color:"#333",minWidth:0}}>{p.bn}{hlMatch(p)&&<b style={{display:"block",color:"#a16207",fontSize:9}}>{hlShow?`🔎 ${hl.code} র‍্যাকের কাঠ`:`✏️ ${hl.h}″ → ${hl.to}″ করুন`}</b>}</span>
                   <span style={{fontFamily:"monospace",color:"#555",flexShrink:0}}>{p.w}×{p.h}×{p.l} × {p.pc}pc</span>
                   {rackChipFor(p,sec)}
                   <button onClick={()=>startPieceEdit(si,pi)} title="নাম/মাপ বদলান" style={{background:"#f5f3ff",border:"none",borderRadius:4,padding:"2px 6px",color:"#6d28d9",fontSize:10,cursor:"pointer",flexShrink:0}}>✏️</button>
