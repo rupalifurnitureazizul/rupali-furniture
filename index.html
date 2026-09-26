@@ -18,6 +18,13 @@ input,select,textarea,button{font-family:'Noto Sans Bengali',sans-serif}
 button{cursor:pointer}
 ::-webkit-scrollbar{width:5px}::-webkit-scrollbar-thumb{background:#C41E3A55;border-radius:3px}
 .daywheel::-webkit-scrollbar{width:0;height:0;display:none}
+/* v5.55–5.57: ড্যাশবোর্ডের বোতাম ও আইকন বার */
+.hb{-webkit-tap-highlight-color:transparent;transition:transform .16s ease,box-shadow .16s ease,filter .16s ease;cursor:pointer}
+.hb:active{transform:scale(.95);filter:brightness(.96)}
+.hb [data-sub]::after{content:attr(data-sub)}
+.hb [data-icon]::before{content:attr(data-icon)}
+.zbar::-webkit-scrollbar{display:none}
+.zb{-webkit-tap-highlight-color:transparent;transition:transform .32s cubic-bezier(.34,1.56,.64,1),box-shadow .32s ease,background .25s ease,border-color .25s ease,filter .25s ease}
 @media print{
   @page{size:A4 portrait;margin:10mm}
   .no-print{display:none!important}
@@ -176,7 +183,7 @@ function compressImage(file,maxDim=1000,quality=0.70,maxBytes=45000){
 /* ── FULL-RESOLUTION LOCAL FOLDER STORAGE (desktop Chrome/Edge/Brave only) ──
    Original, uncompressed images are saved as real files in a folder you choose
    on your computer. Only a small compressed thumbnail syncs to the cloud/mobile. */
-const BUILD_TAG="5.54";
+const BUILD_TAG="5.62";
 const FS_SUPPORTED=typeof window!=="undefined"&&"showDirectoryPicker" in window;
 function idbOpen(){
   return new Promise((resolve,reject)=>{
@@ -2537,6 +2544,50 @@ function ProgressBar({pct}){
     </div>
     <div style={{fontSize:10,fontWeight:700,color,marginTop:2,textAlign:"right"}}>{pct>=100?"✅ রেডি টু ডেলিভার":`${pct}% সম্পন্ন`}</div>
   </div>
+}
+// v5.58: ডোনাট চার্ট — CSS conic-gradient (লেখা সব HTML-এ, তাই বাংলা ফন্টের সমস্যা নেই)।
+// রং: রঙকানা পরীক্ষায় পাস করা ৭টা আলাদা রং, নির্দিষ্ট ক্রমে; "বাকি" সবসময় ধূসর।
+const DONUT_COLORS=["#2a78d6","#eb6834","#1baf7a","#eda100","#e87ba4","#008300","#4a3aa7"];
+const DONUT_REST="#a8a29e";
+function DonutChart({data,unit="",centerLabel="",size=150}){
+  const[sel,setSel]=useState(null);
+  const list=(data||[]).filter(d=>d&&d.value>0);
+  const total=list.reduce((s,d)=>s+d.value,0);
+  let a=0,ci=0;
+  const segs=list.map(d=>{const c=d.key==="__rest"?DONUT_REST:DONUT_COLORS[(ci++)%DONUT_COLORS.length];const sw=total>0?d.value/total*360:0;const sg={...d,c,a0:a,a1:a+sw,pct:total>0?d.value/total*100:0};a+=sw;return sg});
+  const selKey=sel&&segs.some(x=>x.key===sel)?sel:null;
+  const gap=segs.length>1?1.6:0;
+  const stops=segs.length?segs.map(x=>{const c=(!selKey||selKey===x.key)?x.c:x.c+"38";return`#fff ${x.a0}deg ${x.a0+gap/2}deg, ${c} ${x.a0+gap/2}deg ${Math.max(x.a0+gap/2,x.a1-gap/2)}deg, #fff ${Math.max(x.a0+gap/2,x.a1-gap/2)}deg ${x.a1}deg`}).join(", "):"#eee 0deg 360deg";
+  const cur=selKey?segs.find(x=>x.key===selKey):null;
+  const toggle=(k)=>setSel(selKey===k?null:k);
+  const pickAt=(e)=>{
+    const r=e.currentTarget.getBoundingClientRect();
+    const x=e.clientX-r.left-r.width/2,y=e.clientY-r.top-r.height/2;
+    if(Math.hypot(x,y)<r.width*0.31){setSel(null);return}
+    let ang=Math.atan2(x,-y)*180/Math.PI;if(ang<0)ang+=360;
+    const hit=segs.find(g=>ang>=g.a0&&ang<g.a1);if(hit)toggle(hit.key);
+  };
+  const n=(v)=>Number.isInteger(v)?v:Math.round(v*10)/10;
+  return<div data-donut="1" style={{display:"flex",alignItems:"center",gap:16,flexWrap:"wrap",justifyContent:"center"}}>
+    <div data-donut-ring="1" onClick={pickAt} style={{width:size,height:size,borderRadius:"50%",background:`conic-gradient(${stops})`,position:"relative",flexShrink:0,cursor:"pointer",boxShadow:"0 6px 18px -10px rgba(0,0,0,.35)"}}>
+      <div style={{position:"absolute",inset:"19%",borderRadius:"50%",background:"#fff",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",textAlign:"center",boxShadow:"inset 0 1px 5px rgba(0,0,0,.07)",pointerEvents:"none"}}>
+        <div data-donut-center="1" style={{fontSize:cur?23:27,fontWeight:800,color:"#1f2937",lineHeight:1}}>{n(cur?cur.value:total)}{unit}</div>
+        <div style={{fontSize:9.5,color:"#6b7280",marginTop:4,lineHeight:1.25,padding:"0 8px",fontWeight:cur?700:500}}>{cur?`${cur.label}`:centerLabel}</div>
+        {cur&&<div style={{fontSize:9.5,color:"#9ca3af",marginTop:1}}>{Math.round(cur.pct)}%</div>}
+      </div>
+    </div>
+    <div style={{flex:"1 1 160px",minWidth:160}}>
+      {segs.map(x=>{const on=!selKey||selKey===x.key;return<div key={x.key} data-donut-row={x.key} onClick={()=>toggle(x.key)} style={{padding:"4px 6px",borderRadius:8,cursor:"pointer",opacity:on?1:0.42,background:selKey===x.key?"#f5f5f4":"transparent",transition:"opacity .2s,background .2s"}}>
+        <div style={{display:"flex",alignItems:"center",gap:7}}>
+          <span style={{width:10,height:10,borderRadius:3,background:x.c,flexShrink:0}}></span>
+          <span style={{flex:1,minWidth:0,fontSize:11.5,color:"#374151",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{x.label}</span>
+          <span style={{fontSize:11.5,fontWeight:800,color:"#111827"}}>{n(x.value)}{unit}</span>
+          <span style={{fontSize:9.5,color:"#9ca3af",width:28,textAlign:"right"}}>{Math.round(x.pct)}%</span>
+        </div>
+        <div style={{height:3,background:"#f1f1ef",borderRadius:2,margin:"3px 0 0 17px",overflow:"hidden"}}><div style={{width:`${x.pct}%`,height:"100%",background:x.c,borderRadius:2}}></div></div>
+      </div>})}
+    </div>
+  </div>;
 }
 function PieChart3D({data,size=180,showCount=false,countSuffix="",showMoney=false}){
   const total=data.reduce((s,d)=>s+d.value,0);
@@ -5037,19 +5088,19 @@ function App({firebaseConfig,onResetConfig}){
   const renderPage=()=>{
   if(page==="preview")return<Preview syncInfo={syncInfo} online={online} onLoadPhotos={loadOrderPhotos} onSavePhotos={saveOrderPhotos} order={viewed||draft} onBack={goBack} slip={slip} setSlip={setSlip} onUpdate={updateOrder} onAddPayment={addOrderPayment} onSetDelivered={setOrderDelivered} onDelete={deleteOrderPermanently} db={db} saveDb={saveDb} carpenters={carpenters} saveCarpenters={saveCarpenters} galleries={galleries} saveGalleryEntry={saveGalleryEntry} woodSettings={woodSettingsWithBands} laborSettings={laborSettings} workers={workers} allOrders={orders} rackSplits={rackSplits}/>;
   if(page==="form")return<Form recentRates={recentCostRates} onSave={saveOrder} onBack={goBack} db={db} saveDb={saveDb} galleries={galleries} woodSettings={woodSettings} laborSettings={laborSettings} orders={orders} getNextOrderNumber={getNextOrderNumber}/>;
-  if(page==="history")return<Hist syncInfo={syncInfo} online={online} orders={orders} db={db} onBack={goBack} onView={o=>navigate({page:"preview",orderNo:o.no,slip:0})} highlightNo={highlightNo} q={curScreen.q||""} setQ={q=>replaceTop({...curScreen,q})} statusFilter={curScreen.statusFilter||"all"} setStatusFilter={statusFilter=>replaceTop({...curScreen,statusFilter})} catFilter={curScreen.catFilter||"all"} setCatFilter={catFilter=>replaceTop({...curScreen,catFilter})} sortMode={curScreen.sortMode||"recent"} setSortMode={sortMode=>replaceTop({...curScreen,sortMode})}/>;
+  if(page==="history")return<Hist syncInfo={syncInfo} online={online} orders={orders} db={db} onBack={goBack} onView={o=>navigate({page:"preview",orderNo:o.no,slip:0})} highlightNo={highlightNo} q={curScreen.q||""} setQ={q=>replaceTop({...curScreen,q})} statusFilter={curScreen.statusFilter||"all"} setStatusFilter={statusFilter=>replaceTop({...curScreen,statusFilter})} catFilter={curScreen.catFilter||"all"} setCatFilter={catFilter=>replaceTop({...curScreen,catFilter})} sortMode={curScreen.sortMode||"recent"} setSortMode={sortMode=>replaceTop({...curScreen,sortMode})} timeFilter={curScreen.timeFilter||"all"} setTimeFilter={timeFilter=>replaceTop({...curScreen,timeFilter})} resetFilters={()=>replaceTop({page:"history"})}/>;
   if(page==="manage")return<ManageDB db={db} saveDb={saveDb} galleries={galleries} saveGalleryEntry={saveGalleryEntry} onBack={goBack} navigate={navigate} goBack={goBack} replaceTop={replaceTop} curScreen={curScreen} highlightNo={highlightNo} onRenameVariant={propagateVariantRename} orders={orders} woodSettings={woodSettingsWithBands} rackSplits={rackSplits} onMergeMany={mergeManyAcrossOrders} onMoveVariant={propagateVariantMove} onRecodeVariant={propagateVariantCode} onWoodChange={propagateWoodChange} onMergeVariants={mergeVariantsAcrossOrders}/>;
   if(page==="woodstock")return<WoodStockPage woodLots={woodLots} saveWoodLots={saveWoodLots} addLotPayment={addLotPayment} woodSettings={woodSettingsWithBands} saveWoodSettings={saveWoodSettings} laborSettings={laborSettings} saveLaborSettings={saveLaborSettings} rackSplits={rackSplits} addRackSplit={addRackSplit} rackBands={rackBands} addRackBand={addRackBand} removeRackBand={removeRackBand} changeRackBands={changeRackBands} changeRackSplits={changeRackSplits} payrollWeeks={payrollWeeks} workers={workers} orders={orders} expenses={expenses} onBack={goBack} view={curScreen.view||"list"} lotId={curScreen.lotId||null} onOpenList={openWoodList} onOpenDetail={lotId=>navigate({page:"woodstock",view:"detail",lotId})} onOpenNew={()=>navigate({page:"woodstock",view:"new"})} onOpenRates={()=>navigate({page:"woodstock",view:"rates"})} onOpenUsage={()=>navigate({page:"woodstock",view:"usage"})} onOpenView={v=>navigate({page:"woodstock",view:v})} onOpenModel={(c,v,hl)=>navigate({page:"manage",tab:"edit",selCat:c,selVar:v,hl:hl||null})} onSwitchView={switchRackTab} db={db} rackStd={rackStd} saveRackStd={saveRackStd} highlightNo={highlightNo}/>;
   if(page==="expense")return<ExpensePage expenses={expenses} onSave={saveExpense} onBack={goBack}/>;
   if(page==="payroll")return<PayrollPage workers={workers} saveWorker={saveWorker} deleteWorker={deleteWorker} payrollWeeks={payrollWeeks} savePayrollWeek={savePayrollWeek} updateAttendance={updateAttendance} addAdvanceEntry={addAdvanceEntry} removeAdvanceEntry={removeAdvanceEntry} onBack={goBack}/>;
   if(page==="plreport")return<PLReportPage orders={orders} expenses={expenses} workers={workers} payrollWeeks={payrollWeeks} woodLots={woodLots} woodSettings={woodSettings} laborSettings={laborSettings} onBack={goBack}/>;
-  return<Home syncInfo={syncInfo} devices={devices} dbHistory={dbHistory} photoMove={photoMove} onMovePhotosOut={runMovePhotosOut} handoffReport={handoffReport} onRestoreDbVersion={restoreDbVersion} onDownloadDbVersion={downloadDbVersion} deviceId={deviceIdRef.current} lastPageCrash={lastPageCrash} orders={orders} expenses={expenses} woodLots={woodLots} db={db} woodSettings={woodSettings} laborSettings={laborSettings} workers={workers} payrollWeeks={payrollWeeks} alertSettings={alertSettings} saveAlertSettings={saveAlertSettings} backupFailed={backupFailed} lastSyncAt={lastSyncAt} onManualRefresh={manualRefresh} pendingWrites={pendingWrites} onUpdateOrder={updateOrder} onNew={()=>navigate({page:"form"})} onHist={()=>navigate({page:"history"})} onManage={()=>navigate({page:"manage"})} onExpense={()=>navigate({page:"expense"})} onWoodStock={()=>navigate({page:"woodstock",view:"list"})} onPayroll={()=>navigate({page:"payroll"})} onPLReport={()=>navigate({page:"plreport"})} onView={o=>navigate({page:"preview",orderNo:o.no,slip:0})} onViewDelivery={o=>navigate({page:"preview",orderNo:o.no,slip:5})} online={online} connError={connError} onResetConfig={onResetConfig} folderStatus={folderStatus} connectFolder={connectFolder} highlightNo={highlightNo} onBackupData={backupData} projectId={firebaseConfig?.projectId||""} appId={firebaseConfig?.appId||""} permanentSyncFailures={permanentSyncFailures} autoStuckStatus={autoStuckStatus} dbGaps={dbGaps} setDbGaps={setDbGaps} fsRef={fsRef}/>;
+  return<Home syncInfo={syncInfo} devices={devices} dbHistory={dbHistory} photoMove={photoMove} onMovePhotosOut={runMovePhotosOut} handoffReport={handoffReport} onRestoreDbVersion={restoreDbVersion} onDownloadDbVersion={downloadDbVersion} deviceId={deviceIdRef.current} lastPageCrash={lastPageCrash} orders={orders} expenses={expenses} woodLots={woodLots} db={db} woodSettings={woodSettings} laborSettings={laborSettings} workers={workers} payrollWeeks={payrollWeeks} alertSettings={alertSettings} saveAlertSettings={saveAlertSettings} backupFailed={backupFailed} lastSyncAt={lastSyncAt} onManualRefresh={manualRefresh} pendingWrites={pendingWrites} onUpdateOrder={updateOrder} onNew={()=>navigate({page:"form"})} onHist={()=>navigate({page:"history"})} onHistMonth={()=>{navigate({page:"history",timeFilter:"month"});setTimeout(()=>window.scrollTo(0,0),30)}} onManage={()=>navigate({page:"manage"})} onExpense={()=>navigate({page:"expense"})} onWoodStock={()=>navigate({page:"woodstock",view:"list"})} onPayroll={()=>navigate({page:"payroll"})} onPLReport={()=>navigate({page:"plreport"})} onView={o=>navigate({page:"preview",orderNo:o.no,slip:0})} onViewDelivery={o=>navigate({page:"preview",orderNo:o.no,slip:5})} online={online} connError={connError} onResetConfig={onResetConfig} folderStatus={folderStatus} connectFolder={connectFolder} highlightNo={highlightNo} onBackupData={backupData} projectId={firebaseConfig?.projectId||""} appId={firebaseConfig?.appId||""} permanentSyncFailures={permanentSyncFailures} autoStuckStatus={autoStuckStatus} dbGaps={dbGaps} setDbGaps={setDbGaps} fsRef={fsRef}/>;
   };
   return<PageErrorBoundary resetKey={navStack.length+"|"+page+"|"+(curScreen.tab||"")} canGoBack={navStack.length>1} onError={onPageCrash}>{renderPage()}</PageErrorBoundary>;
 }
 
 /* ── HOME / DASHBOARD ── */
-function Home({syncInfo,devices,dbHistory,photoMove,onMovePhotosOut,handoffReport,onRestoreDbVersion,onDownloadDbVersion,deviceId,lastPageCrash,orders,expenses,woodLots,db,woodSettings,laborSettings,workers,payrollWeeks,alertSettings,saveAlertSettings,backupFailed,lastSyncAt,onManualRefresh,pendingWrites,onUpdateOrder,onNew,onHist,onManage,onExpense,onWoodStock,onPayroll,onPLReport,onView,onViewDelivery,online,connError,onResetConfig,folderStatus,connectFolder,highlightNo,onBackupData,projectId,appId,permanentSyncFailures,autoStuckStatus,dbGaps,setDbGaps,fsRef}){
+function Home({onHistMonth,syncInfo,devices,dbHistory,photoMove,onMovePhotosOut,handoffReport,onRestoreDbVersion,onDownloadDbVersion,deviceId,lastPageCrash,orders,expenses,woodLots,db,woodSettings,laborSettings,workers,payrollWeeks,alertSettings,saveAlertSettings,backupFailed,lastSyncAt,onManualRefresh,pendingWrites,onUpdateOrder,onNew,onHist,onManage,onExpense,onWoodStock,onPayroll,onPLReport,onView,onViewDelivery,online,connError,onResetConfig,folderStatus,connectFolder,highlightNo,onBackupData,projectId,appId,permanentSyncFailures,autoStuckStatus,dbGaps,setDbGaps,fsRef}){
   const now=new Date();
   const[showAllRunning,setShowAllRunning]=useState(false);
   const[showSystemZone,setShowSystemZone]=useState(false);
@@ -5752,22 +5803,32 @@ function Home({syncInfo,devices,dbHistory,photoMove,onMovePhotosOut,handoffRepor
       </div>}
       {(()=>{
         // ── ৫-সেকেন্ডের নিয়ম: এক নজরে "সব ঠিক আছে কি না" — ট্যাপ করলে সংশ্লিষ্ট অংশে চলে যাবে ──
+        // v5.55: গুরুত্ব অনুযায়ী নরম রঙ — জরুরি (হারানোর ঝুঁকি) লাল, নজর দিন কমলা, তথ্য নীল
+        const LV={high:{c:"#b91c1c",bg:"#fef2f2",bd:"#fecaca"},mid:{c:"#b45309",bg:"#fffbeb",bd:"#fde68a"},low:{c:"#1d4ed8",bg:"#eff6ff",bd:"#dbeafe"}};
         const issues=[];
-        if(backupFailed)issues.push({t:"ব্যাকআপ ব্যর্থ হয়েছে",z:"z-sys"});
-        if(stats.stuckItems&&stats.stuckItems.length)issues.push({t:`${stats.stuckItems.length}টা কাজ আটকে আছে`,z:"z-today"});
+        if(backupFailed)issues.push({t:"ব্যাকআপ ব্যর্থ হয়েছে",z:"z-sys",ic:"💾",lv:"high"});
+        if(permanentSyncFailures&&permanentSyncFailures.length)issues.push({t:`${permanentSyncFailures.length}টা অর্ডার সার্ভারে যাচ্ছে না`,z:"z-sys",ic:"☁️",lv:"high"});
+        if(writeStuckMin>0)issues.push({t:`পরিবর্তন সার্ভারে আটকে (${toBnDigits(writeStuckMin)} মিনিট)`,z:"z-sys",ic:"☁️",lv:"high"});
+        if(dbSize.pct>=80)issues.push({t:`ডেটাবেস নথি ${toBnDigits(dbSize.pct.toFixed(0))}% ভরা`,z:"z-sys",ic:"🗄️",lv:"high"});
+        if(stats.stuckItems&&stats.stuckItems.length)issues.push({t:`${stats.stuckItems.length}টা কাজ আটকে আছে`,z:"z-today",ic:"⏳",lv:"mid"});
+        if(stats.readyNotCollected&&stats.readyNotCollected.length)issues.push({t:`${stats.readyNotCollected.length}টা পণ্য পড়ে আছে`,z:"z-urgent",ic:"📦",lv:"mid"});
         const lowStock=(stats.stockAlerts||[]).filter(a=>a.monthsLeft<AL(alertSettings,"stockMonths"));
-        if(lowStock.length)issues.push({t:`${lowStock.map(a=>a.wood).join(", ")} কাঠ কম`,z:"z-wood"});
-        if(stats.readyNotCollected&&stats.readyNotCollected.length)issues.push({t:`${stats.readyNotCollected.length}টা পণ্য পড়ে আছে`,z:"z-urgent"});
-        if(stats.emptyWoodModels&&stats.emptyWoodModels.length)issues.push({t:`${stats.emptyWoodModels.length}টা মডেলে কাঠের মাপ নেই`,z:"z-wood"});
-        if(permanentSyncFailures&&permanentSyncFailures.length)issues.push({t:`${permanentSyncFailures.length}টা অর্ডার সার্ভারে পাঠাতে সমস্যা হচ্ছে`,z:"z-sys"});
-        if(writeStuckMin>0)issues.push({t:`পরিবর্তন সার্ভারে আটকে আছে (${toBnDigits(writeStuckMin)} মিনিট)`,z:"z-sys"});
-        if(dbSize.pct>=80)issues.push({t:`ডেটাবেস নথি প্রায় ভরে গেছে (${toBnDigits(dbSize.pct.toFixed(0))}%)`,z:"z-sys"});
+        if(lowStock.length)issues.push({t:`${lowStock.map(a=>a.wood).join(", ")} কাঠ কম`,z:"z-wood",ic:"🪵",lv:"mid"});
+        if(stats.emptyWoodModels&&stats.emptyWoodModels.length)issues.push({t:`${stats.emptyWoodModels.length}টা মডেলে কাঠের মাপ নেই`,z:"z-wood",ic:"📐",lv:"low"});
         const ok=issues.length===0;
-        return<div style={{background:ok?"#f0fdf4":"#fef2f2",border:`1.5px solid ${ok?"#86efac":"#fca5a5"}`,borderRadius:11,padding:"11px 13px",marginBottom:14}}>
-          <div style={{fontSize:13,fontWeight:800,color:ok?"#166534":"#991b1b",marginBottom:ok?0:6}}>{ok?"✅ সব ঠিক আছে":`⚠️ ${issues.length}টা বিষয়ে নজর দরকার`}</div>
-          {!ok&&<div style={{display:"flex",flexWrap:"wrap",gap:6}}>
-            {issues.map((it,i)=><button key={i} onClick={()=>document.getElementById(it.z)?.scrollIntoView({behavior:"smooth",block:"start"})} style={{background:"white",border:"1px solid #fecaca",borderRadius:20,padding:"8px 13px",fontSize:11,fontWeight:600,color:"#991b1b",minHeight:36}}>{it.t} →</button>)}
-          </div>}
+        if(ok)return<div data-attn="ok" style={{display:"flex",alignItems:"center",gap:8,background:"#f0fdf4",border:"1px solid #bbf7d0",borderRadius:12,padding:"9px 12px",marginBottom:14,fontSize:12,fontWeight:700,color:"#166534"}}>✅ সব ঠিক আছে <span style={{fontWeight:400,fontSize:10.5,color:"#4d7c5f"}}>— নজর দেওয়ার মতো কিছু নেই</span></div>;
+        const top=issues.some(i=>i.lv==="high")?"high":issues.some(i=>i.lv==="mid")?"mid":"low";
+        return<div data-attn={top} style={{background:"white",border:"1px solid #ece8e4",borderLeft:`4px solid ${LV[top].c}`,borderRadius:14,padding:"11px 12px 12px",marginBottom:14,boxShadow:"0 4px 14px -8px rgba(0,0,0,.18)"}}>
+          <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:9}}>
+            <span style={{width:28,height:28,borderRadius:"50%",background:LV[top].bg,display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,flexShrink:0}}>🔔</span>
+            <span style={{flex:1,fontSize:13,fontWeight:800,color:"#334155"}}>নজর দেওয়ার মতো {toBnDigits(issues.length)}টা বিষয়</span>
+            <span style={{fontSize:9.5,color:"#94a3b8"}}>চাপলে সেই অংশে যাবে</span>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6}}>
+            {issues.map((it,i)=>{const L=LV[it.lv];return<button key={i} className="hb" onClick={()=>document.getElementById(it.z)?.scrollIntoView({behavior:"smooth",block:"start"})} style={{display:"flex",alignItems:"center",gap:6,background:L.bg,border:`1px solid ${L.bd}`,borderRadius:10,padding:"8px 9px",fontSize:11,fontWeight:700,color:L.c,textAlign:"left",minHeight:40,gridColumn:issues.length%2===1&&i===issues.length-1?"span 2":undefined}}>
+              <span style={{fontSize:14,flexShrink:0}}>{it.ic}</span><span style={{flex:1,minWidth:0,lineHeight:1.3}}>{it.t}</span><span style={{opacity:.55,flexShrink:0}}>›</span>
+            </button>})}
+          </div>
         </div>
       })()}
 
@@ -5776,46 +5837,92 @@ function Home({syncInfo,devices,dbHistory,photoMove,onMovePhotosOut,handoffRepor
       </div>}
 
       {/* স্তরে লাফ দেওয়ার বার — লম্বা স্ক্রলে নিচের অংশ যাতে হারিয়ে না যায় */}
-      <div style={{position:"sticky",top:0,zIndex:20,background:"rgba(255,255,255,0.97)",backdropFilter:"blur(4px)",margin:"0 -16px 12px",padding:"7px 10px",borderBottom:"1px solid #eee",display:"flex",justifyContent:"space-between",gap:4,overflowX:"auto"}}>
-        {[{e:"⚡",z:"z-urgent",c:"#b91c1c"},{e:"🔥",z:"z-today",c:"#0f766e"},{e:"📅",z:"z-trend",c:"#b45309"},{e:"📊",z:"z-health",c:"#1d4ed8"},{e:"🪵",z:"z-wood",c:"#065f46"},{e:"🚧",z:"z-perf",c:"#7c2d12"},{e:"⚙️",z:"z-sys",c:"#78716c"}].map(b=>{
-          const isActive=activeZone===b.z;
-          return<button key={b.z} onClick={()=>document.getElementById(b.z)?.scrollIntoView({behavior:"smooth",block:"start"})} style={{background:isActive?b.c+"30":b.c+"14",border:`1.5px solid ${isActive?b.c:b.c+"55"}`,borderRadius:9,minWidth:isActive?54:44,minHeight:isActive?44:38,fontSize:isActive?21:17,flexShrink:1,flexGrow:1,cursor:"pointer",outline:"none",WebkitTapHighlightColor:"transparent",transform:isActive?"scale(1.08)":"scale(1)",boxShadow:isActive?`inset 0 2px 5px ${b.c}66`:"none",transition:"all .15s"}}>{b.e}</button>
-        })}
-      </div>
+      {(()=>{
+        // v5.56: প্রতিটা বিভাগের নিজের রং; বারের পটভূমি চলতি বিভাগের হালকা রং; চলতি আইকন লাফিয়ে বড়
+        const ZB=[{e:"⚡",z:"z-urgent",c:"#dc2626"},{e:"🔥",z:"z-today",c:"#0f766e"},{e:"📅",z:"z-trend",c:"#d97706"},{e:"📊",z:"z-health",c:"#2563eb"},{e:"🪵",z:"z-wood",c:"#15803d"},{e:"🚧",z:"z-perf",c:"#9a3412"},{e:"⚙️",z:"z-sys",c:"#64748b"}];
+        const ac=(ZB.find(b=>b.z===activeZone)||ZB[0]).c;
+        return<div className="zbar" data-zone-bar={activeZone} style={{position:"sticky",top:0,zIndex:20,backgroundColor:"#fff",backgroundImage:`linear-gradient(180deg,${ac}30 0%,${ac}17 100%)`,backdropFilter:"blur(6px)",margin:"0 -16px 12px",padding:"9px 10px 10px",borderBottom:`2px solid ${ac}55`,display:"flex",justifyContent:"space-between",gap:6,overflowX:"auto",transition:"background-image .35s ease,border-color .35s ease"}}>
+          {ZB.map(b=>{
+            const on=activeZone===b.z;
+            return<button key={b.z} className="zb" data-zone-btn={b.z} data-on={on?"1":undefined} onClick={()=>document.getElementById(b.z)?.scrollIntoView({behavior:"smooth",block:"start"})} style={{background:on?"#fff":`${b.c}1c`,border:`${on?2:1.5}px solid ${on?b.c:b.c+"45"}`,borderRadius:13,minWidth:40,height:40,fontSize:on?21:18,flex:"1 1 0",cursor:"pointer",outline:"none",position:"relative",zIndex:on?2:1,transform:on?"translateY(-2px) scale(1.14)":"none",boxShadow:on?`0 8px 16px -6px ${b.c}aa, 0 0 0 3px ${b.c}26`:"none",filter:on?"none":"saturate(.85)"}}>{b.e}</button>
+          })}
+        </div>;
+      })()}
 
 
-      {/* Action buttons */}
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:14}}>
-        <button onClick={onNew} style={{background:RED,color:"white",border:"none",borderRadius:11,padding:"13px 8px",fontSize:13,fontWeight:700}}>+ নতুন অর্ডার</button>
-        <button onClick={onExpense} style={{background:"#0f766e",color:"white",border:"none",borderRadius:11,padding:"13px 8px",fontSize:13,fontWeight:700}}>+ খরচ যোগ করুন</button>
-        <button onClick={onHist} style={{background:"white",color:RED,border:`2px solid ${RED}`,borderRadius:11,padding:"11px 8px",fontSize:12,fontWeight:700}}>অর্ডার ইতিহাস</button>
-        <button onClick={onManage} style={{background:"white",color:"#6d28d9",border:"2px solid #6d28d9",borderRadius:11,padding:"11px 8px",fontSize:12,fontWeight:700}}>⚙ ডেটাবেস</button>
-        <button onClick={onWoodStock} style={{background:"white",color:"#065f46",border:"2px solid #065f46",borderRadius:11,padding:"11px 8px",fontSize:12,fontWeight:700,gridColumn:"span 2"}}>🪵 কাঠের স্টক ব্যবস্থাপনা</button>
-        <button onClick={onPayroll} style={{background:PAY,color:"white",border:"none",borderRadius:11,padding:"13px 8px",fontSize:13,fontWeight:700,gridColumn:"span 2"}}>👷 পে-রোল ব্যবস্থাপনা</button>
-        <button onClick={onPLReport} style={{background:"#B45309",color:"white",border:"none",borderRadius:11,padding:"13px 8px",fontSize:13,fontWeight:700,gridColumn:"span 2"}}>📊 লাভ-ক্ষতি রিপোর্ট</button>
-      </div>
+      {/* v5.57: মূল বোতাম — উপরে দুটো বড় কাজ (নিত্যদিনের লেখা), নিচে পাঁচটা পাতার একই রকম টাইল */}
+      {(()=>{
+        const td=todayStr();
+        const todayExp=(expenses||[]).filter(e=>e&&String(e.date||"").slice(0,10)===td).reduce((a,e)=>a+(parseFloat(e.total)||0),0);
+        const big=[
+          {on:onNew,t:"নতুন অর্ডার",sub:`এই মাসে ${toBnDigits(stats.thisMonthCount||0)}টা অর্ডার`,g:"linear-gradient(135deg,#e11d48 0%,#c41e3a 55%,#9f1239 100%)",sh:"#c41e3a"},
+          {on:onExpense,t:"খরচ যোগ করুন",sub:todayExp>0?`আজ ${money(Math.round(todayExp))}`:"আজকের খরচ লিখুন",g:"linear-gradient(135deg,#14b8a6 0%,#0f766e 60%,#115e59 100%)",sh:"#0f766e"}];
+        const tiles=[
+          {on:onHist,ic:"📋",t:"অর্ডার ইতিহাস",c:"#be123c"},
+          {on:onManage,ic:"🗂️",t:"ডেটাবেস",c:"#6d28d9"},
+          {on:onWoodStock,ic:"🪵",t:"কাঠের স্টক",c:"#047857"},
+          {on:onPayroll,ic:"👷",t:"পে-রোল",c:"#0E7490"},
+          {on:onPLReport,ic:"📊",t:"লাভ-ক্ষতি রিপোর্ট",c:"#B45309"}];
+        return<>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
+            {big.map(b=><button key={b.t} className="hb" data-home-btn={b.t} onClick={b.on} style={{background:b.g,color:"white",border:"none",borderRadius:16,padding:"12px 11px",display:"flex",alignItems:"center",gap:9,textAlign:"left",minHeight:68,boxShadow:`0 8px 18px -10px ${b.sh}`}}>
+              <span style={{width:36,height:36,borderRadius:"50%",background:"rgba(255,255,255,.22)",border:"1.5px solid rgba(255,255,255,.35)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,fontWeight:700,flexShrink:0,lineHeight:1}}>+</span>{" "}
+              <span style={{display:"flex",flexDirection:"column",minWidth:0}}>
+                <span style={{fontSize:14.5,fontWeight:800,lineHeight:1.2}}>{b.t}</span>
+                <span data-sub={b.sub} style={{fontSize:9.5,opacity:.88,marginTop:3,fontWeight:500,lineHeight:1.2}}></span>
+              </span>
+            </button>)}
+          </div>
+          {/* v5.60: পাতার বোতাম — দুই কলামের পরিষ্কার সাদা কার্ড, এক লাইনের নাম, শেষেরটা পুরো চওড়া */}
+          <div data-page-btns="1" style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:16}}>
+            {tiles.map((b,i)=><button key={b.t} className="hb" data-home-btn={b.t} onClick={b.on} style={{background:"#fff",border:"1px solid #ece9e5",borderRadius:14,padding:"10px 11px",display:"flex",alignItems:"center",gap:10,textAlign:"left",minHeight:54,boxShadow:"0 3px 10px -8px rgba(0,0,0,.35)",gridColumn:i===tiles.length-1&&tiles.length%2===1?"span 2":undefined}}>
+              <span style={{width:34,height:34,borderRadius:10,background:b.c+"14",display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,flexShrink:0}}>{b.ic}</span>{" "}
+              <span style={{flex:1,minWidth:0,fontSize:13,fontWeight:700,color:"#1f2937",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{b.t}</span>
+              <span data-icon="›" style={{color:b.c,opacity:.55,fontSize:18,fontWeight:700,flexShrink:0,lineHeight:1}}></span>
+            </button>)}
+          </div>
+        </>;
+      })()}
 
       <div id="z-urgent" style={{scrollMarginTop:56,fontSize:11,fontWeight:800,color:"#b91c1c",letterSpacing:"0.3px",margin:"18px 0 8px",paddingBottom:4,borderBottom:"2px solid #b91c1c22"}}>⚡ এখনই নজর দিন</div>
       {/* Pie chart - running orders by category */}
       {stats.catPie.length>0&&<div style={{marginBottom:18}}>
-        <div style={{fontWeight:700,fontSize:13,color:"#222",marginBottom:2}}>🥧 চলমান ফার্নিচার — ক্যাটাগরি অনুযায়ী</div>
-        <div style={{fontSize:9,color:"#999",marginBottom:8}}>ডেলিভারি না হওয়া অর্ডারের কয়টি ফার্নিচার (অর্ডারের সংখ্যা নয়)</div>
-        <div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"14px"}}>
-          <PieChart3D data={stats.catPie} showCount={true} countSuffix="টি"/>
+        <div style={{fontWeight:700,fontSize:13,color:"#222",marginBottom:2}}>🍩 চলমান ফার্নিচার — ক্যাটাগরি অনুযায়ী</div>
+        <div style={{fontSize:9,color:"#999",marginBottom:8}}>ডেলিভারি না হওয়া অর্ডারের কয়টি ফার্নিচার (অর্ডারের সংখ্যা নয়) · রঙে বা নামে চাপলে সেটা আলাদা করে দেখায়</div>
+        <div style={{background:"white",border:"1px solid #eee",borderRadius:14,padding:"16px 12px 12px"}}>
+          <DonutChart data={stats.catPie} unit="টি" centerLabel="চলমান ফার্নিচার"/>
+          <div style={{fontSize:10,color:"#6b7280",textAlign:"center",marginTop:10,paddingTop:8,borderTop:"1px dashed #eee"}}>মোট <b style={{color:"#111827"}}>{stats.catPie.reduce((a,d)=>a+d.value,0)}টি</b> ফার্নিচার · <b style={{color:"#111827"}}>{stats.running.length}টা</b> অর্ডারে{stats.catPie[0]&&stats.catPie[0].key!=="__rest"?<> · সবচেয়ে বেশি <b style={{color:"#111827"}}>{stats.catPie[0].label}</b></>:null}</div>
         </div>
       </div>}
 
-      {/* Quick Stats */}
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:10}}>
-        {[{l:"চলমান অর্ডার",v:stats.running.length,c:"#f97316"},{l:"এই মাসে অর্ডার",v:stats.thisMonthCount,c:"#1d4ed8"},{l:"গ্রাহকের কাছে পাওনা",v:money(stats.totalOutstanding),c:RED,small:true}].map(s=><div key={s.l} style={{background:s.c+"12",borderRadius:10,padding:"10px 6px",borderLeft:`3px solid ${s.c}`,textAlign:"center"}}><div style={{fontSize:s.small?14:22,fontWeight:800,color:s.c}}>{s.v}</div><div style={{fontSize:9,color:"#666",marginTop:1}}>{s.l}</div></div>)}
-      </div>
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:16}}>
-        <div style={{background:(stats.cfNet<0?RED:"#166534")+"12",borderRadius:10,padding:"10px 6px",borderLeft:`3px solid ${stats.cfNet<0?RED:"#166534"}`,textAlign:"center"}}>
-          <div style={{fontSize:14,fontWeight:800,color:stats.cfNet<0?RED:"#166534"}}>{stats.cfNet<0?"−":""}{money(Math.abs(Math.round(stats.cfNet)))}</div>
-          <div style={{fontSize:9,color:"#666",marginTop:1}}>৩০ দিনের নগদ প্রবাহ</div>
-        </div>
-        {[{l:"গড় অর্ডার মূল্য",v:money(stats.avgOrderValue),c:"#6d28d9",small:true},{l:"মোট মূল্য (সর্বকালের)",v:money(stats.totalRevenue),c:"#166534",small:true}].map(s=><div key={s.l} style={{background:s.c+"12",borderRadius:10,padding:"10px 6px",borderLeft:`3px solid ${s.c}`,textAlign:"center"}}><div style={{fontSize:s.small?14:22,fontWeight:800,color:s.c}}>{s.v}</div><div style={{fontSize:9,color:"#666",marginTop:1}}>{s.l}</div></div>)}
-      </div>
+      {/* v5.59: ৯টা টাইল তিন সারিতে — কাজ, টাকা, বিক্রি ("৩০ দিনের নগদ প্রবাহ" বাদ) */}
+      {(()=>{
+        const td=todayStr(),mon=td.slice(0,7);
+        const act=(orders||[]).filter(o=>o&&!o.cancelled);
+        const paidOf=(o)=>(o.payments||[]).reduce((a,p)=>a+(parseFloat(p&&p.amount)||0),0);
+        const late=stats.running.filter(o=>o.cust&&o.cust.delivery&&o.daysLeft<0).length;
+        const soon=stats.running.filter(o=>o.cust&&o.cust.delivery&&o.daysLeft>=0&&o.daysLeft<=7).length;
+        const dueAfter=act.filter(o=>o.delivered).map(o=>Math.max(0,(parseFloat(o.cust.total)||0)-paidOf(o))).filter(v=>v>0.5);
+        const monthSales=act.filter(o=>String((o.cust&&o.cust.date)||"").slice(0,7)===mon).reduce((a,o)=>a+(parseFloat(o.cust.total)||0),0);
+        const goRun=()=>document.getElementById("z-today")?.scrollIntoView({behavior:"smooth",block:"start"});
+        // v5.61: ৬টা টাইল — কাজ আর বিক্রি/টাকা; নিচের গ্রাফে যা আছে তা এখানে নয়
+        const rows=[
+          [{l:"চলমান অর্ডার",v:stats.running.length,c:"#f97316",go:goRun},
+           {l:"দেরি হওয়া ডেলিভারি",v:late,c:late?"#dc2626":"#16a34a",sub:late?"তারিখ পার, কাজ চলছে":"সব সময়মতো",go:goRun},
+           {l:"৭ দিনে ডেলিভারি",v:soon,c:"#d97706",sub:"আগামী এক সপ্তাহ",go:goRun}],
+          [{l:"এই মাসে অর্ডার",v:stats.thisMonthCount,c:"#1d4ed8",sub:money(Math.round(monthSales)),go:onHistMonth},
+           {l:"গ্রাহকের কাছে পাওনা",v:money(stats.totalOutstanding),c:RED,small:true},
+           {l:"ডেলিভারির পরেও বাকি",v:money(Math.round(dueAfter.reduce((a,b)=>a+b,0))),c:"#be123c",small:true,sub:`${dueAfter.length}টা অর্ডার`}]];
+        return<div data-tiles="1" style={{marginBottom:16}}>
+          {rows.map((r,ri)=><div key={ri} style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:8}}>
+            {r.map(x=><div key={x.l} data-tile={x.l} className={x.go?"hb":undefined} onClick={x.go} style={{background:x.c+"12",borderRadius:10,padding:"10px 5px 8px",borderLeft:`3px solid ${x.c}`,textAlign:"center",minHeight:74,display:"flex",flexDirection:"column",justifyContent:"center"}}>
+              <div style={{fontSize:x.small?14:22,fontWeight:800,color:x.c,lineHeight:1.15}}>{x.v}</div>
+              <div style={{fontSize:9,color:"#555",marginTop:2,fontWeight:600}}>{x.l}</div>
+              {x.sub&&<div style={{fontSize:8.5,color:"#999",marginTop:1}}>{x.sub}</div>}
+            </div>)}
+          </div>)}
+        </div>;
+      })()}
       {stats.readyNotCollected&&stats.readyNotCollected.length>0&&<div style={{background:"#eff6ff",border:"1.5px solid #93c5fd",borderRadius:10,padding:"12px 14px",marginBottom:14}}>        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:3}}>
           <span style={{fontSize:12,fontWeight:700,color:"#1d4ed8"}}>📦 তৈরি শেষ, গ্রাহক নেননি ({stats.readyNotCollected.length}টি)</span>
         </div>
@@ -10028,7 +10135,7 @@ function Preview({syncInfo,online,order:orderRaw,onBack,slip,setSlip,onUpdate:on
 }
 
 /* ── HISTORY (with search) ── */
-function Hist({syncInfo,online,orders,db,onBack,onView,highlightNo,q,setQ,statusFilter,setStatusFilter,catFilter,setCatFilter,sortMode,setSortMode}){
+function Hist({syncInfo,online,orders,db,onBack,onView,highlightNo,q,setQ,statusFilter,setStatusFilter,catFilter,setCatFilter,sortMode,setSortMode,timeFilter="all",setTimeFilter,resetFilters}){
   // ── সার্চ/ফিল্টার/সর্ট এখন এই পেজের নিজের সাময়িক মেমোরিতে না — parent থেকে prop হিসেবে আসে
   // (নেভিগেশন স্ট্যাকে সংরক্ষিত), যাতে কোনো অর্ডারে ঢুকে ব্যাক করে ফিরলে যা বেছে নিয়েছিলেন
   // (সার্চ লেখা, স্ট্যাটাস ট্যাব, ক্যাটাগরি, সর্ট) তাই থেকে যায় ──
@@ -10061,16 +10168,21 @@ function Hist({syncInfo,online,orders,db,onBack,onView,highlightNo,q,setQ,status
     ranked.forEach((label,i)=>{rankMap[label]=i+1});
     return rankMap;
   },[orders]);
-  const filtered=useMemo(()=>{
+  // v5.62: অবস্থা, সময় আর ক্যাটাগরি — আলাদা আলাদা; প্রতিটা বোতামের পাশের সংখ্যা বাকি দুটো মেনে
+  const curMonth=todayStr().slice(0,7);
+  const statusOk=(o,st)=>st==="running"?(!o.cancelled&&!o.delivered&&!isOrderFullyProgressed(o)):st==="delivered"?!!o.delivered:st==="cancelled"?!!o.cancelled:true;
+  const timeOk=(o,tf)=>tf==="month"?String((o.cust&&o.cust.date)||"").slice(0,7)===curMonth:true;
+  const baseList=useMemo(()=>{
     let list=orders;
     if(q.trim()){
       const s=q.trim().toLowerCase();
       list=list.filter(o=>o.cust.name.toLowerCase().includes(s)||o.cust.phone.includes(s)||o.no.toLowerCase().includes(s));
     }
-    if(statusFilter==="running")list=list.filter(o=>!o.cancelled&&!o.delivered&&!isOrderFullyProgressed(o));
-    else if(statusFilter==="delivered")list=list.filter(o=>o.delivered);
-    else if(statusFilter==="cancelled")list=list.filter(o=>o.cancelled);
     if(catFilter!=="all")list=list.filter(o=>categoryOf(o).includes(catFilter));
+    return list;
+  },[orders,q,catFilter,db]);
+  const filtered=useMemo(()=>{
+    let list=baseList.filter(o=>statusOk(o,statusFilter)&&timeOk(o,timeFilter));
     if(sortMode==="rank"){
       return[...list].sort((a,b)=>{
         const ra=customerRank[(a.cust.phone||"").trim()]||9999,rb=customerRank[(b.cust.phone||"").trim()]||9999;
@@ -10080,7 +10192,7 @@ function Hist({syncInfo,online,orders,db,onBack,onView,highlightNo,q,setQ,status
     const runningList=list.filter(o=>!o.delivered).sort((a,b)=>new Date(b.at||b.cust.date)-new Date(a.at||a.cust.date));
     const deliveredList=list.filter(o=>o.delivered).sort((a,b)=>new Date(b.deliveredAt||b.cust.delivery||0)-new Date(a.deliveredAt||a.cust.delivery||0));
     return[...runningList,...deliveredList];
-  },[orders,q,statusFilter,catFilter,sortMode,customerRank]);
+  },[baseList,statusFilter,timeFilter,sortMode,customerRank]);
 
   return<div style={{minHeight:"100vh",background:"#f8f8f8"}}>
     {!(online!==false&&syncInfo&&syncInfo.fresh)&&<div style={{background:"#fef2f2",color:"#991b1b",fontSize:11.5,fontWeight:700,padding:"8px 14px",lineHeight:1.5,borderBottom:"1px solid #fecaca"}}>⚠️ এই ডিভাইস এখনো সার্ভারের সাথে মেলানো হয়নি — এই তালিকার বাকি, পেমেন্ট বা ডেলিভারি চূড়ান্ত ধরে নেবেন না।</div>}
@@ -10089,19 +10201,42 @@ function Hist({syncInfo,online,orders,db,onBack,onView,highlightNo,q,setQ,status
       <span style={{fontWeight:700,fontSize:15}}>অর্ডার ইতিহাস ({orders.length})</span>
     </div>
     <div style={{padding:"14px",maxWidth:560,margin:"0 auto"}}>
-      <input value={q} onChange={e=>setQ(e.target.value)} placeholder="🔍 নাম বা মোবাইল দিয়ে খুঁজুন..." style={{width:"100%",border:"1.5px solid #ddd",borderRadius:11,padding:"13px 15px",fontSize:14,outline:"none",marginBottom:10,background:"white"}}/>
-      <div style={{display:"flex",gap:6,marginBottom:8,overflowX:"auto"}}>
-        {[{v:"all",l:"সব"},{v:"running",l:"চলমান"},{v:"delivered",l:"ডেলিভারড"},{v:"cancelled",l:"বাতিল"}].map(f=>
-          <button key={f.v} onClick={()=>setStatusFilter(f.v)} style={{flexShrink:0,minHeight:36,padding:"7px 13px",borderRadius:20,border:statusFilter===f.v?"none":"1px solid #ddd",background:statusFilter===f.v?RED:"white",color:statusFilter===f.v?"white":"#666",fontSize:11,fontWeight:600}}>{f.l}</button>
-        )}
-        <button onClick={()=>setSortMode(sortMode==="rank"?"recent":"rank")} style={{flexShrink:0,minHeight:36,padding:"7px 13px",borderRadius:20,border:sortMode==="rank"?"none":"1.5px solid #fbbf24",background:sortMode==="rank"?"#92400e":"#fffbeb",color:sortMode==="rank"?"white":"#92400e",fontSize:11,fontWeight:700}}>👑 কাস্টমার র‍্যাংক</button>
+      <div style={{position:"relative",marginBottom:10}}>
+        <input value={q} onChange={e=>setQ(e.target.value)} placeholder="🔍 নাম, মোবাইল বা অর্ডার নম্বর..." style={{width:"100%",border:"1.5px solid #ddd",borderRadius:12,padding:"13px 40px 13px 15px",fontSize:14,outline:"none",background:"white",boxSizing:"border-box"}}/>
+        {q&&<button onClick={()=>setQ("")} style={{position:"absolute",right:8,top:"50%",transform:"translateY(-50%)",width:28,height:28,borderRadius:"50%",border:"none",background:"#f1f1f1",color:"#666",fontSize:13}}>✕</button>}
       </div>
-      <div style={{display:"flex",gap:6,marginBottom:10}}>
-        <select value={catFilter} onChange={e=>setCatFilter(e.target.value)} style={{flex:1,border:"1.5px solid #ddd",borderRadius:9,padding:"9px 8px",fontSize:11,background:"white"}}>
-          <option value="all">সব ক্যাটাগরি</option>
-          {allCategories.map(c=><option key={c} value={c}>{c}</option>)}
-        </select>
-      </div>
+      {/* v5.62: ফিল্টার — এক কার্ডে চার সারি, প্রতিটা সারিতে একটাই বাছা যায় */}
+      {(()=>{
+        const cnt=(fn)=>baseList.filter(fn).length;
+        const seg=(label,val,set,opts,color)=><div data-hseg={label} style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
+          <div style={{width:50,flexShrink:0,fontSize:10.5,fontWeight:800,color:"#6b7280"}}>{label}</div>
+          <div style={{flex:1,minWidth:0,display:"flex",background:"#f4f4f5",borderRadius:10,padding:3,gap:3}}>
+            {opts.map(o=>{const on=val===o.v;return<button key={o.v} data-hopt={o.v} onClick={()=>set(o.v)} style={{flex:1,minWidth:0,border:"none",borderRadius:8,padding:"7px 2px",background:on?color:"transparent",color:on?"white":"#374151",fontSize:11,fontWeight:on?800:600,lineHeight:1.2,boxShadow:on?"0 2px 6px -3px rgba(0,0,0,.4)":"none",transition:"background .15s"}}>
+              {on?"✓ ":""}{o.l}{o.n!==undefined&&<span style={{display:"block",fontSize:9,fontWeight:600,opacity:on?.9:.6,marginTop:1}}>{o.n}</span>}
+            </button>})}
+          </div>
+        </div>;
+        const active=statusFilter!=="all"||timeFilter!=="all"||catFilter!=="all"||sortMode!=="recent"||!!q;
+        return<div data-hist-filters="1" style={{background:"white",borderRadius:14,padding:"11px 10px 3px",marginBottom:10,boxShadow:"0 2px 10px -6px rgba(0,0,0,.2)",border:"1px solid #eee"}}>
+          {seg("অবস্থা",statusFilter,setStatusFilter,[
+            {v:"all",l:"সব",n:cnt(o=>timeOk(o,timeFilter))},
+            {v:"running",l:"চলমান",n:cnt(o=>timeOk(o,timeFilter)&&statusOk(o,"running"))},
+            {v:"delivered",l:"ডেলিভারড",n:cnt(o=>timeOk(o,timeFilter)&&statusOk(o,"delivered"))},
+            {v:"cancelled",l:"বাতিল",n:cnt(o=>timeOk(o,timeFilter)&&statusOk(o,"cancelled"))}],RED)}
+          {setTimeFilter&&seg("সময়",timeFilter,setTimeFilter,[
+            {v:"all",l:"সব সময়",n:cnt(o=>statusOk(o,statusFilter))},
+            {v:"month",l:"📅 এই মাসের অর্ডার",n:cnt(o=>statusOk(o,statusFilter)&&timeOk(o,"month"))}],"#1d4ed8")}
+          <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
+            <div style={{width:50,flexShrink:0,fontSize:10.5,fontWeight:800,color:"#6b7280"}}>ক্যাটাগরি</div>
+            <select value={catFilter} onChange={e=>setCatFilter(e.target.value)} style={{flex:1,minWidth:0,border:catFilter!=="all"?"1.5px solid #6d28d9":"1.5px solid #e5e7eb",borderRadius:10,padding:"9px 8px",fontSize:12,fontWeight:catFilter!=="all"?800:500,color:catFilter!=="all"?"#6d28d9":"#374151",background:catFilter!=="all"?"#f5f3ff":"white"}}>
+              <option value="all">সব ক্যাটাগরি</option>
+              {allCategories.map(c=><option key={c} value={c}>{c}</option>)}
+            </select>
+          </div>
+          {seg("সাজানো",sortMode==="rank"?"rank":"recent",setSortMode,[{v:"recent",l:"🕒 সাম্প্রতিক আগে"},{v:"rank",l:"👑 কাস্টমার র‍্যাংক"}],"#92400e")}
+          {active&&resetFilters&&<button onClick={resetFilters} style={{display:"block",margin:"0 auto 8px",background:"none",border:"none",color:RED,fontSize:11,fontWeight:700,padding:"4px 10px"}}>✕ সব ফিল্টার তুলে দিন</button>}
+        </div>;
+      })()}
       {(()=>{
         const fCount=filtered.length;
         // ── ক্যাটাগরি বাছা থাকলে শুধু সেই ক্যাটাগরির আইটেমগুলোর দাম যোগ হবে, পুরো অর্ডারের
@@ -10116,7 +10251,7 @@ function Hist({syncInfo,online,orders,db,onBack,onView,highlightNo,q,setQ,status
         return<div style={{display:"flex",gap:6,marginBottom:14,overflowX:"auto"}}>
           <div style={{flexShrink:0,background:"white",border:"1px solid #eee",borderRadius:9,padding:"7px 12px",textAlign:"center"}}><div style={{fontSize:14,fontWeight:800,color:"#222"}}>{fCount}</div><div style={{fontSize:8,color:"#999"}}>অর্ডার</div></div>
           <div style={{flexShrink:0,background:"white",border:"1px solid #eee",borderRadius:9,padding:"7px 12px",textAlign:"center"}}><div style={{fontSize:12,fontWeight:800,color:"#166534"}}>{money(fTotal)}</div><div style={{fontSize:8,color:"#999"}}>মোট মূল্য</div></div>
-          <div style={{flexShrink:0,background:"white",border:"1px solid #eee",borderRadius:9,padding:"7px 12px",textAlign:"center"}}><div style={{fontSize:12,fontWeight:800,color:"#1d4ed8"}}>{money(fAvg)}</div><div style={{fontSize:8,color:"#999"}}>গড় মূল্য</div></div>
+          <div style={{flexShrink:0,background:"white",border:"1px solid #eee",borderRadius:9,padding:"7px 12px",textAlign:"center"}}><div style={{fontSize:12,fontWeight:800,color:"#1d4ed8"}}>{money(Math.round(fAvg))}</div><div style={{fontSize:8,color:"#999"}}>গড় মূল্য</div></div>
           {popRank&&<div style={{flexShrink:0,background:"#fffbeb",border:"1px solid #fde68a",borderRadius:9,padding:"7px 12px",textAlign:"center"}}><div style={{fontSize:14,fontWeight:800,color:"#92400e"}}>#{popRank}</div><div style={{fontSize:8,color:"#92400e"}}>জনপ্রিয়তায়</div></div>}
         </div>
       })()}
