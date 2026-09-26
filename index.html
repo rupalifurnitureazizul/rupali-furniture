@@ -112,7 +112,8 @@ function makeThumb(dataUrl,maxDim=260,quality=0.55){
   });
 }
 // অর্ডারের নথিতে লেখার আগে পূর্ণ ছবিটা বাদ দেওয়া হয় — ওটা আলাদা নথিতে গেছে
-const stripPhoto=(im)=>{if(!im)return im;const{src,...rest}=im;return rest};
+// v5.49: শুধু যে ছবির পূর্ণ কপি আলাদা জায়গায় জমা (id আছে) — নতুন অর্ডারের ভেতরে থাকা ছবি সরালে মুছেই যেত
+const stripPhoto=(im)=>{if(!im||!im.id)return im;const{src,...rest}=im;return rest};
 // পর্দায় দেখানোর আগে পূর্ণ ছবিটা আবার বসিয়ে দেওয়া হয় (না এলে থাম্বনেইলই দেখায়)
 const withFullPhotos=(list,fulls)=>(list||[]).map(im=>{
   if(!im)return im;
@@ -175,7 +176,7 @@ function compressImage(file,maxDim=1000,quality=0.70,maxBytes=45000){
 /* ── FULL-RESOLUTION LOCAL FOLDER STORAGE (desktop Chrome/Edge/Brave only) ──
    Original, uncompressed images are saved as real files in a folder you choose
    on your computer. Only a small compressed thumbnail syncs to the cloud/mobile. */
-const BUILD_TAG="5.47";
+const BUILD_TAG="5.54";
 const FS_SUPPORTED=typeof window!=="undefined"&&"showDirectoryPicker" in window;
 function idbOpen(){
   return new Promise((resolve,reject)=>{
@@ -777,6 +778,46 @@ function itemCatOf(db,it){
   if(ck&&db[ck]&&isCatEntry(ck,db[ck]))return{key:ck,label:db[ck].bn||ck};
   return OTHER_CAT;
 }
+// v5.54: আইটেমের দাম — শুধু যা নিশ্চিত জানা যায়, আন্দাজে ভাগ নয়।
+//  • আইটেমে দাম লেখা → দাম × পরিমাণ
+//  • অর্ডারে দাম-ছাড়া আইটেম একটাই → অর্ডারের মোট দাম থেকে বাকিটা (নিশ্চিত)
+//  • দাম-ছাড়া আইটেম একাধিক → আলাদা করে জানা নেই (null) — ড্যাশবোর্ডের "দাম বসান" থেকে বসাতে হবে
+const itemQtyOf=(it)=>{const q=parseFloat(it&&it.qty);return isFinite(q)&&q>0?q:1};
+const itemPricedValue=(it)=>{const p=parseFloat(it&&it.price);return isFinite(p)&&p>0?p*itemQtyOf(it):null};
+const orderUnpricedRest=(o)=>Math.max(0,(parseFloat(o&&o.cust&&o.cust.total)||0)-((o&&o.items)||[]).reduce((a,it)=>a+(itemPricedValue(it)||0),0));
+function orderItemValues(o){
+  const base=((o&&o.items)||[]).map(itemPricedValue);
+  const miss=base.map((v,i)=>v===null?i:-1).filter(i=>i>=0);
+  if(miss.length===1)base[miss[0]]=orderUnpricedRest(o);
+  return base;
+}
+// একটা অর্ডারের টাকা ক্যাটাগরি অনুযায়ী — দাম-ছাড়া আইটেমগুলো সবাই একই ক্যাটাগরির হলে বাকি টাকাটা
+// নিশ্চিতভাবে সেই ক্যাটাগরির; ভিন্ন ভিন্ন হলে জানা নেই (unknown = কয়টির দাম জানা নেই)
+function orderCatValues(o,db){
+  const out={},un=[];
+  ((o&&o.items)||[]).filter(Boolean).forEach(it=>{
+    const c=itemCatOf(db,it);
+    const e=out[c.key]||(out[c.key]={key:c.key,label:c.label,value:0,unknown:0});
+    const v=itemPricedValue(it);
+    if(v!==null)e.value+=v;else un.push({it,c});
+  });
+  if(un.length){
+    if(new Set(un.map(x=>x.c.key)).size===1)out[un[0].c.key].value+=orderUnpricedRest(o);
+    else un.forEach(x=>{out[x.c.key].unknown+=itemQtyOf(x.it)});
+  }
+  return out;
+}
+// v5.53: জনপ্রিয়তা = কয়টি ফার্নিচার (এক অর্ডারে ৫টা দরজা = ৫টি), তারপর টাকা
+function catPopularity(orders,db,keep){
+  const agg={};
+  (orders||[]).filter(o=>o&&!o.cancelled&&(!keep||keep(o))).forEach(o=>{
+    Object.values(orderCatValues(o,db)).forEach(x=>{const a=agg[x.key]||(agg[x.key]={key:x.key,label:x.label,count:0,pieces:0,value:0,unknown:0});a.count+=1;a.value+=x.value;a.unknown+=x.unknown});
+    (o.items||[]).forEach(it=>{if(!it)return;const c=itemCatOf(db,it);if(agg[c.key])agg[c.key].pieces+=itemQtyOf(it)});
+  });
+  return Object.values(agg).sort((a,b)=>(b.pieces-a.pieces)||(b.value-a.value)||(b.count-a.count));
+}
+// দাম বসানো দরকার — দাম-ছাড়া আইটেম একাধিক (কোনটার দাম কত আলাদা করে জানা নেই)
+const orderNeedsItemPrices=(o)=>!!o&&!o.cancelled&&((o.items||[]).filter(it=>it&&itemPricedValue(it)===null).length>=2);
 // চলমান অর্ডার — ক্যাটাগরি অনুযায়ী পিসের সংখ্যা। ৮টার বেশি ক্যাটাগরি হলে বাকিগুলো একসাথে
 // "বাকি"-তে — আগে বাদ পড়ত, ফলে বাকিদের শতাংশ বাস্তবের চেয়ে বেশি দেখাত
 function buildCatPie(running,db,colors){
@@ -806,6 +847,17 @@ const toISO=(dt)=>`${dt.getUTCFullYear()}-${String(dt.getUTCMonth()+1).padStart(
 const addDays=(dateStr,days)=>{const d=parseISO(dateStr);d.setUTCDate(d.getUTCDate()+days);return toISO(d)};
 const monthsAgo=(dateStr,months)=>{const d=parseISO(dateStr);d.setUTCMonth(d.getUTCMonth()-months);return toISO(d)};
 const weekEndThursday=(dateStr)=>{const d=parseISO(dateStr);const dow=d.getUTCDay();const add=(4-dow+7)%7;d.setUTCDate(d.getUTCDate()+add);return toISO(d)};
+// v5.50: কর্মীর দৈনিক হার — কোন সপ্তাহ (বৃহস্পতিবারের তারিখ) থেকে কত। rateHistory না থাকলে dailyRate
+// সব সপ্তাহে (আগের মতো)। প্রথম বদলের সময় আগের হার "শুরু থেকে" (from:"") হিসেবে থেকে যায়।
+function workerRateHist(w){return((w&&w.rateHistory)||[]).filter(h=>h&&typeof h.from==="string"&&parseFloat(h.rate)>0).slice().sort((a,b)=>a.from.localeCompare(b.from))}
+function workerRateOn(w,weekEnd){
+  if(!w)return 0;
+  const hist=workerRateHist(w);
+  if(!hist.length)return parseFloat(w.dailyRate)||0;
+  let r=parseFloat(hist[0].rate)||0;
+  hist.forEach(h=>{if(h.from<=String(weekEnd||""))r=parseFloat(h.rate)||0});
+  return r;
+}
 const weekWorkDays=(weekEndStr)=>{const days=[];for(let i=6;i>=0;i--)days.push(addDays(weekEndStr,-i));return days}; // [আগের শুক্র, শনি, রবি, সোম, মঙ্গল, বুধ, বৃহঃ]
 const DAY_LABELS_BN=["শুক্র","শনি","রবি","সোম","মঙ্গল","বুধ","বৃহঃ"];
 const attVal=(v)=>v===true?1:v===false||v===undefined||v===null?0:(parseFloat(v)||0);
@@ -1362,7 +1414,15 @@ function S2({order,onPrint,db,saveDb,galleries,onUpdateOrder,woodSettings,laborS
   const[editingPayIdx,setEditingPayIdx]=useState(null);
   const[payDraft,setPayDraft]=useState({date:"",amount:"",note:""});
 
-  const recalcTotal=(newItems)=>newItems.reduce((s,it)=>s+(parseFloat(it.price)||0)*(parseFloat(it.qty)||1),0);
+  // v5.54: অর্ডারে কোনো ফার্নিচারের আলাদা দাম লেখা না থাকলে মোট দামের "বাকি অংশ" ওগুলোরই — আইটেম
+  // থেকে নতুন করে যোগ করলে সেটা হারিয়ে মোট দাম কমে যেত (বাকি টাকার হিসাব ভুল হতো)। তখন শুধু পরিবর্তনটুকু:
+  // দাম-লেখা আইটেমের বদল যোগ/বিয়োগ; আগে দাম-ছাড়া আইটেমে দাম বসালে সেটা বাকি অংশ থেকেই (মোট অপরিবর্তিত)
+  const recalcTotal=(newItems,editedIdx)=>{
+    const sumP=(arr)=>arr.reduce((s,it)=>s+(itemPricedValue(it)||0),0);
+    if(!items.some(it=>it&&itemPricedValue(it)===null))return newItems.reduce((s,it)=>s+(parseFloat(it.price)||0)*(parseFloat(it.qty)||1),0);
+    const carve=(editedIdx!==undefined&&itemPricedValue(items[editedIdx])===null&&itemPricedValue(newItems[editedIdx])!==null)?itemPricedValue(newItems[editedIdx]):0;
+    return Math.max(0,(parseFloat(cust.total)||0)+sumP(newItems)-sumP(items)-carve);
+  };
   const startEditItem=(i)=>{
     const it=items[i];
     setEditIdx(i);
@@ -1374,7 +1434,7 @@ function S2({order,onPrint,db,saveDb,galleries,onUpdateOrder,woodSettings,laborS
     const newItems=[...items];
     const keepSections=newItems[editIdx].varKey===editForm.varKey?newItems[editIdx].sections:JSON.parse(JSON.stringify(variant.sections));
     newItems[editIdx]={...newItems[editIdx],catKey:editForm.catKey,varKey:editForm.varKey,variantBn:variant.bn,code:variant.code,tier:variant.tier||"M",wood:editForm.wood,woodBn:WOOD[editForm.wood].bn,qty:parseInt(editForm.qty)||1,price:editForm.price,notes:editForm.notes,sections:keepSections,itemId:newItems[editIdx].itemId||("item_"+Date.now()+"_"+Math.random().toString(36).slice(2,7))};
-    onUpdateOrder({...order,items:newItems,cust:{...cust,total:recalcTotal(newItems)}});
+    onUpdateOrder({...order,items:newItems,cust:{...cust,total:recalcTotal(newItems,editIdx)}});
     setEditIdx(null);setEditForm(null);
   };
   const removeItem=(i)=>{
@@ -1422,8 +1482,9 @@ function S2({order,onPrint,db,saveDb,galleries,onUpdateOrder,woodSettings,laborS
       addedFull[id]=compressed;
       newOnes.push({id,thumb,src:compressed,caption:`ছবি ${fileIdx}`,fileName:savedFull?relPath:null});
     }
-    if(Object.keys(addedFull).length&&onSavePhotos)await onSavePhotos(order.no,addedFull,[]);
-    if(newOnes.length>0)onUpdateOrder({...order,refImgs:[...images,...newOnes],refImg:undefined});
+    const stored=Object.keys(addedFull).length&&onSavePhotos?await onSavePhotos(order.no,addedFull,[]):false;
+    const keep=stored?newOnes:newOnes.map(({id,...r})=>r); // v5.49: জমা না হলে ছবি অর্ডারের ভেতরেই
+    if(keep.length>0)onUpdateOrder({...order,refImgs:[...images,...keep],refImg:undefined});
   };
   const removeImage=(idx)=>{
     const gone=images[idx];
@@ -1978,7 +2039,7 @@ function buildSpendLedger(expenses,payrollWeeks,workers,woodLots){
     Object.entries((wd&&wd.attendance)||{}).forEach(([wid,days])=>{
       const w=wById[wid],sn=snaps[wid];
       // কর্মীর প্রোফাইল থাকলে তার দৈনিক হার (পে-রোল পাতার মতোই); মুছে ফেলা হলে সেই সপ্তাহে রাখা হার
-      const rate=w?(parseFloat(w.dailyRate)||0):(sn?(parseFloat(sn.rate)||0):0);
+      const rate=w?workerRateOn(w,weekEnd):(sn?(parseFloat(sn.rate)||0):0); // v5.50: সেই সপ্তাহের হার
       const d=parseFloat(days)||0;
       const amt=d*rate;
       if(!amt)return;
@@ -2094,9 +2155,10 @@ function furnitureCosting(orders,ledger,woodSettings,laborSettings,db,bottleneck
   let expSum=0,wSum=0;Object.keys(weekW).forEach(w=>{if(expStart&&w>=expStart&&w<=thursdayOf(today)){wSum+=weekW[w];expSum+=(expW[w]||0)}});
   const expAvg=wSum>0?expSum/wSum:0;
   // ৪) ভাগ বসানো
+  const itemValCache=new Map();
   all.forEach(x=>{
     x.woodCost=itemWoodCost(x.it,x.o,woodSettings);
-    x.revenue=(parseFloat(x.it.price)||0)*x.qty;
+    x.revenue=(itemValCache.get(x.o)||(itemValCache.set(x.o,orderItemValues(x.o)).get(x.o)))[x.idx]||0; // v5.48
     // কাজই শুরু হয়নি (শুরু বা শেষ কোনো তারিখ নেই, ডেলিভারিও হয়নি) — এখনো কোনো বেতন/খরচ বসে না
     if(!x.start||!x.end){x.salary=0;x.expense=0;x.salBasis="none";return}
     let sal=0,exp=0,covS=0,covE=0;
@@ -4609,6 +4671,8 @@ function App({firebaseConfig,onResetConfig}){
       if(!fsRef.current)return;
       try{
         await fsRef.current.collection("orders").doc(o.no).set(o);
+        // v5.49: অর্ডারের সাথে আসা পূর্ণ ছবিগুলো এখনই আলাদা জায়গায় (ব্যর্থ হলে অর্ডারের ভেতরেই থাকে)
+        if(orderHasInlinePhotos(o))moveOneOrderPhotos(o).catch(()=>{});
       }catch(err){
         if(isLikelyTooLargeError(err))await autoResolveTooLarge(o.no,false,o);
         else queuePendingWrite({kind:"order",orderNo:o.no,data:o,merge:false});
@@ -4644,7 +4708,7 @@ function App({firebaseConfig,onResetConfig}){
     if(!fs)return{};
     try{
       const snap=await fs.collection(PHOTO_COL).where("no","==",no).get();
-      const map={};
+      const map=photoCacheRef.current[no]||{}; // v5.49: এর মধ্যে এই ডিভাইসে জমা হওয়াগুলোও থাকে
       snap.docs.forEach(d=>{const v=d.data()||{};if(v.src)map[d.id]=v.src});
       photoCacheRef.current[no]=map;
       return map;
@@ -4671,47 +4735,42 @@ function App({firebaseConfig,onResetConfig}){
   // ক্রম: (১) পূর্ণ ছবি আলাদা নথিতে লেখা (২) সার্ভার থেকে পড়ে মিলিয়ে দেখা
   // (৩) তবেই অর্ডারের নথিতে শুধু থাম্বনেইল রেখে পূর্ণ ছবিটা সরানো।
   // কোনো ধাপ ব্যর্থ হলে ওই অর্ডারে কিছুই বদলানো হয় না — ছবি হারানোর পথ নেই ──
+  // ── v5.49: একটা অর্ডারের ভেতরে থাকা পূর্ণ ছবিগুলো আলাদা জায়গায় — (১) লেখা (২) সার্ভার থেকে
+  // পড়ে মিলিয়ে দেখা (৩) তবেই অর্ডারে শুধু ছোট কপি। (৩)-এর সময় অর্ডারের সর্বশেষ কপির উপরে বসানো হয়,
+  // তাই এর মধ্যে ক্যাপশন বদলালে বা নতুন ছবি যোগ হলে সেটা হারায় না (নতুনটা পরের বার সরে) ──
+  const moveOneOrderPhotos=async(o)=>{
+    const fs=fsRef.current;
+    if(!fs||!o||!o.no)return{ok:false,moved:0};
+    const listsOf=(x)=>({
+      ref:(x.refImgs&&x.refImgs.length)?x.refImgs:(x.refImg?[{src:x.refImg,caption:"রেফারেন্স ছবি"}]:[]),
+      del:(x.deliveryImgs&&x.deliveryImgs.length)?x.deliveryImgs:(x.deliveryImg?[{src:x.deliveryImg,fileName:x.deliveryImgFileName||null}]:[])});
+    const added={},bySrc={};
+    const prep=async(arr,pfx)=>{for(const im of(arr||[])){if(!im||!im.src||bySrc[im.src])continue;const id=im.id||newPhotoId(o.no+"_"+pfx);const thumb=im.thumb||await makeThumb(im.src);bySrc[im.src]={id,thumb};added[id]=im.src}};
+    const L0=listsOf(o);
+    await prep(L0.ref,"ref");await prep(L0.del,"del");
+    if(!Object.keys(added).length)return{ok:true,moved:0};
+    for(const[id,src]of Object.entries(added))await fs.collection(PHOTO_COL).doc(id).set({no:o.no,src});
+    const back=await fs.collection(PHOTO_COL).where("no","==",o.no).get();
+    const there=new Set(back.docs.filter(d=>(d.data()||{}).src).map(d=>d.id));
+    if(Object.keys(added).some(id=>!there.has(id)))return{ok:false,moved:0};
+    const latest=((latestDataRef.current.orders||[]).find(x=>x&&x.no===o.no))||o;
+    const L1=listsOf(latest);
+    const fin=(arr)=>(arr||[]).filter(Boolean).map(im=>{if(!im.src)return im;const r=bySrc[im.src];if(!r)return im;const{src,...rest}=im;return{...rest,id:r.id,thumb:r.thumb}});
+    const patch={refImgs:fin(L1.ref),deliveryImgs:fin(L1.del),
+      refImg:firebase.firestore.FieldValue.delete(),
+      deliveryImg:firebase.firestore.FieldValue.delete(),
+      deliveryImgFileName:firebase.firestore.FieldValue.delete()};
+    photoCacheRef.current[o.no]=Object.assign(photoCacheRef.current[o.no]||{},added);
+    await fs.collection("orders").doc(o.no).set(patch,{merge:true});
+    return{ok:true,moved:Object.keys(added).length};
+  };
   const movePhotosOut=async(onProgress)=>{
     const fs=fsRef.current;
     if(!fs)return{ok:false,msg:"সংযোগ তৈরি হয়নি"};
     const list=(latestDataRef.current.orders||[]).filter(orderHasInlinePhotos);
     let done=0,moved=0,failed=0;
     for(const o of list){
-      try{
-        const added={};
-        const conv=async(arr,pfx)=>{
-          const out=[];
-          for(const im of(arr||[])){
-            if(!im){continue}
-            if(!im.src){out.push(im);continue}
-            const id=im.id||newPhotoId(o.no+"_"+pfx);
-            added[id]=im.src;
-            const thumb=im.thumb||await makeThumb(im.src);
-            out.push({...stripPhoto(im),id,thumb});
-          }
-          return out;
-        };
-        // পুরনো একক-ছবির ঘরগুলোও একই নিয়মে
-        const refs=await conv(
-          (o.refImgs&&o.refImgs.length)?o.refImgs:(o.refImg?[{src:o.refImg,caption:"রেফারেন্স ছবি"}]:[]),"ref");
-        const dels=await conv(
-          (o.deliveryImgs&&o.deliveryImgs.length)?o.deliveryImgs:(o.deliveryImg?[{src:o.deliveryImg,fileName:o.deliveryImgFileName||null}]:[]),"del");
-        // (১) লেখা
-        for(const[id,src]of Object.entries(added))await fs.collection(PHOTO_COL).doc(id).set({no:o.no,src});
-        // (২) সার্ভার থেকে পড়ে মিলিয়ে দেখা — সবগুলো সত্যিই পৌঁছেছে তো?
-        const back=await fs.collection(PHOTO_COL).where("no","==",o.no).get();
-        const there=new Set(back.docs.filter(d=>(d.data()||{}).src).map(d=>d.id));
-        const missing=Object.keys(added).filter(id=>!there.has(id));
-        if(missing.length){failed++;done++;onProgress&&onProgress({done,total:list.length,moved,failed});continue}
-        // (৩) তবেই অর্ডার থেকে সরানো
-        const patch={refImgs:refs,deliveryImgs:dels,
-          refImg:firebase.firestore.FieldValue.delete(),
-          deliveryImg:firebase.firestore.FieldValue.delete(),
-          deliveryImgFileName:firebase.firestore.FieldValue.delete()};
-        await fs.collection("orders").doc(o.no).set(patch,{merge:true});
-        photoCacheRef.current[o.no]=Object.assign(photoCacheRef.current[o.no]||{},added);
-        moved+=Object.keys(added).length;
-      }catch(e){failed++}
+      try{const r=await moveOneOrderPhotos(o);if(r.ok)moved+=r.moved;else failed++}catch(e){failed++}
       done++;
       onProgress&&onProgress({done,total:list.length,moved,failed});
     }
@@ -4891,7 +4950,7 @@ function App({firebaseConfig,onResetConfig}){
     // v4.52: হাজিরার সাথে কর্মীর তখনকার দৈনিক হার, নাম ও বিভাগও সপ্তাহের নথিতে থাকে — পরে কর্মীর
     // প্রোফাইল মুছে ফেললেও সেই সপ্তাহের বেতন বেতনের চার্ট ও মোট ব্যয়ে ঠিকঠাক গোনা যায়
     const wk=((otherDataRef.current&&otherDataRef.current.workers)||[]).find(x=>x.id===workerId);
-    const wsnap=wk?{rate:parseFloat(wk.dailyRate)||0,name:wk.name||"",dept:wk.department||""}:null;
+    const wsnap=wk?{rate:workerRateOn(wk,weekEnd),name:wk.name||"",dept:wk.department||""}:null;
     setPayrollWeeks(prev=>{
       const wd=prev[weekEnd]||{attendance:{},advances:[]};
       return{...prev,[weekEnd]:{...wd,attendance:{...(wd.attendance||{}),[workerId]:days},...(wsnap?{wstat:{...(wd.wstat||{}),[workerId]:wsnap}}:{})}};
@@ -5362,7 +5421,7 @@ function Home({syncInfo,devices,dbHistory,photoMove,onMovePhotosOut,handoffRepor
         if(d.getUTCFullYear()===y&&d.getUTCMonth()===m){
           Object.entries(wd.attendance||{}).forEach(([wid,days])=>{
             const w=(workers||[]).find(x=>x.id===wid);
-            if(w)payroll+=(parseFloat(days)||0)*(parseFloat(w.dailyRate)||0);
+            if(w)payroll+=(parseFloat(days)||0)*workerRateOn(w,weekEnd);
           });
         }
       });
@@ -5589,22 +5648,12 @@ function Home({syncInfo,devices,dbHistory,photoMove,onMovePhotosOut,handoffRepor
   const[seasonYearsSelect,setSeasonYearsSelect]=useState(()=>new Set([new Date().getFullYear()]));
   const[profitDetailOpen,setProfitDetailOpen]=useState(false);
   const[popularYearsSelect,setPopularYearsSelect]=useState(()=>new Set([new Date().getFullYear()]));
+  const[priceFixOpen,setPriceFixOpen]=useState(null);   // v5.54: দাম বসানোর ঘর খোলা কিনা
+  const[priceFixDraft,setPriceFixDraft]=useState({});   // "অর্ডার|আইটেম" → প্রতিটির দাম
   const popularFurnitureData=useMemo(()=>{
-    const activeOrders2=(orders||[]).filter(o=>!o.cancelled);
+    // v5.53–5.54: catKey দিয়ে গোনা (v5.20-এর মতো) — কয়টি ফার্নিচার, আর শুধু নিশ্চিত দাম (catPopularity)
     const selected=popularYearsSelect.size?popularYearsSelect:new Set([new Date().getFullYear()]);
-    const catAgg={};
-    activeOrders2.filter(o=>o.cust.date&&selected.has(parseISO(o.cust.date).getUTCFullYear())).forEach(o=>(o.items||[]).forEach(it=>{
-      const _cat=itemCatOf(db,it),catLabel=_cat.label; // v5.20
-      // ── আগে এখানে সরাসরি নামের ভিত্তিতে গোনা হতো — কোনো পুরনো অর্ডারে catKey ডেটাবেসে না
-      // পেলে সেই একই ক্যাটাগরি ভিন্ন নামে (ফলব্যাক থেকে) আলাদা এন্ট্রি হয়ে যেত, ফলে একই
-      // ক্যাটাগরি দুইভাবে ভাগ হয়ে ভুল র‍্যাংকিং দেখাত। এখন পাই চার্টের মতোই স্থিতিশীল catKey
-      // দিয়ে গোনা হয়, নাম শুধু দেখানোর জন্য ──
-      const key=_cat.key;
-      if(!catAgg[key])catAgg[key]={label:catLabel,count:0,value:0};
-      catAgg[key].count+=1;
-      catAgg[key].value+=(parseFloat(it.price)||0)*(parseFloat(it.qty)||1);
-    }));
-    return Object.values(catAgg).sort((a,b)=>b.count-a.count);
+    return catPopularity(orders,db,o=>!!(o.cust&&o.cust.date)&&selected.has(parseISO(o.cust.date).getUTCFullYear()));
   },[orders,db,popularYearsSelect]);
   const[monthNavOffset,setMonthNavOffset]=useState(0); // 0=বর্তমান মাস, + মানে পরের মাস, - মানে আগের মাস
   const monthTrendData=useMemo(()=>{
@@ -5749,7 +5798,8 @@ function Home({syncInfo,devices,dbHistory,photoMove,onMovePhotosOut,handoffRepor
       <div id="z-urgent" style={{scrollMarginTop:56,fontSize:11,fontWeight:800,color:"#b91c1c",letterSpacing:"0.3px",margin:"18px 0 8px",paddingBottom:4,borderBottom:"2px solid #b91c1c22"}}>⚡ এখনই নজর দিন</div>
       {/* Pie chart - running orders by category */}
       {stats.catPie.length>0&&<div style={{marginBottom:18}}>
-        <div style={{fontWeight:700,fontSize:13,color:"#222",marginBottom:8}}>🥧 চলমান অর্ডার — ক্যাটাগরি অনুযায়ী</div>
+        <div style={{fontWeight:700,fontSize:13,color:"#222",marginBottom:2}}>🥧 চলমান ফার্নিচার — ক্যাটাগরি অনুযায়ী</div>
+        <div style={{fontSize:9,color:"#999",marginBottom:8}}>ডেলিভারি না হওয়া অর্ডারের কয়টি ফার্নিচার (অর্ডারের সংখ্যা নয়)</div>
         <div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"14px"}}>
           <PieChart3D data={stats.catPie} showCount={true} countSuffix="টি"/>
         </div>
@@ -5855,7 +5905,8 @@ function Home({syncInfo,devices,dbHistory,photoMove,onMovePhotosOut,handoffRepor
       <div id="z-trend" style={{scrollMarginTop:56,fontSize:11,fontWeight:800,color:"#b45309",letterSpacing:"0.3px",margin:"18px 0 8px",paddingBottom:4,borderBottom:"2px solid #b4530922"}}>📅 প্রবণতা ও পরিকল্পনা</div>
 
       <div style={{marginBottom:18}}>
-        <div style={{fontSize:12,fontWeight:700,color:"#92400e",marginBottom:6}}>🏆 জনপ্রিয় ফার্নিচার</div>
+        <div style={{fontSize:12,fontWeight:700,color:"#92400e",marginBottom:2}}>🏆 জনপ্রিয় ফার্নিচার — কয়টি বিক্রি হয়েছে</div>
+        <div style={{fontSize:9,color:"#a16207",marginBottom:6}}>ফার্নিচারের সংখ্যা, অর্ডারের নয় — এক অর্ডারে ৫টা দরজা মানে ৫টি</div>
         <div style={{fontSize:9,color:"#999",marginBottom:6}}>একাধিক সাল বেছে নিলে সেই সালগুলোর সম্মিলিত তথ্য দেখাবে:</div>
         <div style={{display:"flex",gap:5,marginBottom:8,overflowX:"auto",flexWrap:"wrap"}}>
           {financeYearOptions.map(y=><button key={y} onClick={()=>{
@@ -5871,11 +5922,48 @@ function Home({syncInfo,devices,dbHistory,photoMove,onMovePhotosOut,handoffRepor
             <div style={{width:20,height:20,borderRadius:"50%",background:i===0?"#f59e0b":i===1?"#94a3b8":i===2?"#b45309":"#e5e7eb",color:i<3?"white":"#666",display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,fontWeight:800,flexShrink:0}}>{i+1}</div>
             <div style={{flex:1}}>
               <div style={{fontSize:12,color:"#333",fontWeight:600}}>{c.label}</div>
-              <div style={{fontSize:9,color:"#bbb"}}>{money(c.value)}</div>
+              <div style={{fontSize:9,color:"#bbb"}}>{money(c.value)}{c.unknown>0&&<span style={{color:"#b45309",fontWeight:600}}> + {c.unknown}টির দাম লেখা নেই</span>}</div>
             </div>
-            <span style={{fontSize:11,color:"#92400e",fontWeight:700}}>{c.count} অর্ডার</span>
+            <span style={{fontSize:11,color:"#92400e",fontWeight:700,textAlign:"right"}}>{c.pieces}টি</span>
           </div>)}
         </div>:<div style={{background:"white",border:"1px solid #eee",borderRadius:10,padding:"14px",textAlign:"center",fontSize:11,color:"#999"}}>এই সালে কোনো অর্ডার নেই</div>}
+        {(()=>{
+          // v5.54: যেসব অর্ডারে একাধিক ফার্নিচারের আলাদা দাম লেখা নেই (শুধু মোট দাম আছে) — এখানে বসানো যায়
+          const sel=popularYearsSelect.size?popularYearsSelect:new Set([new Date().getFullYear()]);
+          const need=(orders||[]).filter(o=>orderNeedsItemPrices(o)&&o.cust&&o.cust.date&&sel.has(parseISO(o.cust.date).getUTCFullYear())).sort((a,b)=>String(b.cust.date).localeCompare(String(a.cust.date)));
+          if(!need.length)return null;
+          return<div data-price-fix="1" style={{marginTop:8,background:"#fff7ed",border:"1px dashed #fdba74",borderRadius:10,padding:"9px 11px"}}>
+            <button onClick={()=>setPriceFixOpen(priceFixOpen?null:"__list")} style={{width:"100%",background:"none",border:"none",padding:0,textAlign:"left",fontSize:10.5,color:"#9a3412",fontWeight:700,lineHeight:1.5}}>
+              ⚠️ {need.length}টা অর্ডারে ফার্নিচারের আলাদা দাম লেখা নেই (শুধু মোট দাম আছে) — তাই উপরের টাকায় এগুলো আন্দাজে ধরা হয়নি। {priceFixOpen?"▲":"দাম বসান ▼"}
+            </button>
+            {priceFixOpen&&need.map(o=>{
+              const its=(o.items||[]);
+              const rest=orderUnpricedRest(o);
+              const unIdx=its.map((it,i)=>it&&itemPricedValue(it)===null?i:-1).filter(i=>i>=0);
+              const val=(i)=>{const p=parseFloat(priceFixDraft[o.no+"|"+i]);return p>0?p*itemQtyOf(its[i]):0};
+              const sum=unIdx.reduce((a,i)=>a+val(i),0);
+              const allFilled=unIdx.every(i=>parseFloat(priceFixDraft[o.no+"|"+i])>0);
+              const ok=allFilled&&Math.round(sum)===Math.round(rest);
+              const save=()=>{
+                if(!ok||!onUpdateOrder)return;
+                const items=its.map((it,i)=>unIdx.includes(i)?{...it,price:String(parseFloat(priceFixDraft[o.no+"|"+i]))}:it);
+                onUpdateOrder({...o,items});
+              };
+              return<div key={o.no} data-fix-order={o.no} style={{background:"white",borderRadius:8,padding:"8px 9px",marginTop:7}}>
+                <div style={{display:"flex",justifyContent:"space-between",gap:6,fontSize:10.5,fontWeight:700,color:"#333"}}><span>{fmtDate(o.cust.date)} · {o.cust.name}</span><span>মোট {money(parseFloat(o.cust.total)||0)}</span></div>
+                {its.map((it,i)=>{if(!it)return null;const cat=itemCatOf(db,it).label;const pv=itemPricedValue(it);const q=itemQtyOf(it);
+                  return<div key={i} style={{display:"flex",alignItems:"center",gap:6,marginTop:5,fontSize:10}}>
+                    <span style={{flex:1,minWidth:0,color:"#444"}}>{cat} · {it.variantBn}{q>1?<b> × {q}টি</b>:null}</span>
+                    {pv!==null?<span style={{color:"#166534",fontWeight:700}}>{money(pv)}</span>:<span style={{display:"flex",alignItems:"center",gap:3,flexShrink:0}}>
+                      <input type="number" data-fix-input={o.no+"|"+i} value={priceFixDraft[o.no+"|"+i]||""} onChange={e=>setPriceFixDraft({...priceFixDraft,[o.no+"|"+i]:e.target.value})} placeholder={q>1?"প্রতিটি ৳":"দাম ৳"} style={{width:84,border:"1.5px solid #fdba74",borderRadius:6,padding:"5px 6px",fontSize:11,fontWeight:700}}/>
+                    </span>}
+                  </div>})}
+                <div style={{fontSize:9.5,marginTop:6,color:ok?"#166534":"#9a3412",fontWeight:600}}>{ok?`✓ মিলেছে — ${money(Math.round(sum))}`:`বসানো ${money(Math.round(sum))} — মিলতে হবে ${money(Math.round(rest))}${allFilled?` (${sum>rest?"বেশি":"কম"} ${money(Math.abs(Math.round(sum-rest)))})`:""}`}</div>
+                <button onClick={save} disabled={!ok} style={{marginTop:6,width:"100%",background:ok?"#166534":"#ddd",color:"white",border:"none",borderRadius:7,padding:"7px",fontSize:11,fontWeight:700}}>✓ দাম সেভ করুন (মোট দাম বদলাবে না)</button>
+              </div>;
+            })}
+          </div>;
+        })()}
       </div>
 
       <div style={{marginBottom:16}}>
@@ -7117,10 +7205,10 @@ function WoodStockPage({woodLots,saveWoodLots,addLotPayment,woodSettings,saveWoo
         {(()=>{
           // ── প্রস্তাবিত শ্রম হার: সর্বমোট পে-রোল ব্যয় ÷ সর্বমোট ডেলিভারিকৃত CFT ──
           let totalPayrollAllTime=0;
-          Object.values(payrollWeeks||{}).forEach(wd=>{
-            Object.entries(wd.attendance||{}).forEach(([wid,d])=>{
+          Object.entries(payrollWeeks||{}).forEach(([we,wd])=>{
+            Object.entries((wd&&wd.attendance)||{}).forEach(([wid,d])=>{
               const w=(workers||[]).find(w=>w.id===wid);
-              if(w)totalPayrollAllTime+=(parseFloat(d)||0)*(parseFloat(w.dailyRate)||0);
+              if(w)totalPayrollAllTime+=(parseFloat(d)||0)*workerRateOn(w,we);
             });
           });
           const deliveredCftAllTime=(orders||[]).filter(o=>!o.cancelled&&o.delivered).reduce((s,o)=>s+orderTotalCft(o),0);
@@ -8266,50 +8354,127 @@ function PLReportPage({orders,expenses,workers,payrollWeeks,woodLots,woodSetting
   </div>
 }
 
+// ── v5.50–5.52: পে-রোল — নতুন করে সাজানো ────────────────────────────────────────────
+// সাপ্তাহিক: উপরে সপ্তাহ বাছাই ও সারাংশ (মোট আয় · অগ্রিম · প্রাপ্য), তার নিচে তিন ভাগ —
+//   হাজিরা (বিভাগ অনুযায়ী), অগ্রিম (দিন ও সময় অনুযায়ী), হিসাব ও প্রিন্ট।
+// কর্মী: তালিকা আগে, "+ নতুন কর্মী" চাপলে ফর্ম; প্রতিটা কর্মীর "💹 হাজিরা বদল" (নির্দিষ্ট সপ্তাহ থেকে)
+//   আর "📒 খাতা" (সপ্তাহ ধরে দিন, হার, আয়, কবে কখন কত অগ্রিম, প্রাপ্য)।
+const PAY_WEEKDAYS=["রবিবার","সোমবার","মঙ্গলবার","বুধবার","বৃহস্পতিবার","শুক্রবার","শনিবার"];
+const payWeekday=(ds)=>{try{return PAY_WEEKDAYS[parseISO(ds).getUTCDay()]||""}catch(e){return""}};
+const payWeekRange=(we)=>`${fmtDate(addDays(we,-6))} – ${fmtDate(we)}`;
+const nowHM=()=>{const d=new Date();return`${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`};
+// "14:05" → "দুপুর ২:০৫"
+function bnTimeLabel(hm){
+  const m=String(hm||"").match(/^(\d{1,2}):(\d{2})/);if(!m)return"";
+  const h=+m[1],mi=m[2];
+  const part=h<4?"রাত":h<6?"ভোর":h<12?"সকাল":h<15?"দুপুর":h<18?"বিকাল":h<19?"সন্ধ্যা":"রাত";
+  return`${part} ${toBnDigits(((h+11)%12)+1)}:${toBnDigits(mi)}`;
+}
+// অগ্রিমের সময়: লেখা থাকলে সেটাই; পুরনো এন্ট্রিতে (v5.52-এর আগে) লেখার মুহূর্ত — একই দিনে লেখা হলে (≈)
+function advTimeOf(a){
+  if(!a)return null;
+  if(a.time)return{t:a.time,approx:false};
+  const ms=parseInt(String(a.id||"").replace(/^adv_/,""),10);
+  if(!(ms>1e12))return null;
+  const d=new Date(ms);
+  const ds=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+  if(ds!==String(a.date||"").slice(0,10))return null;
+  return{t:`${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`,approx:true};
+}
+const advSortKey=(a)=>{const tm=advTimeOf(a);return String(a.date||"")+" "+(tm?tm.t:"00:00")};
+
 function PayrollPage({workers,saveWorker,deleteWorker,payrollWeeks,savePayrollWeek,updateAttendance,addAdvanceEntry,removeAdvanceEntry,onBack}){
   const today=todayStr();
+  const thisWeek=weekEndThursday(today);
   const[view,setView]=useState("week"); // week | workers
-  const[weekEnd,setWeekEnd]=useState(()=>weekEndThursday(today));
-  const[newWorker,setNewWorker]=useState({name:"",voterId:"",phone1:"",phone2:"",department:PAYROLL_DEPTS[0],dailyRate:"",idCardImg:null,idCardFileName:null,photoImg:null});
+  const[weekTab,setWeekTab]=useState("att"); // att | adv | report
+  const[weekEnd,setWeekEndRaw]=useState(thisWeek);
+  const blankWorker={name:"",voterId:"",phone1:"",phone2:"",department:PAYROLL_DEPTS[0],dailyRate:"",idCardImg:null,idCardFileName:null,photoImg:null};
+  const[newWorker,setNewWorker]=useState(blankWorker);
+  const[formOpen,setFormOpen]=useState(false);
   const[editingWorkerId,setEditingWorkerId]=useState(null);
-  const[newAdv,setNewAdv]=useState({date:today,workerId:"",amount:"",note:""});
-  const idCardInput=useRef();
-  const photoInput=useRef();
+  const[newAdv,setNewAdv]=useState(()=>({date:today,time:nowHM(),workerId:"",amount:"",note:""}));
   const[advPickerOpen,setAdvPickerOpen]=useState(false);
   const[viewingIdCard,setViewingIdCard]=useState(null);
-  const inp={width:"100%",border:"1.5px solid #e0e0e0",borderRadius:9,padding:"10px 11px",fontSize:13,outline:"none"};
+  const[rateFor,setRateFor]=useState(null);
+  const[rateDraft,setRateDraft]=useState({rate:"",from:""});
+  const[ledgerFor,setLedgerFor]=useState(null);
+  const idCardInput=useRef();
+  const photoInput=useRef();
+  const inp={width:"100%",border:"1.5px solid #e0e0e0",borderRadius:9,padding:"10px 11px",fontSize:13,outline:"none",boxSizing:"border-box"};
   const lbl=(t)=><div style={{fontSize:11,fontWeight:600,color:"#555",marginBottom:4}}>{t}</div>;
+  const card={background:"white",borderRadius:12,padding:14,marginBottom:12,boxShadow:"0 1px 4px rgba(0,0,0,.07)"};
 
-  const activeWorkers=sortByDept(workers.filter(w=>w.active!==false));
+  // সপ্তাহ বদলালে অগ্রিমের তারিখ সেই সপ্তাহের ভেতরেই থাকে (আজ সেই সপ্তাহে হলে আজ)
+  const setWeekEnd=(we)=>{setWeekEndRaw(we);const ds=weekWorkDays(we);setNewAdv(a=>({...a,date:ds.includes(today)?today:we,time:nowHM()}))};
+
+  // ── এই সপ্তাহের তথ্য ──
   const days=weekWorkDays(weekEnd);
   const weekData=payrollWeeks[weekEnd]||{attendance:{},advances:[]};
+  const att=weekData.attendance||{};
+  const advs=(weekData.advances||[]).filter(Boolean);
+  const daysOf=(wd,id)=>{const v=((wd&&wd.attendance)||{})[id];if(Array.isArray(v))return v.reduce((s,x)=>s+attVal(x),0);return parseFloat(v)||0};
+  const daysPresent=(id)=>daysOf(weekData,id);
+  const hasData=(id)=>Object.prototype.hasOwnProperty.call(att,id)||advs.some(a=>a.workerId===id);
+  const snaps=weekData.wstat||{};
+  const ghosts=[...new Set([...Object.keys(att),...advs.map(a=>a.workerId)])].filter(id=>id&&!workers.some(w=>w.id===id))
+    .map(id=>({id,ghost:true,active:false,name:(snaps[id]&&snaps[id].name)||"(মুছে ফেলা কর্মী)",department:(snaps[id]&&snaps[id].dept)||"অন্যান্য",dailyRate:(snaps[id]&&snaps[id].rate)||0}));
+  // সক্রিয় কর্মী, আর এই সপ্তাহে হিসাব আছে এমন নিষ্ক্রিয়/মুছে ফেলা কর্মীও (নাহলে পুরনো সপ্তাহের মোট ভুল হতো)
+  const rowsW=[...sortByDept(workers.filter(w=>w.active!==false||hasData(w.id))),...ghosts];
+  const rateOf=(w)=>w.ghost?(parseFloat(w.dailyRate)||0):workerRateOn(w,weekEnd);
+  const advOf=(id)=>advs.filter(a=>a.workerId===id);
+  const advanceTotal=(id)=>advOf(id).reduce((s,a)=>s+(parseFloat(a.amount)||0),0);
+  const grossPay=(w)=>daysPresent(w.id)*rateOf(w);
+  const netPay=(w)=>grossPay(w)-advanceTotal(w.id);
+  const G=rowsW.reduce((s,w)=>s+grossPay(w),0),A=rowsW.reduce((s,w)=>s+advanceTotal(w.id),0),NET=G-A;
+  const attCount=rowsW.filter(w=>daysPresent(w.id)>0).length;
+  const activeWorkers=sortByDept(workers.filter(w=>w.active!==false));
+  const rateChangedHere=(w)=>!w.ghost&&workerRateHist(w).some(h=>h.from===weekEnd);
 
-  const blankWorker={name:"",voterId:"",phone1:"",phone2:"",department:PAYROLL_DEPTS[0],dailyRate:"",idCardImg:null,idCardFileName:null,photoImg:null};
-  const saveNewWorker=()=>{
-    if(!newWorker.name.trim()||!newWorker.dailyRate)return;
-    saveWorker({...newWorker,dailyRate:parseFloat(newWorker.dailyRate)||0,active:true});
-    setNewWorker(blankWorker);
+  const setWorkerDays=(workerId,val)=>{let n=parseFloat(val);if(isNaN(n))n=0;if(n<0)n=0;if(n>10.5)n=10.5;updateAttendance(weekEnd,workerId,n)};
+
+  // ── অগ্রিম ──
+  const advWeek=weekEndThursday(newAdv.date||today);
+  const advOk=!!newAdv.workerId&&parseFloat(newAdv.amount)>0&&!!newAdv.date;
+  const addAdvance=()=>{
+    if(!advOk)return;
+    const adv={id:"adv_"+Date.now(),workerId:newAdv.workerId,date:newAdv.date,time:newAdv.time||"",amount:parseFloat(newAdv.amount)||0,note:newAdv.note||"",at:new Date().toISOString()};
+    addAdvanceEntry(advWeek,adv);
+    setNewAdv({...newAdv,workerId:"",amount:"",note:"",time:nowHM()});
+    if(advWeek!==weekEnd)setWeekEndRaw(advWeek);
   };
-  const startEditWorker=(w)=>{setEditingWorkerId(w.id);setNewWorker({name:w.name,voterId:w.voterId||"",phone1:w.phone1||"",phone2:w.phone2||"",department:w.department||PAYROLL_DEPTS[0],dailyRate:String(w.dailyRate),idCardImg:w.idCardImg||null,idCardFileName:w.idCardFileName||null,photoImg:w.photoImg||null})};
+  const removeAdvance=(adv)=>{
+    const w=workers.find(x=>x.id===adv.workerId);
+    if(!window.confirm(`${w?w.name:"এই কর্মী"}-এর ${money(adv.amount)} অগ্রিম (${fmtDate(adv.date)}) মুছে ফেলবেন?`))return;
+    removeAdvanceEntry(weekEnd,adv);
+  };
+
+  // ── কর্মী ──
+  const saveNewWorker=()=>{
+    if(!newWorker.name.trim()||!(parseFloat(newWorker.dailyRate)>0))return;
+    saveWorker({...newWorker,dailyRate:parseFloat(newWorker.dailyRate)||0,active:true});
+    setNewWorker(blankWorker);setFormOpen(false);
+  };
+  const startEditWorker=(w)=>{setEditingWorkerId(w.id);setFormOpen(true);setRateFor(null);setLedgerFor(null);setNewWorker({name:w.name,voterId:w.voterId||"",phone1:w.phone1||"",phone2:w.phone2||"",department:w.department||PAYROLL_DEPTS[0],dailyRate:String(workerRateOn(w,thisWeek)),idCardImg:w.idCardImg||null,idCardFileName:w.idCardFileName||null,photoImg:w.photoImg||null});setTimeout(()=>window.scrollTo({top:0,behavior:"smooth"}),50)};
+  const cancelForm=()=>{setEditingWorkerId(null);setNewWorker(blankWorker);setFormOpen(false)};
+  const saveEditWorker=()=>{
+    // v5.50: দৈনিক হার এখানে বদলায় না (বদলালে আগের সব সপ্তাহের হিসাব বদলে যেত) — "💹 হাজিরা বদল" দিয়ে
+    const old=workers.find(w=>w.id===editingWorkerId)||{};
+    const{dailyRate,...rest}=newWorker;
+    saveWorker({...old,...rest,id:editingWorkerId});
+    cancelForm();
+  };
   const handlePhotoImg=async(e)=>{
-    const file=e.target.files[0];
-    e.target.value="";
-    if(!file)return;
+    const file=e.target.files[0];e.target.value="";if(!file)return;
     const compressed=await compressImage(file,400,0.78);
     if(!compressed){alert("ছবিটি পড়া যায়নি।");return}
     setNewWorker(prev=>({...prev,photoImg:compressed}));
   };
-  const saveEditWorker=()=>{
-    saveWorker({id:editingWorkerId,...newWorker,dailyRate:parseFloat(newWorker.dailyRate)||0,active:true});
-    setEditingWorkerId(null);setNewWorker(blankWorker);
-  };
   const handleIdCardImg=async(e)=>{
-    const file=e.target.files[0];
-    e.target.value="";
-    if(!file)return;
+    const file=e.target.files[0];e.target.value="";if(!file)return;
     const compressed=await compressImage(file,1400,0.8);
     if(!compressed){alert("ছবিটি পড়া যায়নি।");return}
-    const safeName=(newWorker.name||"worker").replace(/[^a-zA-Z0-9\u0980-\u09FF]/g,"_");
+    const safeName=(newWorker.name||"worker").replace(/[^a-zA-Z0-9ঀ-৿]/g,"_");
     const fileName=genImgFileName(`idcard_${safeName}`,1,file);
     const savedFull=await saveFullResImage(file,fileName);
     setNewWorker(prev=>({...prev,idCardImg:compressed,idCardFileName:savedFull?fileName:null}));
@@ -8317,53 +8482,250 @@ function PayrollPage({workers,saveWorker,deleteWorker,payrollWeeks,savePayrollWe
   const toggleActive=(w)=>saveWorker({...w,active:w.active===false?true:false});
   const confirmDeleteWorker=(w)=>{if(window.confirm(`"${w.name}" কে স্থায়ীভাবে মুছে ফেলতে চান? এর সাথে যুক্ত পুরনো হাজিরার তথ্য অক্ষত থাকবে, শুধু কর্মীর প্রোফাইল মুছে যাবে।`))deleteWorker(w.id)};
 
-  // Attendance: single "total days this week" number per worker (read from external attendance device)
-  const setWorkerDays=(workerId,val)=>{
-    let n=parseFloat(val);
-    if(isNaN(n))n=0;
-    if(n<0)n=0;
-    if(n>10.5)n=10.5;
-    updateAttendance(weekEnd,workerId,n);
+  // ── v5.50: হাজিরা (দৈনিক হার) বদল — নির্দিষ্ট সপ্তাহ থেকে ──
+  const weekOpts=(()=>{const ks=new Set(Object.keys(payrollWeeks||{}).filter(k=>/^\d{4}-\d{2}-\d{2}$/.test(k)));ks.add(thisWeek);ks.add(addDays(thisWeek,7));return[...ks].sort().reverse()})();
+  const openRate=(w)=>{setRateFor(rateFor===w.id?null:w.id);setLedgerFor(null);setRateDraft({rate:"",from:thisWeek})};
+  const saveRate=(w)=>{
+    const r=parseFloat(rateDraft.rate);if(!(r>0))return;
+    const nowIso=new Date().toISOString();
+    let hist=workerRateHist(w);
+    if(!hist.length)hist=[{from:"",rate:parseFloat(w.dailyRate)||r,at:null}];
+    if(rateDraft.from==="__all"){
+      if(!window.confirm(`${w.name}-এর আগের সব সপ্তাহের হিসাবও দৈনিক ${money(r)} দিয়ে হবে। এটা শুধু ভুল ঠিক করার জন্য — বেতন বাড়লে "কোন সপ্তাহ থেকে" বেছে দিন। নিশ্চিত?`))return;
+      hist=[{from:"",rate:r,at:nowIso}];
+    }else{
+      hist=hist.filter(h=>h.from!==rateDraft.from);
+      hist.push({from:rateDraft.from,rate:r,at:nowIso});
+      hist.sort((a,b)=>a.from.localeCompare(b.from));
+    }
+    const nw={...w,rateHistory:hist};
+    nw.dailyRate=workerRateOn(nw,thisWeek);
+    saveWorker(nw);
+    setRateFor(null);
   };
-  const addAdvance=()=>{
-    if(!newAdv.workerId||!newAdv.amount)return;
-    const adv={id:"adv_"+Date.now(),workerId:newAdv.workerId,date:newAdv.date,amount:parseFloat(newAdv.amount)||0,note:newAdv.note};
-    addAdvanceEntry(weekEnd,adv);
-    setNewAdv({date:today,workerId:"",amount:"",note:""});
-  };
-  const removeAdvance=(advId)=>{
-    const adv=(weekData.advances||[]).find(a=>a.id===advId);
-    if(adv)removeAdvanceEntry(weekEnd,adv);
+  const removeRateStep=(w,from)=>{
+    if(!from)return;
+    const h=workerRateHist(w).find(x=>x.from===from);if(!h)return;
+    if(!window.confirm(`${payWeekRange(from)} সপ্তাহ থেকে দৈনিক ${money(h.rate)} — এই বদলটা মুছবেন? তাহলে সেই সপ্তাহ থেকেও আগের হারই চলবে।`))return;
+    const hist=workerRateHist(w).filter(x=>x.from!==from);
+    const nw={...w,rateHistory:hist};
+    nw.dailyRate=workerRateOn(nw,thisWeek);
+    saveWorker(nw);
   };
 
-  const daysPresent=(workerId)=>{
-    const v=(weekData.attendance||{})[workerId];
-    if(Array.isArray(v))return v.reduce((s,x)=>s+attVal(x),0); // পুরনো দিন-ভিত্তিক তথ্য থাকলে যোগফল
-    return parseFloat(v)||0;
-  };
-  const advanceTotal=(workerId)=>(weekData.advances||[]).filter(a=>a.workerId===workerId).reduce((s,a)=>s+(parseFloat(a.amount)||0),0);
-  const grossPay=(w)=>daysPresent(w.id)*(parseFloat(w.dailyRate)||0);
-  const netPay=(w)=>grossPay(w)-advanceTotal(w.id);
-  const grandTotalNet=activeWorkers.reduce((s,w)=>s+netPay(w),0);
-  const grandTotalGross=activeWorkers.reduce((s,w)=>s+grossPay(w),0);
-  const grandTotalAdvance=activeWorkers.reduce((s,w)=>s+advanceTotal(w.id),0);
+  // ── 📒 একজন কর্মীর খাতা — সপ্তাহ ধরে ──
+  const ledgerOf=(w)=>Object.keys(payrollWeeks||{}).filter(k=>/^\d{4}-\d{2}-\d{2}$/.test(k)).sort().reverse().map(we=>{
+    const wd=payrollWeeks[we]||{};
+    const d=daysOf(wd,w.id),rate=workerRateOn(w,we),ad=((wd.advances||[]).filter(a=>a&&a.workerId===w.id)).sort((a,b)=>advSortKey(b).localeCompare(advSortKey(a)));
+    const adv=ad.reduce((s,a)=>s+(parseFloat(a.amount)||0),0);
+    return{we,d,rate,gross:d*rate,adv,advs:ad,net:d*rate-adv};
+  }).filter(r=>r.d>0||r.advs.length);
 
-  const weekRangeLabel=`${fmtDate(days[0])} — ${fmtDate(days[6])}`;
+  const timeTag=(a)=>{const tm=advTimeOf(a);return tm?`${tm.approx?"≈ ":""}${bnTimeLabel(tm.t)}`:""};
+  const Tile=({l,v,c,sub})=><div style={{flex:1,minWidth:0,background:c+"12",border:`1px solid ${c}33`,borderRadius:10,padding:"8px 6px",textAlign:"center"}}>
+    <div style={{fontSize:9.5,color:"#666",marginBottom:2}}>{l}</div>
+    <div style={{fontSize:14.5,fontWeight:800,color:c,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{v}</div>
+    {sub&&<div style={{fontSize:8.5,color:"#999",marginTop:1}}>{sub}</div>}
+  </div>;
 
-  return<div className="print-bg" style={{minHeight:"100vh",background:"#f8f8f8"}}>
+  return<div className="print-bg" style={{minHeight:"100vh",background:"#f4f7f8"}}>
     <div className="no-print" style={{background:PAY,color:"white",padding:"13px 16px",display:"flex",alignItems:"center",gap:11}}>
       <button onClick={onBack} style={{background:"rgba(255,255,255,.2)",border:"none",color:"white",borderRadius:8,padding:"7px 13px",fontSize:13}}>←</button>
       <span style={{fontWeight:700,fontSize:16}}>পে-রোল ব্যবস্থাপনা</span>
     </div>
     <div className="no-print" style={{background:"white",display:"flex",borderBottom:"1px solid #eee"}}>
-      {[{id:"week",l:"সাপ্তাহিক হাজিরা ও রিপোর্ট"},{id:"workers",l:"কর্মী তালিকা"}].map(t=><button key={t.id} onClick={()=>setView(t.id)} style={{flex:1,padding:"11px 6px",border:"none",background:"none",fontSize:12,fontWeight:view===t.id?700:400,color:view===t.id?PAY:"#888",borderBottom:view===t.id?`3px solid ${PAY}`:"3px solid transparent"}}>{t.l}</button>)}
+      {[{id:"week",l:"🗓️ সাপ্তাহিক হিসাব"},{id:"workers",l:`👷 কর্মী (${activeWorkers.length})`}].map(t=><button key={t.id} onClick={()=>setView(t.id)} style={{flex:1,padding:"12px 6px",border:"none",background:"none",fontSize:12.5,fontWeight:view===t.id?800:500,color:view===t.id?PAY:"#888",borderBottom:view===t.id?`3px solid ${PAY}`:"3px solid transparent"}}>{t.l}</button>)}
     </div>
 
-    <div className="print-wrap" style={{padding:"16px",maxWidth:640,margin:"0 auto"}}>
+    <div className="print-wrap" style={{padding:"14px 14px 30px",maxWidth:640,margin:"0 auto"}}>
+
+      {view==="week"&&<>
+        {/* সপ্তাহ বাছাই + সারাংশ */}
+        <div className="no-print" style={{...card,padding:"10px 12px"}}>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8}}>
+            <button onClick={()=>setWeekEnd(addDays(weekEnd,-7))} style={{background:PAY_LIGHT,border:"none",borderRadius:8,padding:"9px 13px",color:PAY_DARK,fontWeight:800,fontSize:13}}>◀</button>
+            <div style={{textAlign:"center",minWidth:0}}>
+              <div style={{fontSize:13.5,fontWeight:800,color:"#222"}}>{payWeekRange(weekEnd)}</div>
+              <div style={{fontSize:10,color:weekEnd===thisWeek?"#16a34a":"#888",fontWeight:weekEnd===thisWeek?700:400}}>{weekEnd===thisWeek?"চলতি সপ্তাহ · শুক্র – বৃহস্পতি":weekEnd>thisWeek?"আগামী সপ্তাহ":"শুক্র – বৃহস্পতি"}</div>
+            </div>
+            <button onClick={()=>setWeekEnd(addDays(weekEnd,7))} style={{background:PAY_LIGHT,border:"none",borderRadius:8,padding:"9px 13px",color:PAY_DARK,fontWeight:800,fontSize:13}}>▶</button>
+          </div>
+          {weekEnd!==thisWeek&&<button onClick={()=>setWeekEnd(thisWeek)} style={{display:"block",margin:"7px auto 0",background:"white",border:`1px solid ${PAY_BORDER}`,color:PAY_DARK,borderRadius:16,padding:"4px 12px",fontSize:10.5,fontWeight:700}}>↩ চলতি সপ্তাহে ফিরুন</button>}
+          <div style={{display:"flex",gap:6,marginTop:10}}>
+            <Tile l="মোট আয়" v={money(G)} c="#0f766e"/>
+            <Tile l="অগ্রিম নেওয়া" v={money(A)} c="#b91c1c" sub={`${toBnDigits(advs.length)}টা এন্ট্রি`}/>
+            <Tile l="প্রাপ্য (দিতে হবে)" v={money(NET)} c="#166534"/>
+          </div>
+          <div style={{fontSize:9.5,color:"#888",textAlign:"center",marginTop:6}}>হাজিরা লেখা: {toBnDigits(attCount)}/{toBnDigits(rowsW.length)} জন</div>
+        </div>
+
+        {/* তিন ভাগ */}
+        <div className="no-print" style={{display:"flex",background:"white",borderRadius:11,padding:4,gap:4,marginBottom:12,boxShadow:"0 1px 4px rgba(0,0,0,.07)",position:"sticky",top:6,zIndex:8}}>
+          {[["att","📋","হাজিরা"],["adv","💰",`অগ্রিম (${toBnDigits(advs.length)})`],["report","🧾","হিসাব ও প্রিন্ট"]].map(([k,i,tx])=><button key={k} onClick={()=>setWeekTab(k)} style={{flex:1,background:weekTab===k?PAY:"transparent",color:weekTab===k?"white":PAY_DARK,border:"none",borderRadius:8,padding:"8px 2px",fontSize:11,fontWeight:800,lineHeight:1.25}}><div style={{fontSize:15}}>{i}</div>{tx}</button>)}
+        </div>
+
+        {/* ── হাজিরা ── */}
+        {weekTab==="att"&&<div className="no-print" style={card}>
+          <div style={{fontWeight:800,fontSize:13,color:PAY_DARK,marginBottom:3}}>সাপ্তাহিক হাজিরা</div>
+          <div style={{fontSize:10,color:"#888",marginBottom:10,lineHeight:1.5}}>এটেন্ডেন্স ডিভাইস দেখে প্রতিটা কর্মীর এই সপ্তাহের মোট দিন বসান (স্বাভাবিক ১ দিন, ওভারটাইম হলে ১.৫ — ০ থেকে সর্বোচ্চ ১০.৫)। দৈনিক হার এই সপ্তাহের হার।</div>
+          {rowsW.length===0?<div style={{textAlign:"center",color:"#aaa",padding:16,fontSize:12}}>কোনো সক্রিয় কর্মী নেই</div>:
+          PAYROLL_DEPTS.concat(["__other"]).map(dept=>{
+            const list=rowsW.filter(w=>dept==="__other"?!PAYROLL_DEPTS.includes(w.department):w.department===dept);
+            if(!list.length)return null;
+            const c=deptColor(dept==="__other"?"অন্যান্য":dept);
+            const sub=list.reduce((s,w)=>s+grossPay(w),0);
+            return<div key={dept} style={{marginBottom:10}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",fontSize:11,fontWeight:800,color:c,background:c+"12",borderRadius:7,padding:"5px 9px",marginBottom:2}}>
+                <span>{dept==="__other"?"অন্যান্য":dept} · {toBnDigits(list.length)} জন</span><span>{money(sub)}</span>
+              </div>
+              {list.map((w,i)=>{
+                const val=daysPresent(w.id),rate=rateOf(w),adv=advanceTotal(w.id);
+                return<div key={w.id} data-att-row={w.id} style={{display:"flex",alignItems:"center",gap:9,padding:"9px 2px 9px 8px",borderTop:i>0?"1px solid #f2f2f2":"none",borderLeft:`3px solid ${c}`,opacity:w.active===false?0.75:1}}>
+                  {w.ghost?<div style={{width:36,height:36,borderRadius:"50%",background:"#eee",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>👤</div>:<WorkerAvatar worker={w} size={36}/>}
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontWeight:700,fontSize:13}}>{w.name}{w.active===false&&<span style={{fontSize:9.5,color:"#999",fontWeight:400}}> ({w.ghost?"মুছে ফেলা":"নিষ্ক্রিয়"})</span>}</div>
+                    <div style={{fontSize:10,color:"#777",marginTop:1}}>দৈনিক {money(rate)}{rateChangedHere(w)&&<span style={{marginLeft:4,background:"#dcfce7",color:"#166534",borderRadius:6,padding:"0 5px",fontWeight:700,fontSize:9}}>নতুন হার</span>} · আয় <b style={{color:"#0f766e"}}>{money(val*rate)}</b></div>
+                    {adv>0&&<div style={{fontSize:9.5,color:"#999",marginTop:1}}>অগ্রিম {money(adv)} · প্রাপ্য <b style={{color:"#166534"}}>{money(val*rate-adv)}</b></div>}
+                  </div>
+                  {w.ghost?<div style={{fontSize:13,fontWeight:800,color:c,minWidth:40,textAlign:"center"}}>{val}</div>:<DayWheel value={val} onChange={v=>setWorkerDays(w.id,v)} color={c}/>}
+                </div>
+              })}
+            </div>
+          })}
+        </div>}
+
+        {/* ── অগ্রিম ── */}
+        {weekTab==="adv"&&<div className="no-print">
+          <div style={{...card,border:`1.5px solid ${PAY_BORDER}`}}>
+            <div style={{fontWeight:800,fontSize:14,marginBottom:10,color:PAY_DARK}}>💰 অগ্রিম (এডভান্স) দিন</div>
+            <div style={{marginBottom:10}}>
+              {lbl("কর্মী")}
+              {(()=>{
+                const sel=activeWorkers.find(w=>w.id===newAdv.workerId);
+                return<div style={{position:"relative"}}>
+                  <button type="button" onClick={()=>setAdvPickerOpen(!advPickerOpen)} style={{...inp,padding:"9px 11px",fontSize:14,fontWeight:600,textAlign:"left",display:"flex",alignItems:"center",gap:9,cursor:"pointer",background:"white"}}>
+                    {sel?<WorkerAvatar worker={sel} size={30}/>:<div style={{width:30,height:30,borderRadius:"50%",background:"#f3f4f6",display:"flex",alignItems:"center",justifyContent:"center",fontSize:15,color:"#bbb",flexShrink:0}}>👤</div>}
+                    <span style={{flex:1,minWidth:0,color:sel?"#111":"#999",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{sel?sel.name:"-- নির্বাচন করুন --"}{sel&&<span style={{fontSize:10,color:deptColor(sel.department),fontWeight:600}}> · {sel.department}</span>}</span>
+                    <span style={{color:"#888"}}>▾</span>
+                  </button>
+                  {advPickerOpen&&<div style={{position:"absolute",top:"105%",left:0,right:0,background:"white",border:`1.5px solid ${PAY_BORDER}`,borderRadius:10,boxShadow:"0 6px 20px rgba(0,0,0,.14)",zIndex:30,maxHeight:280,overflowY:"auto"}}>
+                    {activeWorkers.length===0?<div style={{padding:12,fontSize:12,color:"#aaa",textAlign:"center"}}>কোনো সক্রিয় কর্মী নেই</div>:
+                    PAYROLL_DEPTS.filter(d=>activeWorkers.some(w=>w.department===d)).map(d=><div key={d}>
+                      <div style={{padding:"5px 11px",fontSize:10,fontWeight:700,color:deptColor(d),background:deptColor(d)+"14"}}>{d}</div>
+                      {activeWorkers.filter(w=>w.department===d).map(w=><div key={w.id} data-adv-pick={w.id} onClick={()=>{setNewAdv({...newAdv,workerId:w.id});setAdvPickerOpen(false)}} style={{display:"flex",alignItems:"center",gap:9,padding:"8px 11px",cursor:"pointer",borderBottom:"1px solid #f5f5f5",background:newAdv.workerId===w.id?PAY_LIGHT:"white"}}>
+                        <WorkerAvatar worker={w} size={30}/>
+                        <div style={{flex:1,minWidth:0}}>
+                          <div style={{fontSize:13,fontWeight:600,color:"#111"}}>{w.name}</div>
+                          <div style={{fontSize:10,color:"#999"}}>এই সপ্তাহে নিয়েছে {money(advanceTotal(w.id))}</div>
+                        </div>
+                      </div>)}
+                    </div>)}
+                  </div>}
+                </div>;
+              })()}
+            </div>
+            <div style={{marginBottom:10}}>
+              {lbl("পরিমাণ (৳)")}
+              <input type="number" value={newAdv.amount} onChange={e=>setNewAdv({...newAdv,amount:e.target.value})} placeholder="0" style={{...inp,padding:"13px 12px",fontSize:20,fontWeight:800,color:"#166534"}}/>
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"1.3fr 1fr",gap:8,marginBottom:8}}>
+              <div>{lbl("তারিখ")}<DateInput value={newAdv.date} onChange={v=>setNewAdv({...newAdv,date:v})} accent={PAY}/></div>
+              <div>{lbl("সময়")}<input type="time" data-adv-time="1" value={newAdv.time||""} onChange={e=>setNewAdv({...newAdv,time:e.target.value})} style={{...inp,padding:"9px 8px"}}/></div>
+            </div>
+            <div style={{fontSize:10,color:"#0f766e",marginBottom:8,minHeight:13}}>{newAdv.date?`${payWeekday(newAdv.date)} ${newAdv.time?"· "+bnTimeLabel(newAdv.time):""}`:""}{advWeek!==weekEnd&&<span style={{display:"block",color:"#b45309",fontWeight:700}}>⚠️ এই তারিখ {payWeekRange(advWeek)} সপ্তাহে — অগ্রিমটা সেই সপ্তাহের হিসাবে কাটা যাবে</span>}</div>
+            <div style={{marginBottom:12}}>{lbl("নোট")}<input value={newAdv.note} onChange={e=>setNewAdv({...newAdv,note:e.target.value})} placeholder="ঐচ্ছিক" style={inp}/></div>
+            <button onClick={addAdvance} disabled={!advOk} style={{width:"100%",background:advOk?"#16a34a":"#ccc",color:"white",border:"none",borderRadius:11,padding:"15px",fontSize:16,fontWeight:800,boxShadow:advOk?"0 4px 12px rgba(22,163,74,0.35)":"none"}}>✓ জমা করুন</button>
+          </div>
+
+          <div style={card}>
+            <div style={{fontWeight:800,fontSize:13,color:PAY_DARK,marginBottom:8}}>এই সপ্তাহের অগ্রিম — কে, কবে, কখন</div>
+            {advs.length===0?<div style={{textAlign:"center",color:"#aaa",padding:12,fontSize:12}}>এই সপ্তাহে কোনো অগ্রিম নেই</div>:
+            [...new Set(advs.map(a=>String(a.date||"")))].sort().reverse().map(ds=>{
+              const list=advs.filter(a=>String(a.date||"")===ds).sort((a,b)=>advSortKey(b).localeCompare(advSortKey(a)));
+              return<div key={ds} data-adv-day={ds} style={{marginBottom:9}}>
+                <div style={{display:"flex",justifyContent:"space-between",fontSize:10.5,fontWeight:800,color:"#555",background:"#f5f5f4",borderRadius:6,padding:"4px 8px",marginBottom:2}}>
+                  <span>{payWeekday(ds)}, {fmtDate(ds)}</span><span>{money(list.reduce((s,a)=>s+(parseFloat(a.amount)||0),0))}</span>
+                </div>
+                {list.map(a=>{const w=workers.find(x=>x.id===a.workerId);return<div key={a.id} data-adv-row={a.id} style={{display:"flex",alignItems:"center",gap:8,fontSize:12,padding:"6px 2px",borderBottom:"1px dashed #eee"}}>
+                  <span style={{width:68,flexShrink:0,fontSize:10,color:"#0f766e",fontWeight:700}}>{timeTag(a)||"—"}</span>
+                  {w?<WorkerAvatar worker={w} size={24}/>:null}
+                  <span style={{flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis"}}>{w?w.name:"(মুছে ফেলা কর্মী)"}{a.note?<span style={{color:"#999",fontSize:10}}> · {a.note}</span>:null}</span>
+                  <strong style={{flexShrink:0}}>{money(a.amount)}</strong>
+                  <button onClick={()=>removeAdvance(a)} style={{background:"#fee2e2",border:"none",borderRadius:5,padding:"2px 6px",color:RED,fontSize:10,flexShrink:0}}>✕</button>
+                </div>})}
+              </div>;
+            })}
+            {advs.length>0&&<div style={{marginTop:6,paddingTop:8,borderTop:"1.5px solid #eee"}}>
+              <div style={{fontSize:10.5,fontWeight:800,color:"#555",marginBottom:4}}>কর্মী অনুযায়ী মোট</div>
+              {rowsW.filter(w=>advanceTotal(w.id)>0).map(w=><div key={w.id} style={{display:"flex",justifyContent:"space-between",fontSize:11,padding:"2px 0"}}>
+                <span>{w.name} <span style={{color:"#999",fontSize:9.5}}>({toBnDigits(advOf(w.id).length)} বার)</span></span><b>{money(advanceTotal(w.id))}</b>
+              </div>)}
+            </div>}
+            <div style={{fontSize:9,color:"#aaa",marginTop:8}}>≈ চিহ্ন: আগের এন্ট্রিতে সময় আলাদা করে লেখা ছিল না — যখন লেখা হয়েছিল সেই সময়।</div>
+          </div>
+        </div>}
+
+        {/* ── হিসাব ও প্রিন্ট ── */}
+        {weekTab==="report"&&<div style={{background:"white",borderRadius:11,padding:16,boxShadow:"0 1px 4px rgba(0,0,0,.07)"}} id="payroll-report">
+          <div className="no-print" style={{display:"flex",justifyContent:"flex-end",marginBottom:10}}>
+            <button onClick={()=>window.print()} style={{background:"#4b5563",color:"white",border:"none",borderRadius:8,padding:"9px 16px",fontWeight:700,fontSize:12}}>🖨️ রিপোর্ট প্রিন্ট করুন</button>
+          </div>
+          <div style={{textAlign:"center",marginBottom:12}}>
+            <div style={{fontSize:16,fontWeight:800,color:"#111"}}>রূপালী ফার্নিচার — সাপ্তাহিক পে-রোল রিপোর্ট</div>
+            <div style={{fontSize:12,color:"#666",marginTop:2}}>সপ্তাহ: {payWeekRange(weekEnd)} (শুক্র – বৃহস্পতি)</div>
+          </div>
+          <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+            <thead><tr style={{background:"#4b5563",color:"white"}}>
+              {["কর্মীর নাম","বিভাগ","উপস্থিত দিন","দৈনিক হার","মোট আয়","অগ্রিম","প্রাপ্য"].map(h=><th key={h} style={{padding:"7px 6px",textAlign:"left",fontWeight:700,fontSize:11}}>{h}</th>)}
+            </tr></thead>
+            <tbody>
+              {rowsW.filter(w=>daysPresent(w.id)>0||advanceTotal(w.id)>0||w.active!==false).map((w,i)=><tr key={w.id} style={{background:i%2===0?"#f3f4f6":"white",borderBottom:"1px solid #e5e7eb",borderLeft:`3px solid ${deptColor(w.department)}`}}>
+                <td style={{padding:"7px 6px",fontWeight:600}}>{w.name}</td>
+                <td style={{padding:"7px 6px",fontSize:11,color:deptColor(w.department),fontWeight:600}}>{w.department}</td>
+                <td style={{padding:"7px 6px",textAlign:"center"}}>{daysPresent(w.id)}</td>
+                <td style={{padding:"7px 6px"}}>{money(rateOf(w))}</td>
+                <td style={{padding:"7px 6px"}}>{money(grossPay(w))}</td>
+                <td style={{padding:"7px 6px",color:advanceTotal(w.id)>0?RED:"#999"}}>{advanceTotal(w.id)>0?"− "+money(advanceTotal(w.id)):"—"}</td>
+                <td style={{padding:"7px 6px",fontWeight:800,color:"#166534"}}>{money(netPay(w))}</td>
+              </tr>)}
+            </tbody>
+            <tfoot>
+              <tr style={{background:"#111",color:"white"}}>
+                <td colSpan={4} style={{padding:"9px 6px",fontWeight:700}}>সর্বমোট</td>
+                <td style={{padding:"9px 6px",fontWeight:700}}>{money(G)}</td>
+                <td style={{padding:"9px 6px",fontWeight:700}}>{money(A)}</td>
+                <td style={{padding:"9px 6px",fontWeight:800,fontSize:13}}>{money(NET)}</td>
+              </tr>
+            </tfoot>
+          </table>
+          {advs.length>0&&<div style={{marginTop:16}}>
+            <div style={{fontSize:12.5,fontWeight:800,color:"#111",marginBottom:5}}>অগ্রিমের বিবরণ</div>
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
+              <thead><tr style={{background:"#e5e7eb"}}>{["তারিখ","বার","সময়","কর্মী","টাকা","নোট"].map(h=><th key={h} style={{padding:"5px 5px",textAlign:"left",fontSize:10.5}}>{h}</th>)}</tr></thead>
+              <tbody>{advs.slice().sort((a,b)=>advSortKey(a).localeCompare(advSortKey(b))).map(a=>{const w=workers.find(x=>x.id===a.workerId);return<tr key={a.id} style={{borderBottom:"1px solid #eee"}}>
+                <td style={{padding:"4px 5px"}}>{fmtDate(a.date)}</td>
+                <td style={{padding:"4px 5px"}}>{payWeekday(a.date)}</td>
+                <td style={{padding:"4px 5px"}}>{timeTag(a)||"—"}</td>
+                <td style={{padding:"4px 5px"}}>{w?w.name:"(মুছে ফেলা কর্মী)"}</td>
+                <td style={{padding:"4px 5px",fontWeight:700}}>{money(a.amount)}</td>
+                <td style={{padding:"4px 5px",color:"#666"}}>{a.note||""}</td>
+              </tr>})}</tbody>
+            </table>
+          </div>}
+          <div style={{marginTop:24,display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
+            {["হিসাবরক্ষক","পরিচালক — সাদমান সাকিব"].map(t=><div key={t} style={{borderTop:"1.5px solid #999",paddingTop:6,textAlign:"center",fontSize:11,color:"#666"}}>{t}</div>)}
+          </div>
+        </div>}
+      </>}
 
       {view==="workers"&&<div className="no-print">
-        <div style={{background:"white",borderRadius:12,padding:16,marginBottom:16,boxShadow:"0 1px 4px rgba(0,0,0,.07)"}}>
-          <div style={{fontWeight:700,fontSize:14,marginBottom:12}}>{editingWorkerId?"কর্মীর তথ্য পরিবর্তন করুন":"নতুন কর্মী যোগ করুন"}</div>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,marginBottom:10}}>
+          <div style={{fontSize:11,color:"#666"}}>সক্রিয় {toBnDigits(activeWorkers.length)} জন{workers.length>activeWorkers.length?` · নিষ্ক্রিয় ${toBnDigits(workers.length-activeWorkers.length)} জন`:""}</div>
+          {!formOpen&&<button onClick={()=>{setEditingWorkerId(null);setNewWorker(blankWorker);setFormOpen(true)}} style={{background:PAY,color:"white",border:"none",borderRadius:9,padding:"9px 14px",fontSize:12,fontWeight:800}}>+ নতুন কর্মী</button>}
+        </div>
+
+        {formOpen&&<div style={{...card,padding:16,border:`1.5px solid ${PAY_BORDER}`}}>
+          <div style={{fontWeight:800,fontSize:14,marginBottom:12}}>{editingWorkerId?"কর্মীর তথ্য পরিবর্তন করুন":"নতুন কর্মী যোগ করুন"}</div>
           <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:12,background:PAY_LIGHT,borderRadius:9,padding:10,border:`1px solid ${PAY_BORDER}`}}>
             {newWorker.photoImg?<img src={newWorker.photoImg} onClick={()=>openLightbox(newWorker.photoImg)} style={{width:60,height:60,borderRadius:"50%",objectFit:"cover",border:`2px solid ${PAY}`,flexShrink:0,cursor:"pointer"}} alt=""/>
             :<div style={{width:60,height:60,borderRadius:"50%",background:"white",border:`2px dashed ${PAY_BORDER}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:24,color:PAY_BORDER,flexShrink:0}}>👤</div>}
@@ -8384,7 +8746,10 @@ function PayrollPage({workers,saveWorker,deleteWorker,payrollWeeks,savePayrollWe
           </div>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:12}}>
             <div>{lbl("বিভাগ")}<select value={newWorker.department} onChange={e=>setNewWorker({...newWorker,department:e.target.value})} style={inp}>{PAYROLL_DEPTS.map(d=><option key={d} value={d}>{d}</option>)}</select></div>
-            <div>{lbl("দৈনিক বেতন (৳) *")}<input type="number" value={newWorker.dailyRate} onChange={e=>setNewWorker({...newWorker,dailyRate:e.target.value})} placeholder="0" style={inp}/></div>
+            {editingWorkerId?<div>{lbl("দৈনিক বেতন (হাজিরা)")}
+              <div style={{...inp,background:"#f8fafc",color:"#444",fontWeight:700}}>{money(parseFloat(newWorker.dailyRate)||0)}</div>
+              <div style={{fontSize:9,color:"#0f766e",marginTop:3,lineHeight:1.4}}>বদলাতে কর্মীর কার্ডে "💹 হাজিরা বদল" — আগের সপ্তাহগুলো আগের হারেই থাকবে</div>
+            </div>:<div>{lbl("দৈনিক বেতন (৳) *")}<input type="number" value={newWorker.dailyRate} onChange={e=>setNewWorker({...newWorker,dailyRate:e.target.value})} placeholder="0" style={inp}/></div>}
           </div>
           <div style={{marginBottom:14,background:PAY_LIGHT,borderRadius:9,padding:10,border:`1px solid ${PAY_BORDER}`}}>
             {lbl("🪪 আইডি কার্ডের ছবি (ভোটার আইডি / এনআইডি)")}
@@ -8398,33 +8763,98 @@ function PayrollPage({workers,saveWorker,deleteWorker,payrollWeeks,savePayrollWe
             <input ref={idCardInput} type="file" accept="image/*" onChange={handleIdCardImg} style={{display:"none"}}/>
           </div>
           <div style={{display:"flex",gap:8}}>
-            {editingWorkerId&&<button onClick={()=>{setEditingWorkerId(null);setNewWorker(blankWorker)}} style={{flex:1,background:"#f3f4f6",border:"none",borderRadius:9,padding:"12px",fontSize:13}}>বাতিল</button>}
+            <button onClick={cancelForm} style={{flex:1,background:"#f3f4f6",border:"none",borderRadius:9,padding:"12px",fontSize:13}}>বাতিল</button>
             <button onClick={editingWorkerId?saveEditWorker:saveNewWorker} style={{flex:2,background:PAY,color:"white",border:"none",borderRadius:9,padding:"12px",fontSize:13,fontWeight:700}}>{editingWorkerId?"সংরক্ষণ করুন":"যোগ করুন"}</button>
           </div>
-        </div>
-        <div style={{fontWeight:700,fontSize:14,marginBottom:10}}>কর্মী তালিকা ({workers.length})</div>
+        </div>}
+
         {workers.length===0?<div style={{textAlign:"center",color:"#aaa",padding:30,fontSize:13}}>এখনো কোনো কর্মী যোগ করা হয়নি</div>:
-        sortByDept(workers).map(w=><div key={w.id} style={{background:"white",borderRadius:11,padding:"12px 14px",marginBottom:9,boxShadow:"0 1px 4px rgba(0,0,0,.07)",opacity:w.active===false?0.6:1}}>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"start",gap:10}}>
-            <WorkerAvatar worker={w} size={40}/>
-            {w.idCardImg&&<img src={w.idCardImg} onClick={()=>setViewingIdCard(w)} style={{width:44,height:34,objectFit:"cover",borderRadius:6,border:"1px solid #ddd",flexShrink:0,cursor:"pointer"}} alt="ID"/>}
-            <div style={{flex:1,minWidth:0}}>
-              <div style={{fontWeight:700,fontSize:14}}>{w.name}{w.active===false&&<span style={{fontSize:10,color:"#999",fontWeight:400}}> (নিষ্ক্রিয়)</span>}</div>
-              <div style={{fontSize:11,color:"#888",marginTop:2,display:"flex",alignItems:"center",gap:5}}><span style={{width:8,height:8,borderRadius:"50%",background:deptColor(w.department),display:"inline-block",flexShrink:0}}></span>{w.department} · দৈনিক {money(w.dailyRate)}</div>
-              {w.voterId&&<div style={{fontSize:11,color:"#888",marginTop:1}}>ভোটার আইডি: {w.voterId}</div>}
-              <div style={{display:"flex",gap:8,marginTop:4,flexWrap:"wrap"}}>
-                {w.phone1&&<a href={`tel:${w.phone1}`} style={{fontSize:11,color:"#1d4ed8",textDecoration:"none",fontWeight:600,background:"#eff6ff",borderRadius:6,padding:"8px 10px",minHeight:38}}>📱 {w.phone1}</a>}
-                {w.phone2&&<a href={`tel:${w.phone2}`} style={{fontSize:11,color:"#1d4ed8",textDecoration:"none",fontWeight:600,background:"#eff6ff",borderRadius:6,padding:"8px 10px",minHeight:38}}>📱 {w.phone2}</a>}
-                {w.idCardImg&&<button onClick={()=>setViewingIdCard(w)} style={{fontSize:11,color:PAY_DARK,fontWeight:600,background:PAY_LIGHT,border:"none",borderRadius:6,padding:"2px 8px"}}>🪪 আইডি কার্ড</button>}
-              </div>
-            </div>
-            <div style={{display:"flex",gap:5,flexShrink:0}}>
-              <button onClick={()=>startEditWorker(w)} style={{background:PAY_LIGHT,border:"none",borderRadius:6,padding:"5px 8px",color:PAY_DARK,fontSize:10,fontWeight:600}}>✏️</button>
-              <button onClick={()=>toggleActive(w)} style={{background:w.active===false?"#f0fdf4":"#fffbeb",border:"none",borderRadius:6,padding:"5px 8px",color:w.active===false?"#166534":"#92400e",fontSize:10,fontWeight:600}}>{w.active===false?"সক্রিয় করুন":"নিষ্ক্রিয়"}</button>
-              <button onClick={()=>confirmDeleteWorker(w)} style={{background:"#fee2e2",border:"none",borderRadius:6,padding:"5px 8px",color:RED,fontSize:10,fontWeight:600}}>🗑</button>
-            </div>
-          </div>
-        </div>)}
+        PAYROLL_DEPTS.concat(["__other"]).map(dept=>{
+          const list=sortByDept(workers).filter(w=>dept==="__other"?!PAYROLL_DEPTS.includes(w.department):w.department===dept);
+          if(!list.length)return null;
+          const dc=deptColor(dept==="__other"?"অন্যান্য":dept);
+          return<div key={dept} style={{marginBottom:6}}>
+            <div style={{fontSize:11,fontWeight:800,color:dc,margin:"8px 2px 5px"}}>{dept==="__other"?"অন্যান্য":dept} · {toBnDigits(list.length)} জন</div>
+            {list.map(w=>{
+              const hist=workerRateHist(w),curRate=workerRateOn(w,thisWeek);
+              const lastStep=hist.filter(h=>h.from).slice(-1)[0]||null;
+              const prevRate=lastStep?workerRateOn(w,addDays(lastStep.from,-7)):null;
+              const btn=(bg,col)=>({background:bg,border:"none",borderRadius:7,padding:"6px 9px",color:col,fontSize:10.5,fontWeight:700});
+              return<div key={w.id} data-worker-card={w.id} style={{background:"white",borderRadius:11,padding:"11px 12px",marginBottom:8,boxShadow:"0 1px 4px rgba(0,0,0,.07)",borderLeft:`3px solid ${dc}`,opacity:w.active===false?0.62:1}}>
+                <div style={{display:"flex",alignItems:"start",gap:10}}>
+                  <WorkerAvatar worker={w} size={42}/>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontWeight:800,fontSize:14}}>{w.name}{w.active===false&&<span style={{fontSize:10,color:"#999",fontWeight:400}}> (নিষ্ক্রিয়)</span>}</div>
+                    <div style={{fontSize:11.5,color:"#333",marginTop:2}}>দৈনিক <b>{money(curRate)}</b>{lastStep&&<span style={{fontSize:9.5,color:"#166534",marginLeft:5}}>{prevRate!==null&&prevRate!==parseFloat(lastStep.rate)?`${parseFloat(lastStep.rate)>prevRate?"↑":"↓"} ${money(prevRate)} → ${money(lastStep.rate)} · `:""}{fmtDate(addDays(lastStep.from,-6))} সপ্তাহ থেকে</span>}</div>
+                    {w.voterId&&<div style={{fontSize:10.5,color:"#888",marginTop:1}}>ভোটার আইডি: {w.voterId}</div>}
+                    <div style={{display:"flex",gap:6,marginTop:5,flexWrap:"wrap"}}>
+                      {w.phone1&&<a href={`tel:${w.phone1}`} style={{fontSize:11,color:"#1d4ed8",textDecoration:"none",fontWeight:600,background:"#eff6ff",borderRadius:6,padding:"7px 9px"}}>📱 {w.phone1}</a>}
+                      {w.phone2&&<a href={`tel:${w.phone2}`} style={{fontSize:11,color:"#1d4ed8",textDecoration:"none",fontWeight:600,background:"#eff6ff",borderRadius:6,padding:"7px 9px"}}>📱 {w.phone2}</a>}
+                      {w.idCardImg&&<button onClick={()=>setViewingIdCard(w)} style={{fontSize:11,color:PAY_DARK,fontWeight:600,background:PAY_LIGHT,border:"none",borderRadius:6,padding:"2px 8px"}}>🪪 আইডি কার্ড</button>}
+                    </div>
+                  </div>
+                </div>
+                <div style={{display:"flex",gap:5,marginTop:9,flexWrap:"wrap"}}>
+                  <button onClick={()=>startEditWorker(w)} style={btn(PAY_LIGHT,PAY_DARK)}>✏️ তথ্য</button>
+                  <button onClick={()=>openRate(w)} style={btn(rateFor===w.id?"#166534":"#dcfce7",rateFor===w.id?"white":"#166534")}>💹 হাজিরা বদল</button>
+                  <button onClick={()=>{setLedgerFor(ledgerFor===w.id?null:w.id);setRateFor(null)}} style={btn(ledgerFor===w.id?"#1d4ed8":"#eff6ff",ledgerFor===w.id?"white":"#1d4ed8")}>📒 খাতা</button>
+                  <button onClick={()=>toggleActive(w)} style={btn(w.active===false?"#f0fdf4":"#fffbeb",w.active===false?"#166534":"#92400e")}>{w.active===false?"সক্রিয় করুন":"নিষ্ক্রিয়"}</button>
+                  <button onClick={()=>confirmDeleteWorker(w)} style={btn("#fee2e2",RED)}>🗑</button>
+                </div>
+
+                {rateFor===w.id&&(()=>{
+                  const r=parseFloat(rateDraft.rate),from=rateDraft.from,all=from==="__all";
+                  const before=all?null:workerRateOn(w,addDays(from,-7));
+                  const later=all?[]:hist.filter(h=>h.from&&h.from>from);
+                  const hasAtt=!all&&payrollWeeks[from]&&Object.keys(payrollWeeks[from].attendance||{}).includes(w.id);
+                  return<div data-rate-panel={w.id} style={{marginTop:10,background:"#f0fdf4",border:"1.5px solid #86efac",borderRadius:9,padding:"10px 11px"}}>
+                    <div style={{fontSize:12,fontWeight:800,color:"#166534",marginBottom:7}}>💹 দৈনিক হাজিরা বদল — এখন {money(curRate)}</div>
+                    <div style={{display:"grid",gridTemplateColumns:"1fr 1.4fr",gap:8,marginBottom:7}}>
+                      <div>{lbl("নতুন দৈনিক হার (৳)")}<input type="number" data-rate-input="1" value={rateDraft.rate} onChange={e=>setRateDraft({...rateDraft,rate:e.target.value})} placeholder={String(curRate)} style={{...inp,padding:"9px 10px",fontSize:15,fontWeight:800,color:"#166534"}}/></div>
+                      <div>{lbl("কোন সপ্তাহ থেকে")}<select data-rate-from="1" value={from} onChange={e=>setRateDraft({...rateDraft,from:e.target.value})} style={{...inp,padding:"9px 6px",fontSize:11.5}}>
+                        {weekOpts.map(k=><option key={k} value={k}>{payWeekRange(k)}{k===thisWeek?" (চলতি)":k>thisWeek?" (আগামী)":""}</option>)}
+                        <option value="__all">শুরু থেকে সব সপ্তাহে (শুধু ভুল ঠিক করতে)</option>
+                      </select></div>
+                    </div>
+                    {r>0&&<div style={{fontSize:10.5,lineHeight:1.6,color:all?"#991b1b":"#14532d",background:"white",borderRadius:7,padding:"6px 8px",marginBottom:7}}>
+                      {all?<>⚠️ আগের সব সপ্তাহের হিসাবও দৈনিক {money(r)} দিয়ে হবে — মোট বেতন, চার্ট ও লাভ-ক্ষতি সব বদলাবে।</>:<>
+                        <b>{payWeekRange(from)}</b> সপ্তাহ থেকে দৈনিক <b>{money(r)}</b> (আগে {money(before)})। তার আগের সব সপ্তাহ {money(before)}-এই থাকবে — যা দেওয়া হয়ে গেছে তা বদলাবে না।
+                        {hasAtt&&<div style={{color:"#92400e"}}>এই সপ্তাহের হাজিরা আগেই লেখা আছে — এই সপ্তাহের আয়ও নতুন হারে হিসাব হবে।</div>}
+                        {later.length>0&&<div style={{color:"#92400e"}}>পরে আগে থেকেই বসানো: {later.map(h=>`${fmtDate(addDays(h.from,-6))} থেকে ${money(h.rate)}`).join(", ")} — সেটা থাকবে।</div>}
+                      </>}
+                    </div>}
+                    <div style={{display:"flex",gap:6}}>
+                      <button onClick={()=>setRateFor(null)} style={{flex:1,background:"white",border:"1px solid #ddd",borderRadius:8,padding:"9px",fontSize:12}}>বাতিল</button>
+                      <button onClick={()=>saveRate(w)} disabled={!(r>0)} style={{flex:2,background:r>0?"#166534":"#ccc",color:"white",border:"none",borderRadius:8,padding:"9px",fontSize:12,fontWeight:800}}>✓ সেভ করুন</button>
+                    </div>
+                    {hist.length>0&&<div style={{marginTop:9,paddingTop:7,borderTop:"1px dashed #bbf7d0"}}>
+                      <div style={{fontSize:10,fontWeight:800,color:"#166534",marginBottom:3}}>হারের ইতিহাস</div>
+                      {hist.map(h=><div key={h.from||"base"} style={{display:"flex",justifyContent:"space-between",alignItems:"center",fontSize:10.5,padding:"2px 0"}}>
+                        <span>{h.from?`${payWeekRange(h.from)} সপ্তাহ থেকে`:"শুরু থেকে"}</span>
+                        <span style={{display:"flex",alignItems:"center",gap:6}}><b>{money(h.rate)}</b>{h.from&&<button onClick={()=>removeRateStep(w,h.from)} style={{background:"#fee2e2",border:"none",borderRadius:5,padding:"1px 6px",color:RED,fontSize:9.5}}>✕</button>}</span>
+                      </div>)}
+                    </div>}
+                  </div>;
+                })()}
+
+                {ledgerFor===w.id&&(()=>{
+                  const rows=ledgerOf(w);
+                  const tg=rows.reduce((s,r)=>s+r.gross,0),ta=rows.reduce((s,r)=>s+r.adv,0),td=rows.reduce((s,r)=>s+r.d,0);
+                  return<div data-ledger={w.id} style={{marginTop:10,background:"#eff6ff",border:"1.5px solid #bfdbfe",borderRadius:9,padding:"10px 11px"}}>
+                    <div style={{fontSize:12,fontWeight:800,color:"#1d4ed8",marginBottom:3}}>📒 {w.name}-এর খাতা</div>
+                    <div style={{fontSize:10,color:"#555",marginBottom:8}}>{toBnDigits(rows.length)} সপ্তাহ · {td} দিন · আয় {money(tg)} · অগ্রিম {money(ta)} · প্রাপ্য {money(tg-ta)}</div>
+                    {rows.length===0?<div style={{fontSize:11,color:"#999"}}>এখনো কোনো হাজিরা বা অগ্রিম নেই</div>:rows.slice(0,12).map(r=><div key={r.we} style={{background:"white",borderRadius:7,padding:"6px 8px",marginBottom:5}}>
+                      <div style={{display:"flex",justifyContent:"space-between",fontSize:10.5,fontWeight:800,color:"#333"}}><span>{payWeekRange(r.we)}</span><span style={{color:"#166534"}}>প্রাপ্য {money(r.net)}</span></div>
+                      <div style={{fontSize:10,color:"#666",marginTop:1}}>{r.d} দিন × {money(r.rate)} = {money(r.gross)}{r.adv>0?` · অগ্রিম ${money(r.adv)}`:""}</div>
+                      {r.advs.map(a=><div key={a.id} style={{fontSize:9.5,color:"#b91c1c",paddingLeft:8}}>• {payWeekday(a.date)}, {fmtDate(a.date)}{timeTag(a)?` · ${timeTag(a)}`:""} — {money(a.amount)}{a.note?` (${a.note})`:""}</div>)}
+                    </div>)}
+                    {rows.length>12&&<div style={{fontSize:9.5,color:"#999"}}>আরও {toBnDigits(rows.length-12)}টা পুরনো সপ্তাহ</div>}
+                  </div>;
+                })()}
+              </div>;
+            })}
+          </div>;
+        })}
         {viewingIdCard&&<div onClick={()=>setViewingIdCard(null)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.85)",zIndex:100,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:16}}>
           <div style={{color:"white",fontSize:15,fontWeight:700,marginBottom:10}}>{viewingIdCard.name} — আইডি কার্ড</div>
           <img src={viewingIdCard.idCardImg} style={{maxWidth:"100%",maxHeight:"70vh",objectFit:"contain",borderRadius:10,background:"white"}} alt="ID card"/>
@@ -8434,130 +8864,6 @@ function PayrollPage({workers,saveWorker,deleteWorker,payrollWeeks,savePayrollWe
           </div>
         </div>}
       </div>}
-
-      {view==="week"&&<>
-        <div className="no-print" style={{display:"flex",alignItems:"center",justifyContent:"space-between",background:"white",borderRadius:11,padding:"10px 14px",marginBottom:14,boxShadow:"0 1px 4px rgba(0,0,0,.07)"}}>
-          <button onClick={()=>setWeekEnd(addDays(weekEnd,-7))} style={{background:PAY_LIGHT,border:"none",borderRadius:8,padding:"8px 12px",color:PAY_DARK,fontWeight:700,fontSize:13}}>◀</button>
-          <div style={{textAlign:"center"}}>
-            <div style={{fontSize:13,fontWeight:700,color:"#222"}}>{weekRangeLabel}</div>
-            <div style={{fontSize:10,color:"#888"}}>শুক্র – বৃহস্পতি</div>
-          </div>
-          <button onClick={()=>setWeekEnd(addDays(weekEnd,7))} style={{background:PAY_LIGHT,border:"none",borderRadius:8,padding:"8px 12px",color:PAY_DARK,fontWeight:700,fontSize:13}}>▶</button>
-        </div>
-
-        <div className="no-print" style={{background:"white",borderRadius:13,padding:16,marginBottom:14,boxShadow:"0 2px 10px rgba(0,0,0,.09)",border:`1.5px solid ${PAY_BORDER}`}}>
-          <div style={{fontWeight:800,fontSize:15,marginBottom:12,color:PAY_DARK}}>💰 অগ্রিম (এডভান্স) যোগ করুন</div>
-          <div style={{marginBottom:10}}>
-            {lbl("কর্মী")}
-            {(()=>{
-              const sel=activeWorkers.find(w=>w.id===newAdv.workerId);
-              return<div style={{position:"relative"}}>
-                <button type="button" onClick={()=>setAdvPickerOpen(!advPickerOpen)} style={{...inp,padding:"10px 11px",fontSize:14,fontWeight:600,textAlign:"left",display:"flex",alignItems:"center",gap:9,cursor:"pointer",background:"white"}}>
-                  {sel?<WorkerAvatar worker={sel} size={32}/>:<div style={{width:32,height:32,borderRadius:"50%",background:"#f3f4f6",display:"flex",alignItems:"center",justifyContent:"center",fontSize:15,color:"#bbb",flexShrink:0}}>👤</div>}
-                  <span style={{flex:1,minWidth:0,color:sel?"#111":"#999",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
-                    {sel?sel.name:"-- নির্বাচন করুন --"}
-                    {sel&&<span style={{fontSize:10,color:deptColor(sel.department),fontWeight:600}}> · {sel.department}</span>}
-                  </span>
-                  <span style={{color:"#888"}}>▾</span>
-                </button>
-                {advPickerOpen&&<div style={{position:"absolute",top:"105%",left:0,right:0,background:"white",border:`1.5px solid ${PAY_BORDER}`,borderRadius:10,boxShadow:"0 6px 20px rgba(0,0,0,.14)",zIndex:30,maxHeight:260,overflowY:"auto"}}>
-                  {activeWorkers.length===0?<div style={{padding:12,fontSize:12,color:"#aaa",textAlign:"center"}}>কোনো সক্রিয় কর্মী নেই</div>:
-                  PAYROLL_DEPTS.filter(d=>activeWorkers.some(w=>w.department===d)).map(d=><div key={d}>
-                    <div style={{padding:"5px 11px",fontSize:10,fontWeight:700,color:deptColor(d),background:deptColor(d)+"14"}}>{d}</div>
-                    {activeWorkers.filter(w=>w.department===d).map(w=><div key={w.id} onClick={()=>{setNewAdv({...newAdv,workerId:w.id});setAdvPickerOpen(false)}} style={{display:"flex",alignItems:"center",gap:9,padding:"8px 11px",cursor:"pointer",borderBottom:"1px solid #f5f5f5",background:newAdv.workerId===w.id?PAY_LIGHT:"white"}}>
-                      <WorkerAvatar worker={w} size={32}/>
-                      <div style={{flex:1,minWidth:0}}>
-                        <div style={{fontSize:13,fontWeight:600,color:"#111"}}>{w.name}</div>
-                        <div style={{fontSize:10,color:"#999"}}>দৈনিক {money(w.dailyRate)}</div>
-                      </div>
-                    </div>)}
-                  </div>)}
-                </div>}
-              </div>;
-            })()}
-          </div>
-          <div style={{marginBottom:10}}>
-            {lbl("পরিমাণ (৳)")}
-            <input type="number" value={newAdv.amount} onChange={e=>setNewAdv({...newAdv,amount:e.target.value})} placeholder="0" style={{...inp,padding:"14px 12px",fontSize:20,fontWeight:800,color:"#166534"}}/>
-          </div>
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:14}}>
-            <div>{lbl("তারিখ")}<DateInput value={newAdv.date} onChange={v=>setNewAdv({...newAdv,date:v})} accent={PAY}/></div>
-            <div>{lbl("নোট")}<input value={newAdv.note} onChange={e=>setNewAdv({...newAdv,note:e.target.value})} placeholder="ঐচ্ছিক" style={inp}/></div>
-          </div>
-          <button onClick={addAdvance} disabled={!newAdv.workerId||!newAdv.amount} style={{width:"100%",background:(!newAdv.workerId||!newAdv.amount)?"#ccc":"#16a34a",color:"white",border:"none",borderRadius:11,padding:"16px",fontSize:16,fontWeight:800,boxShadow:(!newAdv.workerId||!newAdv.amount)?"none":"0 4px 12px rgba(22,163,74,0.35)"}}>✓ জমা করুন</button>
-          {(weekData.advances||[]).length>0&&<div style={{marginTop:14,paddingTop:12,borderTop:"1px solid #f0f0f0"}}>
-            {(weekData.advances||[]).map(a=>{
-              const w=workers.find(w=>w.id===a.workerId);
-              return<div key={a.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",fontSize:12,padding:"7px 0",borderTop:"1px dashed #eee"}}>
-                <span style={{display:"flex",alignItems:"center",gap:7,minWidth:0}}>
-                  {w?<WorkerAvatar worker={w} size={26}/>:null}
-                  <span style={{minWidth:0,overflow:"hidden",textOverflow:"ellipsis"}}>{fmtDate(a.date)} — {w?w.name:"?"}{a.note?` (${a.note})`:""}</span>
-                </span>
-                <span style={{display:"flex",alignItems:"center",gap:6}}><strong>{money(a.amount)}</strong><button onClick={()=>removeAdvance(a.id)} style={{background:"#fee2e2",border:"none",borderRadius:5,padding:"2px 6px",color:RED,fontSize:10}}>✕</button></span>
-              </div>
-            })}
-          </div>}
-        </div>
-
-        <div className="no-print" style={{background:"white",borderRadius:11,padding:14,marginBottom:14,boxShadow:"0 1px 4px rgba(0,0,0,.07)"}}>
-          <div style={{fontWeight:700,fontSize:13,marginBottom:4,color:PAY_DARK}}>সাপ্তাহিক হাজিরা (এটেন্ডেন্স ডিভাইস দেখে লিখুন)</div>
-          <div style={{fontSize:10,color:"#888",marginBottom:14}}>প্রতিটি কর্মীর পাশে +/− চেপে বা সরাসরি সংখ্যা লিখে এই সপ্তাহের মোট দিন নির্ধারণ করুন — স্বাভাবিক ১ দিন, ওভারটাইম হলে ১.৫ দিন করে ধরে মোট (০ থেকে সর্বোচ্চ ১০.৫)।</div>
-          <div>
-            {activeWorkers.length===0?<div style={{textAlign:"center",color:"#aaa",padding:16,fontSize:12}}>কোনো সক্রিয় কর্মী নেই</div>:
-            activeWorkers.map((w,i)=>{
-              const c=deptColor(w.department);
-              const val=daysPresent(w.id);
-              return<div key={w.id} style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,padding:"10px 4px 10px 10px",borderTop:i>0?"1px solid #f2f2f2":"none",borderLeft:`3px solid ${c}`}}>
-                <WorkerAvatar worker={w} size={38}/>
-                <div style={{flex:1,minWidth:0}}>
-                  <div style={{fontWeight:700,fontSize:13}}>{w.name}</div>
-                  <div style={{fontSize:10,color:c,fontWeight:600,marginTop:1}}>{w.department}</div>
-                  <div style={{fontSize:10,color:"#999",marginTop:2}}>দৈনিক {money(w.dailyRate)} · মোট {money(val*(parseFloat(w.dailyRate)||0))}</div>
-                </div>
-                <DayWheel value={val} onChange={v=>setWorkerDays(w.id,v)} color={c}/>
-              </div>
-            })}
-          </div>
-          <div style={{fontSize:9,color:"#999",marginTop:10}}>সর্বোচ্চ সম্ভাব্য হাজিরা: ১০.৫ দিন/সপ্তাহ (সব দিন ওভারটাইম হলে)</div>
-        </div>
-
-        <div style={{background:"white",borderRadius:11,padding:16,boxShadow:"0 1px 4px rgba(0,0,0,.07)"}} id="payroll-report">
-          <div className="no-print" style={{display:"flex",justifyContent:"flex-end",marginBottom:10}}>
-            <button onClick={()=>window.print()} style={{background:"#4b5563",color:"white",border:"none",borderRadius:8,padding:"9px 16px",fontWeight:700,fontSize:12}}>🖨️ রিপোর্ট প্রিন্ট করুন</button>
-          </div>
-          <div style={{textAlign:"center",marginBottom:12}}>
-            <div style={{fontSize:16,fontWeight:800,color:"#111"}}>রূপালী ফার্নিচার — সাপ্তাহিক পে-রোল রিপোর্ট</div>
-            <div style={{fontSize:12,color:"#666",marginTop:2}}>সপ্তাহ: {weekRangeLabel} (শুক্র – বৃহস্পতি)</div>
-          </div>
-          <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
-            <thead><tr style={{background:"#4b5563",color:"white"}}>
-              {["কর্মীর নাম","বিভাগ","উপস্থিত দিন","দৈনিক হার","মোট আয়","অগ্রিম","প্রাপ্য"].map(h=><th key={h} style={{padding:"7px 6px",textAlign:"left",fontWeight:700,fontSize:11}}>{h}</th>)}
-            </tr></thead>
-            <tbody>
-              {activeWorkers.map((w,i)=><tr key={w.id} style={{background:i%2===0?"#f3f4f6":"white",borderBottom:"1px solid #e5e7eb",borderLeft:`3px solid ${deptColor(w.department)}`}}>
-                <td style={{padding:"7px 6px",fontWeight:600}}>{w.name}</td>
-                <td style={{padding:"7px 6px",fontSize:11,color:deptColor(w.department),fontWeight:600}}>{w.department}</td>
-                <td style={{padding:"7px 6px",textAlign:"center"}}>{daysPresent(w.id)}</td>
-                <td style={{padding:"7px 6px"}}>{money(w.dailyRate)}</td>
-                <td style={{padding:"7px 6px"}}>{money(grossPay(w))}</td>
-                <td style={{padding:"7px 6px",color:advanceTotal(w.id)>0?RED:"#999"}}>{advanceTotal(w.id)>0?"− "+money(advanceTotal(w.id)):"—"}</td>
-                <td style={{padding:"7px 6px",fontWeight:800,color:"#166534"}}>{money(netPay(w))}</td>
-              </tr>)}
-            </tbody>
-            <tfoot>
-              <tr style={{background:"#111",color:"white"}}>
-                <td colSpan={4} style={{padding:"9px 6px",fontWeight:700}}>সর্বমোট</td>
-                <td style={{padding:"9px 6px",fontWeight:700}}>{money(grandTotalGross)}</td>
-                <td style={{padding:"9px 6px",fontWeight:700}}>{money(grandTotalAdvance)}</td>
-                <td style={{padding:"9px 6px",fontWeight:800,fontSize:13}}>{money(grandTotalNet)}</td>
-              </tr>
-            </tfoot>
-          </table>
-          <div style={{marginTop:24,display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
-            {["হিসাবরক্ষক","পরিচালক — সাদমান সাকিব"].map(t=><div key={t} style={{borderTop:"1.5px solid #999",paddingTop:6,textAlign:"center",fontSize:11,color:"#666"}}>{t}</div>)}
-          </div>
-        </div>
-      </>}
     </div>
   </div>
 }
@@ -9615,7 +9921,8 @@ function Preview({syncInfo,online,order:orderRaw,onBack,slip,setSlip,onUpdate:on
       addedFull[id]=compressed;
       next.push({id,thumb,src:compressed,fileName:savedFull?relPath:null});
     }
-    if(Object.keys(addedFull).length&&onSavePhotos)await onSavePhotos(order.no,addedFull,[]);
+    const stored=Object.keys(addedFull).length&&onSavePhotos?await onSavePhotos(order.no,addedFull,[]):false;
+    if(!stored)next=next.map(im=>im&&addedFull[im.id]?(({id,...r})=>r)(im):im); // v5.49: জমা না হলে ভেতরেই
     onUpdate({...order,deliveryImgs:next,deliveryImg:undefined,deliveryImgFileName:undefined});
     // ── প্রথমবার যে ছবি একটা মডেলের জন্য পাওয়া যায়, সেটাই স্থায়ীভাবে কভার ছবি হয়ে থাকে —
     // পরের অর্ডারের ডেলিভারি ছবি দিয়ে আর বদলানো/যোগ করা হয় না, তাই ডেটাবেস প্রতি অর্ডারে
@@ -9749,9 +10056,7 @@ function Hist({syncInfo,online,orders,db,onBack,onView,highlightNo,q,setQ,status
   // ── ড্যাশবোর্ডের "জনপ্রিয় ফার্নিচার" তালিকার সাথে মিলিয়ে — কোন ক্যাটাগরি কত নম্বর জনপ্রিয়
   // (অর্ডার সংখ্যা অনুযায়ী, বাতিল বাদে) তা ফিল্টার-তথ্য বক্সে দেখানোর জন্য ──
   const categoryPopularityRank=useMemo(()=>{
-    const counts={};
-    (orders||[]).filter(o=>!o.cancelled).forEach(o=>categoryOf(o).forEach(c=>{counts[c]=(counts[c]||0)+1}));
-    const ranked=Object.entries(counts).sort((a,b)=>b[1]-a[1]).map(([label])=>label);
+    const ranked=catPopularity(orders,db).map(c=>c.label); // v5.48: ড্যাশবোর্ডের একই ক্রম
     const rankMap={};
     ranked.forEach((label,i)=>{rankMap[label]=i+1});
     return rankMap;
@@ -9805,7 +10110,7 @@ function Hist({syncInfo,online,orders,db,onBack,onView,highlightNo,q,setQ,status
         const itemCategoryOf=(it)=>itemCatOf(db,it).label; // v5.20
         const fTotal=catFilter==="all"
           ?filtered.reduce((s,o)=>s+(parseFloat(o.cust.total)||0),0)
-          :filtered.reduce((s,o)=>s+(o.items||[]).filter(it=>itemCategoryOf(it)===catFilter).reduce((ss,it)=>ss+(parseFloat(it.price)||0)*(parseFloat(it.qty)||1),0),0);
+          :filtered.reduce((s,o)=>s+Object.values(orderCatValues(o,db)).filter(x=>x.label===catFilter).reduce((a,x)=>a+x.value,0),0); // v5.54: নিশ্চিত দাম
         const fAvg=fCount?fTotal/fCount:0;
         const popRank=catFilter!=="all"?categoryPopularityRank[catFilter]:null;
         return<div style={{display:"flex",gap:6,marginBottom:14,overflowX:"auto"}}>
