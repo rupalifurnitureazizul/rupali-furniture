@@ -183,7 +183,7 @@ function compressImage(file,maxDim=1000,quality=0.70,maxBytes=45000){
 /* ── FULL-RESOLUTION LOCAL FOLDER STORAGE (desktop Chrome/Edge/Brave only) ──
    Original, uncompressed images are saved as real files in a folder you choose
    on your computer. Only a small compressed thumbnail syncs to the cloud/mobile. */
-const BUILD_TAG="5.62";
+const BUILD_TAG="5.64";
 const FS_SUPPORTED=typeof window!=="undefined"&&"showDirectoryPicker" in window;
 function idbOpen(){
   return new Promise((resolve,reject)=>{
@@ -5857,12 +5857,13 @@ function Home({onHistMonth,syncInfo,devices,dbHistory,photoMove,onMovePhotosOut,
         const big=[
           {on:onNew,t:"নতুন অর্ডার",sub:`এই মাসে ${toBnDigits(stats.thisMonthCount||0)}টা অর্ডার`,g:"linear-gradient(135deg,#e11d48 0%,#c41e3a 55%,#9f1239 100%)",sh:"#c41e3a"},
           {on:onExpense,t:"খরচ যোগ করুন",sub:todayExp>0?`আজ ${money(Math.round(todayExp))}`:"আজকের খরচ লিখুন",g:"linear-gradient(135deg,#14b8a6 0%,#0f766e 60%,#115e59 100%)",sh:"#0f766e"}];
+        // v5.63: ইতিহাস ও পে-রোল পাশাপাশি, বিশেষ (ভরা রং); লাভ-ক্ষতি হালকা রঙিন; বাকি দুটো সাদা
         const tiles=[
-          {on:onHist,ic:"📋",t:"অর্ডার ইতিহাস",c:"#be123c"},
+          {on:onHist,ic:"📋",t:"অর্ডার ইতিহাস",c:"#4338ca",fill:"linear-gradient(135deg,#6366f1 0%,#4f46e5 50%,#3730a3 100%)"},
+          {on:onPayroll,ic:"👷",t:"পে-রোল",c:"#c2410c",fill:"linear-gradient(135deg,#fb923c 0%,#f97316 50%,#c2410c 100%)"},
           {on:onManage,ic:"🗂️",t:"ডেটাবেস",c:"#6d28d9"},
           {on:onWoodStock,ic:"🪵",t:"কাঠের স্টক",c:"#047857"},
-          {on:onPayroll,ic:"👷",t:"পে-রোল",c:"#0E7490"},
-          {on:onPLReport,ic:"📊",t:"লাভ-ক্ষতি রিপোর্ট",c:"#B45309"}];
+          {on:onPLReport,ic:"📊",t:"লাভ-ক্ষতি রিপোর্ট",c:"#15803d",tint:{bg:"linear-gradient(135deg,#f0fdf4,#dcfce7)",bd:"#86efac",tx:"#14532d"}}];
         return<>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
             {big.map(b=><button key={b.t} className="hb" data-home-btn={b.t} onClick={b.on} style={{background:b.g,color:"white",border:"none",borderRadius:16,padding:"12px 11px",display:"flex",alignItems:"center",gap:9,textAlign:"left",minHeight:68,boxShadow:`0 8px 18px -10px ${b.sh}`}}>
@@ -5875,11 +5876,13 @@ function Home({onHistMonth,syncInfo,devices,dbHistory,photoMove,onMovePhotosOut,
           </div>
           {/* v5.60: পাতার বোতাম — দুই কলামের পরিষ্কার সাদা কার্ড, এক লাইনের নাম, শেষেরটা পুরো চওড়া */}
           <div data-page-btns="1" style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:16}}>
-            {tiles.map((b,i)=><button key={b.t} className="hb" data-home-btn={b.t} onClick={b.on} style={{background:"#fff",border:"1px solid #ece9e5",borderRadius:14,padding:"10px 11px",display:"flex",alignItems:"center",gap:10,textAlign:"left",minHeight:54,boxShadow:"0 3px 10px -8px rgba(0,0,0,.35)",gridColumn:i===tiles.length-1&&tiles.length%2===1?"span 2":undefined}}>
-              <span style={{width:34,height:34,borderRadius:10,background:b.c+"14",display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,flexShrink:0}}>{b.ic}</span>{" "}
-              <span style={{flex:1,minWidth:0,fontSize:13,fontWeight:700,color:"#1f2937",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{b.t}</span>
-              <span data-icon="›" style={{color:b.c,opacity:.55,fontSize:18,fontWeight:700,flexShrink:0,lineHeight:1}}></span>
-            </button>)}
+            {tiles.map((b,i)=>{
+              const sp=!!b.fill,tn=b.tint;
+              return<button key={b.t} className="hb" data-home-btn={b.t} data-special={sp?"1":undefined} onClick={b.on} style={{background:sp?b.fill:tn?tn.bg:"#fff",border:sp?"none":`1px solid ${tn?tn.bd:"#ece9e5"}`,borderRadius:14,padding:sp?"11px 12px":"10px 11px",display:"flex",alignItems:"center",gap:10,textAlign:"left",minHeight:54,boxSizing:"border-box",boxShadow:sp?`0 8px 16px -10px ${b.c}`:"0 3px 10px -8px rgba(0,0,0,.35)",gridColumn:i===tiles.length-1&&tiles.length%2===1?"span 2":undefined}}>
+                <span style={{width:34,height:34,borderRadius:10,background:sp?"rgba(255,255,255,.22)":tn?"#fff":b.c+"14",border:sp?"1px solid rgba(255,255,255,.3)":"none",display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,flexShrink:0}}>{b.ic}</span>{" "}
+                <span style={{flex:1,minWidth:0,fontSize:13,fontWeight:sp?800:700,color:sp?"#fff":tn?tn.tx:"#1f2937",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{b.t}</span>
+                <span data-icon="›" style={{color:sp?"#fff":b.c,opacity:sp?.8:.55,fontSize:18,fontWeight:700,flexShrink:0,lineHeight:1}}></span>
+              </button>})}
           </div>
         </>;
       })()}
@@ -5900,19 +5903,31 @@ function Home({onHistMonth,syncInfo,devices,dbHistory,photoMove,onMovePhotosOut,
         const td=todayStr(),mon=td.slice(0,7);
         const act=(orders||[]).filter(o=>o&&!o.cancelled);
         const paidOf=(o)=>(o.payments||[]).reduce((a,p)=>a+(parseFloat(p&&p.amount)||0),0);
-        const late=stats.running.filter(o=>o.cust&&o.cust.delivery&&o.daysLeft<0).length;
-        const soon=stats.running.filter(o=>o.cust&&o.cust.delivery&&o.daysLeft>=0&&o.daysLeft<=7).length;
-        const dueAfter=act.filter(o=>o.delivered).map(o=>Math.max(0,(parseFloat(o.cust.total)||0)-paidOf(o))).filter(v=>v>0.5);
         const monthSales=act.filter(o=>String((o.cust&&o.cust.date)||"").slice(0,7)===mon).reduce((a,o)=>a+(parseFloat(o.cust.total)||0),0);
         const goRun=()=>document.getElementById("z-today")?.scrollIntoView({behavior:"smooth",block:"start"});
-        // v5.61: ৬টা টাইল — কাজ আর বিক্রি/টাকা; নিচের গ্রাফে যা আছে তা এখানে নয়
+        // v5.64: ব্যবসা এক নজরে — কাজ (চলমান, এই মাসের অর্ডার, কত সপ্তাহের কাজ জমা) আর টাকা (পাওনা, দেনা, হাতে রইল)
+        const go=(id)=>()=>document.getElementById(id)?.scrollIntoView({behavior:"smooth",block:"start"});
+        // গত মাসের একই সময় পর্যন্ত বিক্রির সাথে তুলনা (যেমন ১–২৭ তারিখ বনাম গত মাসের ১–২৭)
+        const dnum=+td.slice(8,10);
+        const pm=(()=>{const y=+td.slice(0,4),m=+td.slice(5,7);return m===1?`${y-1}-12`:`${y}-${String(m-1).padStart(2,"0")}`})();
+        const prevSales=act.filter(o=>{const d=String((o.cust&&o.cust.date)||"");return d.slice(0,7)===pm&&+d.slice(8,10)<=dnum}).reduce((a,o)=>a+(parseFloat(o.cust.total)||0),0);
+        const salesChg=prevSales>0?Math.round((monthSales-prevSales)/prevSales*100):null;
+        // কাজ জমা: চলমান ফার্নিচারের CFT ÷ গত ৮ সপ্তাহে প্রতি সপ্তাহে গড়ে কত CFT ডেলিভারি হয়েছে
+        const runCft=stats.running.reduce((a,o)=>a+(orderTotalCft(o)||0),0);
+        const since=(()=>{const x=parseISO(td);x.setUTCDate(x.getUTCDate()-56);return toISO(x)})();
+        const doneCft=act.filter(o=>o.delivered&&String(o.deliveredAt||"").slice(0,10)>=since).reduce((a,o)=>a+(orderTotalCft(o)||0),0);
+        const perWeek=doneCft/8;
+        const weeks=perWeek>0?runCft/perWeek:null;
+        // এই মাসে হাতে রইল = নিচের "মাসিক তারল্য"-র চলতি মাস (সংগ্রহ − কাঠ, বেতন, খরচ)
+        const fm=(computeMonthlyFinance(+td.slice(0,4))||[])[+td.slice(5,7)-1]||{revenue:0,expense:0};
+        const net=Math.round((fm.revenue||0)-(fm.expense||0));
         const rows=[
           [{l:"চলমান অর্ডার",v:stats.running.length,c:"#f97316",go:goRun},
-           {l:"দেরি হওয়া ডেলিভারি",v:late,c:late?"#dc2626":"#16a34a",sub:late?"তারিখ পার, কাজ চলছে":"সব সময়মতো",go:goRun},
-           {l:"৭ দিনে ডেলিভারি",v:soon,c:"#d97706",sub:"আগামী এক সপ্তাহ",go:goRun}],
-          [{l:"এই মাসে অর্ডার",v:stats.thisMonthCount,c:"#1d4ed8",sub:money(Math.round(monthSales)),go:onHistMonth},
-           {l:"গ্রাহকের কাছে পাওনা",v:money(stats.totalOutstanding),c:RED,small:true},
-           {l:"ডেলিভারির পরেও বাকি",v:money(Math.round(dueAfter.reduce((a,b)=>a+b,0))),c:"#be123c",small:true,sub:`${dueAfter.length}টা অর্ডার`}]];
+           {l:"এই মাসে অর্ডার",v:stats.thisMonthCount,c:"#1d4ed8",sub:<>{money(Math.round(monthSales))}{salesChg!==null&&<span style={{color:salesChg===0?"#6b7280":salesChg>0?"#15803d":"#b91c1c",fontWeight:700}}> {salesChg===0?"≈ গত মাস":`${salesChg>0?"↑":"↓"}${Math.abs(salesChg)}%`}</span>}</>,go:onHistMonth},
+           {l:"কাজ জমা আছে",v:weeks!==null?`~${weeks<10?Math.round(weeks*10)/10:Math.round(weeks)} সপ্তাহ`:`${Math.round(runCft)} CFT`,c:"#7c3aed",small:true,sub:weeks!==null?`${Math.round(runCft)} CFT চলমান`:"ডেলিভারির হার জানা নেই",go:go("z-perf")}],
+          [{l:"গ্রাহকের কাছে পাওনা",v:money(stats.totalOutstanding),c:RED,small:true,sub:"আমি পাব",go:go("z-health")},
+           {l:"আমার দেনা",v:money(Math.round(stats.totalPayable||0)),c:"#b45309",small:true,sub:"সাপ্লায়ার ও বাকিতে কেনা",go:go("z-health")},
+           {l:"এই মাসে হাতে রইল",v:`${net<0?"−":""}${money(Math.abs(net))}`,c:net<0?"#b91c1c":"#15803d",small:true,sub:"সংগ্রহ − সব ব্যয়",go:go("z-health")}]];
         return<div data-tiles="1" style={{marginBottom:16}}>
           {rows.map((r,ri)=><div key={ri} style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:8}}>
             {r.map(x=><div key={x.l} data-tile={x.l} className={x.go?"hb":undefined} onClick={x.go} style={{background:x.c+"12",borderRadius:10,padding:"10px 5px 8px",borderLeft:`3px solid ${x.c}`,textAlign:"center",minHeight:74,display:"flex",flexDirection:"column",justifyContent:"center"}}>
