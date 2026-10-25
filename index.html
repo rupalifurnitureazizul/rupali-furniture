@@ -189,7 +189,7 @@ function compressImage(file,maxDim=1000,quality=0.70,maxBytes=45000){
 /* ── FULL-RESOLUTION LOCAL FOLDER STORAGE (desktop Chrome/Edge/Brave only) ──
    Original, uncompressed images are saved as real files in a folder you choose
    on your computer. Only a small compressed thumbnail syncs to the cloud/mobile. */
-const BUILD_TAG="5.75";
+const BUILD_TAG="5.80";
 const FS_SUPPORTED=typeof window!=="undefined"&&"showDirectoryPicker" in window;
 function idbOpen(){
   return new Promise((resolve,reject)=>{
@@ -1074,6 +1074,8 @@ const deptColor=(d)=>DEPT_COLORS[d]||"#57534e";
 const daysBetween=(d1,d2)=>Math.round((parseISO(d2)-parseISO(d1))/(1000*60*60*24));
 const todayStr=()=>{const d=new Date();return`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`};
 const fmtDate=(d)=>{if(!d)return"";const dt=parseISO(String(d).slice(0,10));return`${String(dt.getUTCDate()).padStart(2,"0")}/${String(dt.getUTCMonth()+1).padStart(2,"0")}/${dt.getUTCFullYear()}`};
+// v5.80: দেখানোর জন্য দশমিকের পর ২ ঘর — রাউন্ড নয়, কেটে ফেলা (২.৬৩৯ → ২.৬৩)। সংরক্ষিত মান অপরিবর্তিত
+const trunc2=(n)=>{const x=Number(n);if(!isFinite(x))return String(n);const t=Math.trunc(Math.abs(x)*100+1e-7)/100;return(x<0&&t>0?"-":"")+t.toFixed(2)};
 const toIntlPhone=(phone)=>{
   const digits=(phone||"").replace(/\D/g,"");
   if(digits.startsWith("880"))return digits;
@@ -1807,7 +1809,7 @@ function S3({order,onPrint,onUpdateOrder,workers}){
    একটাই পাতা — বাম অর্ধে কার্পেন্টার কপি, ডান অর্ধে ট্রান্সপোর্ট কপি, মাঝে ডটেড কাটার
    দাগ ও কেচি। বাকি সব স্লিপের মতোই সাধারণ "এই স্লিপ প্রিন্ট করুন" বাটনেই ছাপা হয়।
    কার্পেন্টার অংশের কাঠের মাপ এডিট করার সুবিধাটা আগের মতোই আছে (শুধু স্ক্রিনে) ── */
-function S4T5({order,onPrint,db,saveDb,onUpdateOrder,woodSettings,rackSplits}){
+function S4T5({order,onPrint,db,saveDb,onUpdateOrder,woodSettings,rackSplits,onOpenModel}){
   const{cust,items,no,printLogs,refImg,refImgs}=order;
   const images=refImgs&&refImgs.length?refImgs:(refImg?[{src:refImg,caption:"রেফারেন্স ছবি"}]:[]);
   const[editIdx,setEditIdx]=useState(null);
@@ -1870,7 +1872,7 @@ function S4T5({order,onPrint,db,saveDb,onUpdateOrder,woodSettings,rackSplits}){
         {items.map((it,i)=><div key={i} style={{border:"1.5px solid #92400e",borderRadius:7,overflow:"hidden",marginBottom:7,breakInside:"avoid"}}>
           <div style={{background:"#92400e",color:"white",padding:"5px 8px",display:"flex",justifyContent:"space-between",alignItems:"center",gap:6}}>
             <div style={{minWidth:0}}><div style={{fontWeight:700,fontSize:9.5}}>[{it.code}] {it.variantBn}</div><div style={{fontSize:8,opacity:.9,marginTop:1}}>কাঠ: {it.woodBn} ({it.wood}){itemWoodSplit(it).others.length>0?" + অন্য কাঠ":""} | পরিমাণ: {it.qty}</div></div>
-            {editIdx!==i&&<button className="no-print" onClick={()=>startEdit(i)} style={{background:"white",color:"#92400e",border:"none",borderRadius:5,padding:"3px 7px",fontSize:8.5,fontWeight:700,flexShrink:0}}>✏️ এডিট</button>}
+            {editIdx!==i&&<button className="no-print" onClick={()=>{const _c=it.catKey&&db&&db[it.catKey],_v=_c&&_c.variants&&it.varKey&&_c.variants[it.varKey];if(_v&&onOpenModel)onOpenModel(it.catKey,it.varKey);else startEdit(i)}} style={{background:"white",color:"#92400e",border:"none",borderRadius:5,padding:"3px 7px",fontSize:8.5,fontWeight:700,flexShrink:0}}>✏️ এডিট</button>}
           </div>
           <div style={{padding:"6px 8px"}}>
             {it.notes&&<div style={{background:"#fef9c3",borderRadius:5,padding:"4px 7px",marginBottom:5,fontSize:8.5,fontWeight:600}}>⚠ {it.notes}</div>}
@@ -2696,7 +2698,7 @@ function PieChart3D({data,size=180,showCount=false,countSuffix="",showMoney=fals
       {slices.map((s,i)=><div key={i} style={{display:"flex",alignItems:"center",gap:6,marginBottom:5,fontSize:11}}>
         <div style={{width:11,height:11,background:`linear-gradient(135deg, ${s.color}, ${shadeColor(s.color,0.3)})`,borderRadius:3,flexShrink:0,boxShadow:"0 1px 2px rgba(0,0,0,0.2)"}}></div>
         <span style={{color:"#444",flex:1}}>{s.label}</span>
-        <span style={{fontWeight:700,color:"#222"}}>{s.pct}%{showCount?` (${s.value}${countSuffix})`:""}{showMoney?` (${money(s.value)})`:""}</span>
+        <span style={{fontWeight:700,color:"#222"}}>{s.pct}%{showCount?` (${countSuffix.trim()==="CFT"?trunc2(s.value):s.value}${countSuffix})`:""}{showMoney?` (${money(s.value)})`:""}</span>
       </div>)}
     </div>
   </div>
@@ -5274,7 +5276,7 @@ function App({firebaseConfig,onResetConfig}){
     if(navStack.length>1)setTimeout(()=>{try{window.history.back()}catch(e){}},0);
   };
   const renderPage=()=>{
-  if(page==="preview")return<Preview syncInfo={syncInfo} online={online} onLoadPhotos={loadOrderPhotos} onSavePhotos={saveOrderPhotos} order={viewed||draft} onBack={goBack} slip={slip} setSlip={setSlip} onUpdate={updateOrder} onAddPayment={addOrderPayment} onSetDelivered={setOrderDelivered} onDelete={deleteOrderPermanently} db={db} saveDb={saveDb} carpenters={carpenters} saveCarpenters={saveCarpenters} galleries={galleries} saveGalleryEntry={saveGalleryEntry} woodSettings={woodSettingsWithBands} laborSettings={laborSettings} workers={workers} allOrders={orders} rackSplits={rackSplits}/>;
+  if(page==="preview")return<Preview onOpenModel={(c,v)=>navigate({page:"manage",tab:"edit",selCat:c,selVar:v,hl:null})} syncInfo={syncInfo} online={online} onLoadPhotos={loadOrderPhotos} onSavePhotos={saveOrderPhotos} order={viewed||draft} onBack={goBack} slip={slip} setSlip={setSlip} onUpdate={updateOrder} onAddPayment={addOrderPayment} onSetDelivered={setOrderDelivered} onDelete={deleteOrderPermanently} db={db} saveDb={saveDb} carpenters={carpenters} saveCarpenters={saveCarpenters} galleries={galleries} saveGalleryEntry={saveGalleryEntry} woodSettings={woodSettingsWithBands} laborSettings={laborSettings} workers={workers} allOrders={orders} rackSplits={rackSplits}/>;
   if(page==="form")return<Form recentRates={recentCostRates} onSave={saveOrder} onBack={goBack} db={db} saveDb={saveDb} galleries={galleries} woodSettings={woodSettings} laborSettings={laborSettings} orders={orders} getNextOrderNumber={getNextOrderNumber}/>;
   if(page==="history")return<Hist syncInfo={syncInfo} online={online} orders={orders} db={db} onBack={goBack} onView={o=>navigate({page:"preview",orderNo:o.no,slip:0})} highlightNo={highlightNo} q={curScreen.q||""} setQ={q=>replaceTop({...curScreen,q})} statusFilter={curScreen.statusFilter||"all"} setStatusFilter={statusFilter=>replaceTop({...curScreen,statusFilter})} catFilter={curScreen.catFilter||"all"} setCatFilter={catFilter=>replaceTop({...curScreen,catFilter})} sortMode={curScreen.sortMode||"recent"} setSortMode={sortMode=>replaceTop({...curScreen,sortMode})} timeFilter={curScreen.timeFilter||"all"} setTimeFilter={timeFilter=>replaceTop({...curScreen,timeFilter})} resetFilters={()=>replaceTop({page:"history"})}/>;
   if(page==="manage")return<ManageDB db={db} saveDb={saveDb} galleries={galleries} saveGalleryEntry={saveGalleryEntry} onBack={goBack} navigate={navigate} goBack={goBack} replaceTop={replaceTop} curScreen={curScreen} highlightNo={highlightNo} onRenameVariant={propagateVariantRename} orders={orders} woodSettings={woodSettingsWithBands} rackSplits={rackSplits} onMergeMany={mergeManyAcrossOrders} onMoveVariant={propagateVariantMove} onRecodeVariant={propagateVariantCode} onWoodChange={propagateWoodChange} onMergeVariants={mergeVariantsAcrossOrders}/>;
@@ -5291,6 +5293,7 @@ function App({firebaseConfig,onResetConfig}){
 function Home({onHistMonth,syncInfo,devices,dbHistory,photoMove,onMovePhotosOut,handoffReport,onRestoreDbVersion,onDownloadDbVersion,deviceId,lastPageCrash,orders,expenses,woodLots,db,woodSettings,laborSettings,workers,payrollWeeks,alertSettings,saveAlertSettings,backupFailed,lastSyncAt,onManualRefresh,pendingWrites,onUpdateOrder,onNew,onHist,onManage,onExpense,onWoodStock,onPayroll,onPLReport,onView,onViewDelivery,online,connError,onResetConfig,folderStatus,connectFolder,highlightNo,onBackupData,projectId,appId,permanentSyncFailures,autoStuckStatus,dbGaps,setDbGaps,fsRef}){
   const now=new Date();
   const[showAllRunning,setShowAllRunning]=useState(false);
+  const[showAllReady,setShowAllReady]=useState(false); // v5.80
   const[showSystemZone,setShowSystemZone]=useState(false);
   // ── উপরের নেভিগেশন বারে ঠিক এই মুহূর্তে কোন বিভাগে আছেন তা ট্র্যাক করার জন্য — স্ক্রল করলে
   // যে বিভাগের হেডার স্টিকি বারের রেখা পার হয়ে গেছে তার মধ্যে সবচেয়ে নিচেরটাই "বর্তমান" ধরা হয়,
@@ -6136,7 +6139,7 @@ function Home({onHistMonth,syncInfo,devices,dbHistory,photoMove,onMovePhotosOut,
           <span style={{fontSize:12,fontWeight:700,color:"#1d4ed8"}}>📦 তৈরি শেষ, গ্রাহক নেননি ({stats.readyNotCollected.length}টি)</span>
         </div>
         <div style={{fontSize:9,color:"#3b5a9a",marginBottom:8}}>দোকানে জায়গা দখল করে আছে · আটকে থাকা টাকা: <strong>{money(stats.readyValueStuck)}</strong></div>
-        {stats.readyNotCollected.slice(0,6).map(o=>{
+        {stats.readyNotCollected.slice(0,showAllReady?stats.readyNotCollected.length:6).map(o=>{
           const isHighlighted=highlightNo===o.no;
           return<div key={o.no} onClick={()=>onViewDelivery(o)} style={{background:isHighlighted?"#e0f2fe":"white",borderRadius:8,marginBottom:6,cursor:"pointer",border:isHighlighted?"1px solid #7dd3fc":"1px solid #dbeafe",display:"flex",overflow:"hidden",transition:"background .4s"}}>
           {(()=>{const dp=firstDeliveryPhoto(o);return dp?
@@ -6164,7 +6167,7 @@ function Home({onHistMonth,syncInfo,devices,dbHistory,photoMove,onMovePhotosOut,
             </div>
           </div>
         </div>})}
-        {stats.readyNotCollected.length>6&&<div style={{fontSize:9,color:"#3b5a9a",textAlign:"center"}}>...ও আরও {stats.readyNotCollected.length-6}টি</div>}
+        {stats.readyNotCollected.length>6&&<button onClick={()=>setShowAllReady(v=>!v)} style={{width:"100%",background:"white",border:"1px solid #bfdbfe",borderRadius:8,padding:"9px",fontSize:11,fontWeight:700,color:"#1d4ed8"}}>{showAllReady?"▲ কম দেখান":`▼ আরও ${stats.readyNotCollected.length-6}টি আছে`}</button>}
       </div>}
 
       <div id="z-today" style={{scrollMarginTop:56,fontSize:11,fontWeight:800,color:"#0f766e",letterSpacing:"0.3px",margin:"18px 0 8px",paddingBottom:4,borderBottom:"2px solid #0f766e22"}}>🔥 আজকের কাজ</div>
@@ -6200,7 +6203,8 @@ function Home({onHistMonth,syncInfo,devices,dbHistory,photoMove,onMovePhotosOut,
               <ProgressBar pct={o.pct}/>
             </div>
           })}
-          {!showAllRunning&&stats.running.length>10&&<button onClick={()=>setShowAllRunning(true)} style={{width:"100%",background:"#f8fafc",border:"none",borderTop:"1px solid #f0f0f0",padding:"11px",fontSize:12,fontWeight:700,color:RED}}>আরও দেখুন (+{stats.running.length-10}টি)</button>}
+          {!showAllRunning&&stats.running.length>10&&<button onClick={()=>setShowAllRunning(true)} style={{width:"100%",background:"#f8fafc",border:"none",borderTop:"1px solid #f0f0f0",padding:"11px",fontSize:12,fontWeight:700,color:RED}}>আরও দেখুন (+{stats.running.length-10}টি) ▼</button>}
+          {showAllRunning&&stats.running.length>10&&<button onClick={()=>setShowAllRunning(false)} style={{width:"100%",background:"#f8fafc",border:"none",borderTop:"1px solid #f0f0f0",padding:"11px",fontSize:12,fontWeight:700,color:RED}}>▲ কম দেখান</button>}
         </div>}
       </div>
 
@@ -7224,7 +7228,7 @@ function WoodStockPage({woodLots,saveWoodLots,addLotPayment,woodSettings,saveWoo
     if(!cur)return;
     const nextCft=cftLog(L,D);
     // আগেই কাটা/বিক্রি হয়ে থাকলে এই বদলে কাঠের হিসাবও নড়ে — তাই আগে জানিয়ে দেওয়া
-    if((cur.cut||cur.sold)&&!window.confirm(`"${cur.code||"এই গুড়ি"}" ইতিমধ্যে ${cur.sold?"বিক্রি":"কাটা"} হয়ে গেছে।\n\nমাপ বদলালে কাঠের হিসাবও বদলে যাবে:\n${cur.cft.toFixed(3)} CFT → ${nextCft.toFixed(3)} CFT\n\nচালিয়ে যেতে চান?`))return;
+    if((cur.cut||cur.sold)&&!window.confirm(`"${cur.code||"এই গুড়ি"}" ইতিমধ্যে ${cur.sold?"বিক্রি":"কাটা"} হয়ে গেছে।\n\nমাপ বদলালে কাঠের হিসাবও বদলে যাবে:\n${trunc2(cur.cft)} CFT → ${trunc2(nextCft)} CFT\n\nচালিয়ে যেতে চান?`))return;
     updateLot({...selLot,logs:selLot.logs.map(l=>l.id===logId?{...l,lengthFt:L,diameterIn:D,cft:nextCft}:l)});
     setEditingLogId(null);
   };
@@ -8406,7 +8410,7 @@ function WoodStockPage({woodLots,saveWoodLots,addLotPayment,woodSettings,saveWoo
             return<div key={log.id} style={{padding:"10px 12px",borderBottom:i<selLot.logs.length-1?"1px solid #f2f2f2":"none",background:log.sold?"#f5f3ff":log.cut?"#fafafa":"white"}}>
               <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
                 <div style={{flex:"1 1 auto",minWidth:140,color:(log.cut||log.sold)?"#999":"#222",textDecoration:(log.cut||log.sold)?"line-through":"none"}}>
-                  <span style={{fontWeight:800,fontSize:14,color:(log.cut||log.sold)?"#999":"#065f46"}}>{lcode}</span> <span style={{fontSize:9.5,color:"#bbb",fontWeight:400}}>#{i+1}</span> — লম্বা {log.lengthFt}ft × ব্যাস {log.diameterIn}″ = <strong>{log.cft.toFixed(3)} CFT</strong>
+                  <span style={{fontWeight:800,fontSize:14,color:(log.cut||log.sold)?"#999":"#065f46"}}>{lcode}</span> <span style={{fontSize:9.5,color:"#bbb",fontWeight:400}}>#{i+1}</span> — লম্বা {log.lengthFt}ft × ব্যাস {log.diameterIn}″ = <strong>{trunc2(log.cft)} CFT</strong>
                   {log.cut&&log.cutDate&&<span style={{fontSize:10,marginLeft:6}}>(কাটা: {fmtDate(log.cutDate)})</span>}
                   {log.sold&&<span style={{fontSize:10,marginLeft:6,color:"#7c3aed",fontWeight:700}}>(বিক্রি: {money(log.soldPrice)}, {fmtDate(log.soldDate)})</span>}
                 </div>
@@ -8425,7 +8429,7 @@ function WoodStockPage({woodLots,saveWoodLots,addLotPayment,woodSettings,saveWoo
                   <div>{lbl("দৈর্ঘ্য (ফুট)")}<input type="number" step="0.5" autoFocus value={logDraft.lengthFt} onChange={e=>setLogDraft({...logDraft,lengthFt:e.target.value})} style={inp}/></div>
                   <div>{lbl("ব্যাস (ইঞ্চি)")}<input type="number" step="0.5" value={logDraft.diameterIn} onChange={e=>setLogDraft({...logDraft,diameterIn:e.target.value})} style={inp}/></div>
                 </div>
-                {logDraft.lengthFt&&logDraft.diameterIn&&<div style={{fontSize:11.5,color:"#1e40af",fontWeight:700,marginBottom:8}}>{log.cft.toFixed(3)} CFT → {cftLog(parseFloat(logDraft.lengthFt)||0,parseFloat(logDraft.diameterIn)||0).toFixed(3)} CFT</div>}
+                {logDraft.lengthFt&&logDraft.diameterIn&&<div style={{fontSize:11.5,color:"#1e40af",fontWeight:700,marginBottom:8}}>{trunc2(log.cft)} CFT → {trunc2(cftLog(parseFloat(logDraft.lengthFt)||0,parseFloat(logDraft.diameterIn)||0))} CFT</div>}
                 <div style={{display:"flex",gap:6}}>
                   <button onClick={()=>setEditingLogId(null)} style={{flex:1,background:"#f3f4f6",border:"none",borderRadius:7,padding:"8px",fontSize:12}}>বাতিল</button>
                   <button onClick={()=>saveLogEdit(log.id)} disabled={!logDraft.lengthFt||!logDraft.diameterIn} style={{flex:2,background:(logDraft.lengthFt&&logDraft.diameterIn)?"#1d4ed8":"#ccc",color:"white",border:"none",borderRadius:7,padding:"8px",fontSize:12,fontWeight:700}}>সংরক্ষণ করুন</button>
@@ -10249,7 +10253,7 @@ function Form({recentRates,onSave,onBack,db,saveDb,galleries,woodSettings,laborS
 }
 
 /* ── PREVIEW (each slip prints independently now) ── */
-function Preview({syncInfo,online,order:orderRaw,onBack,slip,setSlip,onUpdate:onUpdateRaw,onAddPayment,onSetDelivered,onDelete,db,saveDb,carpenters,saveCarpenters,galleries,saveGalleryEntry,woodSettings,laborSettings,workers,allOrders,rackSplits,onLoadPhotos,onSavePhotos}){
+function Preview({onOpenModel,syncInfo,online,order:orderRaw,onBack,slip,setSlip,onUpdate:onUpdateRaw,onAddPayment,onSetDelivered,onDelete,db,saveDb,carpenters,saveCarpenters,galleries,saveGalleryEntry,woodSettings,laborSettings,workers,allOrders,rackSplits,onLoadPhotos,onSavePhotos}){
   // ── v5.11: এই অর্ডারের পূর্ণ ছবিগুলো এখানেই একবার নামানো হয় (তালিকায় শুধু ছোট
   // কপি থাকে)। না আসা পর্যন্ত ছোট কপিটাই দেখায়, তাই পর্দা কখনো ফাঁকা থাকে না ──
   const[fullPhotos,setFullPhotos]=useState(null);
@@ -10405,7 +10409,7 @@ function Preview({syncInfo,online,order:orderRaw,onBack,slip,setSlip,onUpdate:on
         {slip===1&&<S2 order={order} onSavePhotos={onSavePhotos} onPrint={logPrint} db={db} saveDb={saveDb} galleries={galleries} onUpdateOrder={onUpdate} woodSettings={woodSettings} laborSettings={laborSettings}/>}
         {slip===2&&<S3 order={order} onPrint={logPrint} onUpdateOrder={onUpdate} workers={workers}/>}
         {/* slip 4 ছিল আগের আলাদা ট্রান্সপোর্ট ট্যাব — পুরনো লিঙ্ক/হিস্ট্রি থেকে এলেও যেন ফাঁকা না দেখায় */}
-        {(slip===3||slip===4)&&<S4T5 order={order} onPrint={logPrint} db={db} saveDb={saveDb} onUpdateOrder={onUpdate} woodSettings={woodSettings} rackSplits={rackSplits}/>}
+        {(slip===3||slip===4)&&<S4T5 order={order} onPrint={logPrint} db={db} saveDb={saveDb} onUpdateOrder={onUpdate} woodSettings={woodSettings} rackSplits={rackSplits} onOpenModel={onOpenModel}/>}
         {slip===5&&<S6 order={{...order,deliveryImgs}} onPrint={logPrint} onUpdateOrder={onUpdate} onSetDelivered={onSetDelivered} onPhotoChange={handleDeliveryImg} onRemovePhoto={removeDeliveryImg} allOrders={allOrders} printLocked={!isFullyPaid}/>}
       </div>
     </div>
