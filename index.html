@@ -189,7 +189,7 @@ function compressImage(file,maxDim=1000,quality=0.70,maxBytes=45000){
 /* ── FULL-RESOLUTION LOCAL FOLDER STORAGE (desktop Chrome/Edge/Brave only) ──
    Original, uncompressed images are saved as real files in a folder you choose
    on your computer. Only a small compressed thumbnail syncs to the cloud/mobile. */
-const BUILD_TAG="5.80";
+const BUILD_TAG="5.90";
 const FS_SUPPORTED=typeof window!=="undefined"&&"showDirectoryPicker" in window;
 function idbOpen(){
   return new Promise((resolve,reject)=>{
@@ -368,6 +368,11 @@ function pieceRackInfo(wood,w,h,l,woodSettings,rackSplits){
 }
 // ছোট থেকে বড়: কাঠ → দল → (সাধারণ আগে, বর্গাকার পরে) → উচ্চতা → ওসার
 const RACK_WOOD_ORDER=Object.keys(WOOD);
+// v5.90: নতুন অর্ডারের কাঠের ড্রপডাউন — ইউক্যালিপটাস বাদ (শুধু খাটের মাচায় লাগে, সেকশনের আলাদা কাঠে থাকে);
+// বাকিগুলো শেষ ২ বছরের অর্ডারে কোন কাঠ কত শতাংশ ছিল সেই ক্রমে
+let WOOD_RANK_PCT={};
+const woodChoices=(cur)=>Object.keys(WOOD).filter(k=>k!=="E"||cur==="E").sort((a,b)=>((WOOD_RANK_PCT[b]||0)-(WOOD_RANK_PCT[a]||0))||(Object.keys(WOOD).indexOf(a)-Object.keys(WOOD).indexOf(b)));
+const woodOptions=(cur)=>woodChoices(cur).map(k=><option key={k} value={k}>{WOOD[k].bn}{WOOD_RANK_PCT[k]!==undefined?` (${toBnDigits(WOOD_RANK_PCT[k])}%)`:""}</option>);
 function rackSortCmp(a,b){
   const wa=RACK_WOOD_ORDER.indexOf(a.wood),wb=RACK_WOOD_ORDER.indexOf(b.wood);
   if(wa!==wb)return(wa<0?99:wa)-(wb<0?99:wb);
@@ -1565,7 +1570,7 @@ function S2({order,onPrint,db,saveDb,galleries,onUpdateOrder,woodSettings,laborS
           <FurnitureCategoryModelPicker db={db} saveDb={saveDb} galleries={galleries} catKey={editForm.catKey} varKey={editForm.varKey} onSelect={(ck,vk)=>setEditForm({...editForm,catKey:ck,varKey:vk})}/>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,marginBottom:6}}>
             <select value={editForm.wood} onChange={e=>setEditForm({...editForm,wood:e.target.value})} style={{border:"1px solid #ddd",borderRadius:6,padding:"6px 8px",fontSize:10}}>
-              {Object.entries(WOOD).map(([k,v])=><option key={k} value={k}>{v.bn}</option>)}
+              {woodOptions(editForm.wood)}
             </select>
             <input type="number" min={1} value={editForm.qty} placeholder="1" onChange={e=>setEditForm({...editForm,qty:e.target.value})} style={{border:"1px solid #ddd",borderRadius:6,padding:"6px 8px",fontSize:10}}/>
           </div>
@@ -1609,7 +1614,7 @@ function S2({order,onPrint,db,saveDb,galleries,onUpdateOrder,woodSettings,laborS
           <FurnitureCategoryModelPicker db={db} saveDb={saveDb} galleries={galleries} catKey={newItem.catKey} varKey={newItem.varKey} onSelect={(ck,vk)=>setNewItem({...newItem,catKey:ck,varKey:vk})}/>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,marginBottom:6}}>
             <select value={newItem.wood} onChange={e=>setNewItem({...newItem,wood:e.target.value})} style={{border:"1px solid #ddd",borderRadius:6,padding:"6px 8px",fontSize:10}}>
-              {Object.entries(WOOD).map(([k,v])=><option key={k} value={k}>{v.bn}</option>)}
+              {woodOptions(newItem.wood)}
             </select>
             <input type="number" min={1} value={newItem.qty} placeholder="1" onChange={e=>setNewItem({...newItem,qty:e.target.value})} style={{border:"1px solid #ddd",borderRadius:6,padding:"6px 8px",fontSize:10}}/>
           </div>
@@ -1774,10 +1779,19 @@ function S3({order,onPrint,onUpdateOrder,workers}){
                     style={{width:"100%",accentColor:barColor}}/>
                   <div style={{textAlign:"right",fontSize:10,fontWeight:800,color:barColor,marginBottom:6}}>{cur.pct}%{cur.pct>=100?" ✅":""}</div>
                   <div style={{fontSize:8,color:"#888",marginBottom:4}}>{d.payDept} বিভাগের কর্মী</div>
-                  {pool.length===0?<div style={{fontSize:9,color:"#aaa"}}>পে-রোলে এই বিভাগের কোনো কর্মী নেই</div>:
-                  <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
-                    {pool.map(w=><button key={w.id} onClick={()=>toggleWorker(ikey,d.id,w.name)} style={{background:assigned.includes(w.name)?deptColor(w.department):"#f3f4f6",color:assigned.includes(w.name)?"white":"#555",border:"none",borderRadius:20,padding:"4px 10px",fontSize:9,fontWeight:600}}>{assigned.includes(w.name)?"✓ ":""}{w.name}</button>)}
-                  </div>}
+                  {(()=>{
+                    const hzPool=hzOk()?hzRoster().solo.filter(e=>e.dept===d.payDept):[];
+                    const useHz=hzPool.length>0;
+                    const base=useHz?hzPool.map(e=>({key:"hz"+e.pin,name:e.name,label:hzTeamLabel(e.name),color:deptColor(d.payDept)})):pool.map(w=>({key:w.id,name:w.name,label:w.name,color:deptColor(w.department)}));
+                    const extra=assigned.filter(n=>!base.some(x=>x.name===n)).map(n=>({key:"x_"+n,name:n,label:hzTeamLabel(n),color:"#64748b"}));
+                    const chips=[...base,...extra];
+                    if(!chips.length)return<div style={{fontSize:9,color:"#aaa"}}>এই বিভাগের কোনো কর্মী নেই</div>;
+                    return<>
+                      {useHz&&<div style={{fontSize:8,color:"#7c3aed",marginBottom:4}}>মিস্ত্রি বাছলে তাঁর যোগাল/হাফ মিস্ত্রিসহ কাজটা তাঁর দলের ধরা হয় (দল হাজিরা অ্যাপ থেকে মেলে)। CFT শুধু মিস্ত্রির নামে যায়।</div>}
+                      <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
+                        {chips.map(c=><button key={c.key} onClick={()=>toggleWorker(ikey,d.id,c.name)} style={{background:assigned.includes(c.name)?c.color:"#f3f4f6",color:assigned.includes(c.name)?"white":"#555",border:"none",borderRadius:20,padding:"4px 10px",fontSize:9,fontWeight:600}}>{assigned.includes(c.name)?"✓ ":""}{c.label}</button>)}
+                      </div>
+                    </>})()}
                 </div>
               })}
             </div>
@@ -1793,7 +1807,7 @@ function S3({order,onPrint,onUpdateOrder,workers}){
             <div style={{fontWeight:700,fontSize:11,marginBottom:4}}>[{it.code}] {it.variantBn} — {it.woodBn} × {it.qty}</div>
             <table style={{width:"100%",borderCollapse:"collapse",fontSize:10}}>
               <thead><tr style={{background:"#6d28d9",color:"white"}}>{["বিভাগ","দায়িত্বে","শুরু","শেষ","স্বাক্ষর"].map(h=><th key={h} style={{padding:"6px 5px",textAlign:"left",fontWeight:700}}>{h}</th>)}</tr></thead>
-              <tbody>{DEPTS.map((d,i)=>{const cur=getDept(ikey,d.id);return<tr key={d.id} style={{background:i%2===0?"#f5f3ff":"white",borderBottom:"1px solid #ede9fe"}}><td style={{padding:"8px 5px",fontWeight:600}}>{d.bn} ({cur.pct}%)</td><td style={{padding:"8px 5px",fontSize:9}}>{(cur.workers||[]).join(", ")||"—"}</td><td style={{padding:"8px 5px",color:cur.start?"#333":"#bbb"}}>{cur.start?fmtDate(cur.start):"___/___"}</td><td style={{padding:"8px 5px",color:cur.end?"#333":"#bbb"}}>{cur.end?fmtDate(cur.end):"___/___"}</td><td style={{padding:"8px 5px",color:"#bbb"}}>________</td></tr>})}</tbody>
+              <tbody>{DEPTS.map((d,i)=>{const cur=getDept(ikey,d.id);return<tr key={d.id} style={{background:i%2===0?"#f5f3ff":"white",borderBottom:"1px solid #ede9fe"}}><td style={{padding:"8px 5px",fontWeight:600}}>{d.bn} ({cur.pct}%)</td><td style={{padding:"8px 5px",fontSize:9}}>{(cur.workers||[]).map(hzTeamLabel).join(", ")||"—"}</td><td style={{padding:"8px 5px",color:cur.start?"#333":"#bbb"}}>{cur.start?fmtDate(cur.start):"___/___"}</td><td style={{padding:"8px 5px",color:cur.end?"#333":"#bbb"}}>{cur.end?fmtDate(cur.end):"___/___"}</td><td style={{padding:"8px 5px",color:"#bbb"}}>________</td></tr>})}</tbody>
             </table>
           </div>
         })}
@@ -2066,6 +2080,32 @@ function payWeekAmt(wd,wid,w,weekEnd){
 // বাকি সব হিসাব (খরচ, তারল্য, লাভ-ক্ষতি, ফার্নিচারের খরচ) এই বেতন দিয়েই এখানে হয়।
 const HAJIRA_URL="https://rupalifurnitureazizul.github.io/hajira/";
 const HAJIRA_FROM_DEFAULT="2026-10-15";
+// v5.90: হাজিরা অ্যাপের কর্মী (att_workers) — পদ (mistri/half/helper) ও দল (lead = মিস্ত্রির আইডি)। শুধু পড়া হয়, কিছু লেখা হয় না।
+let HZ_DATA={workers:{},ownerPin:""};
+const hzOk=()=>!!(HZ_DATA&&HZ_DATA.workers&&Object.keys(HZ_DATA.workers).length);
+const hzName=(w,pin)=>(w&&w.name&&String(w.name).trim())||(w&&w.devName&&String(w.devName).replace(/_/g," ").trim())||("আইডি "+pin);
+const hzIsOff=(w,d)=>{if(!w)return false;if(w.inPay===false)return true;return(Array.isArray(w.off)?w.off:[]).some(p=>p&&p.from&&d>=p.from&&(!p.to||d<p.to))};
+const hzIsOwner=(w,pin)=>!!w&&(w.role==="owner"||(!!HZ_DATA.ownerPin&&String(pin)===String(HZ_DATA.ownerPin)));
+const hzPos=(w)=>w&&(w.pos==="mistri"||w.pos==="half"||w.pos==="helper")?w.pos:"";
+function hzRoster(){
+  const t=todayStr();
+  const all=Object.entries((HZ_DATA&&HZ_DATA.workers)||{}).filter(([pin,w])=>w&&!hzIsOwner(w,pin)&&!hzIsOff(w,t)).map(([pin,w])=>({pin:String(pin),name:hzName(w,pin),dept:HZ_DEPT[w.dept]||"অন্যান্য",pos:hzPos(w),lead:(hzPos(w)==="half"||hzPos(w)==="helper")&&w.lead!=null?String(w.lead).trim():""}));
+  const mistris={};all.filter(e=>e.pos==="mistri").forEach(e=>{mistris[e.pin]=e});
+  const teamOf={},solo=[];
+  all.forEach(e=>{if(e.lead&&e.lead!==e.pin&&mistris[e.lead])(teamOf[e.lead]=teamOf[e.lead]||[]).push(e);else solo.push(e)});
+  const pinNo=(x)=>parseInt(x.pin)||0;
+  solo.sort((a,b)=>(a.pos==="mistri"?0:1)-(b.pos==="mistri"?0:1)||pinNo(a)-pinNo(b));
+  Object.values(teamOf).forEach(a=>a.sort((a2,b2)=>pinNo(a2)-pinNo(b2)));
+  return{solo,teamOf};
+}
+// মিস্ত্রির নাম → "মতি + সজীব" (যোগাল/হাফ মিস্ত্রিসহ); দল না থাকলে নামটাই
+function hzTeamLabel(name){
+  if(!hzOk())return name;
+  const r=hzRoster(),m=r.solo.find(e=>e.pos==="mistri"&&e.name===name);
+  if(!m)return name;
+  const tm=(r.teamOf[m.pin]||[]).map(e=>e.name);
+  return tm.length?name+" + "+tm.join(" + "):name;
+}
 const HZ_DEPT={"ছুতার":"ছুতার","নকশা":"কারিগর","কারিগর":"কারিগর","বার্নিশ":"বার্নিশ","পরিবহন":"পরিবহন","অন্যান্য":"অন্যান্য"};
 const isWeekKey=(k)=>/^\d{4}-\d{2}-\d{2}$/.test(String(k||""));
 const hajiraFromWeek=(link)=>{const f=link&&link.fromWeek;return isWeekKey(f)?weekEndThursday(f):HAJIRA_FROM_DEFAULT};
@@ -2648,6 +2688,17 @@ function DonutChart({data,unit="",centerLabel="",size=150}){
       </div>})}
     </div>
   </div>;
+}
+// v5.85: কাঠের নাম লিখতে গেলে আগে ডেটাবেসে ব্যবহার করা মিলে যাওয়া নাম নিচে সাজেস্ট হয়। চাপলে সেটাই বসে; না চাপলে যা লেখা তাই থাকে।
+function NameSuggest({value,names,onPick}){
+  const q=String(value||"").trim().toLowerCase();
+  if(!q||!names||!names.length)return null;
+  const list=names.filter(n=>{const x=String(n).toLowerCase();return x!==q&&x.includes(q)})
+    .sort((a,b)=>(String(b).toLowerCase().startsWith(q)?1:0)-(String(a).toLowerCase().startsWith(q)?1:0)).slice(0,6);
+  if(!list.length)return null;
+  return<div data-name-suggest="1" style={{display:"flex",flexWrap:"wrap",gap:4,margin:"0 0 6px"}}>
+    {list.map(n=><button key={n} type="button" onMouseDown={e=>e.preventDefault()} onClick={()=>onPick(n)} style={{background:"#f5f3ff",color:"#5b21b6",border:"1px solid #ddd6fe",borderRadius:14,padding:"3px 10px",fontSize:10.5,fontWeight:600}}>{n}</button>)}
+  </div>
 }
 function PieChart3D({data,size=180,showCount=false,countSuffix="",showMoney=false}){
   const total=data.reduce((s,d)=>s+d.value,0);
@@ -3304,6 +3355,8 @@ function App({firebaseConfig,onResetConfig}){
   const payrollWeeksRef=useRef({});
   payrollWeeksRef.current=payrollWeeks;
   // v5.74: রূপালী হাজিরা অ্যাপের সাপ্তাহিক বেতনের খাতা (att_book) ও কোন সপ্তাহ থেকে সেটা নেওয়া হবে (meta/hajiraLink)
+  const[hzWorkers,setHzWorkers]=useState({});const[hzOwner,setHzOwner]=useState("");
+  HZ_DATA={workers:hzWorkers,ownerPin:hzOwner}; // v5.90
   const[hajiraBooks,setHajiraBooks]=useState(()=>{const v=offlineSeedRef.current;return(v&&v.hajiraBooks&&typeof v.hajiraBooks==="object")?v.hajiraBooks:{}});
   const[hajiraLink,setHajiraLink]=useState(()=>{const v=offlineSeedRef.current;return(v&&v.hajiraLink&&typeof v.hajiraLink==="object")?v.hajiraLink:{}});
   const[hajiraErr,setHajiraErr]=useState("");
@@ -4071,6 +4124,9 @@ function App({firebaseConfig,onResetConfig}){
         snap.docs.forEach(d=>{map[d.id]=d.data()});
         setHajiraBooks(map);setHajiraErr("");
       },err=>{setHajiraErr(String((err&&(err.code||err.message))||err))});
+      // v5.90: হাজিরা অ্যাপের কর্মী ও দল (পড়া-মাত্র) — মিস্ত্রি/যোগালের মিলকরণ ট্র্যাকিংয়ে দেখাতে
+      const unsubHzWorkers=firestore.collection("att_workers").onSnapshot(snap=>{const m={};snap.docs.forEach(d=>{m[d.id]=d.data()});setHzWorkers(m)},err=>{});
+      const unsubHzSettings=firestore.collection("att_settings").doc("main").onSnapshot(d=>{const v=d.exists?(d.data()||{}).ownerPin:null;setHzOwner(v!=null&&String(v).trim()&&String(v).trim()!=="none"?String(v).trim():"")},err=>{});
       const unsubHajiraLink=firestore.doc("meta/hajiraLink").onSnapshot(snap=>{
         setHajiraLink(snap.exists?(snap.data()||{}):{});
       },err=>{});
@@ -4489,7 +4545,7 @@ function App({firebaseConfig,onResetConfig}){
       const firstStuckCheck=setTimeout(()=>{},0);
       const stuckCheckInterval=setInterval(()=>{},3600000);
 
-      return()=>{clearTimeout(timer);clearTimeout(firstStuckCheck);clearInterval(stuckCheckInterval);try{unsubVer();unsubDevices()}catch(e){}unsubOrders();unsubExpenses();unsubLots();unsubDb();unsubGalleries();unsubWoodSettings();unsubLaborSettings();unsubAlertSettings();unsubRackSplits();unsubRackBands();unsubCarp();unsubWorkers();unsubPayroll();unsubHajira();unsubHajiraLink()};
+      return()=>{clearTimeout(timer);clearTimeout(firstStuckCheck);clearInterval(stuckCheckInterval);try{unsubVer();unsubDevices()}catch(e){}try{unsubHzWorkers();unsubHzSettings()}catch(e){}unsubOrders();unsubExpenses();unsubLots();unsubDb();unsubGalleries();unsubWoodSettings();unsubLaborSettings();unsubAlertSettings();unsubRackSplits();unsubRackBands();unsubCarp();unsubWorkers();unsubPayroll();unsubHajira();unsubHajiraLink()};
     }catch(e){
       clearTimeout(timer);
       setConnError(e.message);
@@ -5226,6 +5282,18 @@ function App({firebaseConfig,onResetConfig}){
 
   // v5.74: হিসাবের জন্য পে-রোলের সপ্তাহ — সংযোগের সপ্তাহ থেকে বেতন হাজিরা অ্যাপের খাতা থেকে
   const payrollAll=useMemo(()=>mergeHajiraPayroll(payrollWeeks,hajiraBooks,hajiraLink),[payrollWeeks,hajiraBooks,hajiraLink]);
+  // v5.90: শেষ ২ বছরের অর্ডারে কাঠভেদে শতকরা ভাগ (নতুন অর্ডারের ড্রপডাউনের ক্রম)
+  WOOD_RANK_PCT=useMemo(()=>{
+    const since=addDays(todayStr(),-730),cnt={};let tot=0;
+    (orders||[]).forEach(o=>{
+      if(!o||o.cancelled)return;
+      const dt=String((o.cust&&o.cust.date)||o.createdAt||"").slice(0,10);
+      if(dt&&dt<since)return;
+      (o.items||[]).forEach(it=>{if(it&&it.wood&&WOOD[it.wood]){cnt[it.wood]=(cnt[it.wood]||0)+1;tot++}});
+    });
+    const out={};if(tot>0)Object.keys(cnt).forEach(k=>{out[k]=Math.round(cnt[k]/tot*100)});
+    return out;
+  },[orders]);
   // v4.61: নতুন অর্ডারের দামের পরামর্শে সাম্প্রতিক আসল বেতন ও খরচের হার (শুধু নতুন অর্ডারের পাতায় হিসাব হয়)
   const recentCostRates=useMemo(()=>page==="form"?furnitureCosting(orders,buildSpendLedger(expenses,payrollAll,workers,woodLots),woodSettings,laborSettings,db,null).recent:null,[page,orders,expenses,payrollAll,workers,woodLots,woodSettings,laborSettings,db]);
   if(verBlock)return<div style={{padding:"40px 24px",textAlign:"center",maxWidth:440,margin:"50px auto"}}>
@@ -5280,9 +5348,9 @@ function App({firebaseConfig,onResetConfig}){
   if(page==="form")return<Form recentRates={recentCostRates} onSave={saveOrder} onBack={goBack} db={db} saveDb={saveDb} galleries={galleries} woodSettings={woodSettings} laborSettings={laborSettings} orders={orders} getNextOrderNumber={getNextOrderNumber}/>;
   if(page==="history")return<Hist syncInfo={syncInfo} online={online} orders={orders} db={db} onBack={goBack} onView={o=>navigate({page:"preview",orderNo:o.no,slip:0})} highlightNo={highlightNo} q={curScreen.q||""} setQ={q=>replaceTop({...curScreen,q})} statusFilter={curScreen.statusFilter||"all"} setStatusFilter={statusFilter=>replaceTop({...curScreen,statusFilter})} catFilter={curScreen.catFilter||"all"} setCatFilter={catFilter=>replaceTop({...curScreen,catFilter})} sortMode={curScreen.sortMode||"recent"} setSortMode={sortMode=>replaceTop({...curScreen,sortMode})} timeFilter={curScreen.timeFilter||"all"} setTimeFilter={timeFilter=>replaceTop({...curScreen,timeFilter})} resetFilters={()=>replaceTop({page:"history"})}/>;
   if(page==="manage")return<ManageDB db={db} saveDb={saveDb} galleries={galleries} saveGalleryEntry={saveGalleryEntry} onBack={goBack} navigate={navigate} goBack={goBack} replaceTop={replaceTop} curScreen={curScreen} highlightNo={highlightNo} onRenameVariant={propagateVariantRename} orders={orders} woodSettings={woodSettingsWithBands} rackSplits={rackSplits} onMergeMany={mergeManyAcrossOrders} onMoveVariant={propagateVariantMove} onRecodeVariant={propagateVariantCode} onWoodChange={propagateWoodChange} onMergeVariants={mergeVariantsAcrossOrders}/>;
-  if(page==="woodstock")return<WoodStockPage woodLots={woodLots} saveWoodLots={saveWoodLots} addLotPayment={addLotPayment} woodSettings={woodSettingsWithBands} saveWoodSettings={saveWoodSettings} laborSettings={laborSettings} saveLaborSettings={saveLaborSettings} rackSplits={rackSplits} addRackSplit={addRackSplit} rackBands={rackBands} addRackBand={addRackBand} removeRackBand={removeRackBand} changeRackBands={changeRackBands} changeRackSplits={changeRackSplits} payrollWeeks={payrollAll} workers={workers} orders={orders} expenses={expenses} onBack={goBack} view={curScreen.view||"list"} lotId={curScreen.lotId||null} onOpenList={openWoodList} onOpenDetail={lotId=>navigate({page:"woodstock",view:"detail",lotId})} onOpenNew={()=>navigate({page:"woodstock",view:"new"})} onOpenRates={()=>navigate({page:"woodstock",view:"rates"})} onOpenUsage={()=>navigate({page:"woodstock",view:"usage"})} onOpenView={v=>navigate({page:"woodstock",view:v})} onOpenModel={(c,v,hl)=>navigate({page:"manage",tab:"edit",selCat:c,selVar:v,hl:hl||null})} onSwitchView={switchRackTab} db={db} rackStd={rackStd} saveRackStd={saveRackStd} rackUsageDef={rackUsageDef} saveRackUsageDef={saveRackUsageDef} highlightNo={highlightNo}/>;
+  if(page==="woodstock")return<WoodStockPage woodLots={woodLots} saveWoodLots={saveWoodLots} addLotPayment={addLotPayment} woodSettings={woodSettingsWithBands} saveWoodSettings={saveWoodSettings} laborSettings={laborSettings} saveLaborSettings={saveLaborSettings} rackSplits={rackSplits} addRackSplit={addRackSplit} rackBands={rackBands} addRackBand={addRackBand} removeRackBand={removeRackBand} changeRackBands={changeRackBands} changeRackSplits={changeRackSplits} payrollWeeks={payrollAll} workers={workers} orders={orders} expenses={expenses} onBack={goBack} view={curScreen.view||"list"} lotId={curScreen.lotId||null} onOpenList={openWoodList} onOpenDetail={lotId=>navigate({page:"woodstock",view:"detail",lotId})} onOpenNew={()=>navigate({page:"woodstock",view:"new"})} onOpenRates={()=>navigate({page:"woodstock",view:"rates"})} onOpenUsage={()=>navigate({page:"woodstock",view:"usage"})} onOpenView={v=>navigate({page:"woodstock",view:v})} onOpenModel={(c,v,hl)=>navigate({page:"manage",tab:"edit",selCat:c,selVar:v,hl:hl||null})} onSwitchView={switchRackTab} mg={!!curScreen.mg} onPushMerge={()=>navigate({...curScreen,mg:1})} db={db} rackStd={rackStd} saveRackStd={saveRackStd} rackUsageDef={rackUsageDef} saveRackUsageDef={saveRackUsageDef} highlightNo={highlightNo}/>;
   if(page==="expense")return<ExpensePage expenses={expenses} onSave={saveExpense} onBack={goBack}/>;
-  if(page==="payroll")return<PayrollPage workers={workers} saveWorker={saveWorker} deleteWorker={deleteWorker} payrollWeeks={payrollWeeks} hajiraBooks={hajiraBooks} hajiraLink={hajiraLink} hajiraErr={hajiraErr} saveHajiraLink={saveHajiraLink} onBack={goBack}/>;
+  if(page==="payroll")return<PayrollPage workers={workers} saveWorker={saveWorker} deleteWorker={deleteWorker} payrollWeeks={payrollWeeks} hajiraBooks={hajiraBooks} hajiraLink={hajiraLink} hajiraErr={hajiraErr} saveHajiraLink={saveHajiraLink} onBack={goBack} updateAttendance={updateAttendance} addAdvanceEntry={addAdvanceEntry} removeAdvanceEntry={removeAdvanceEntry}/>;
   if(page==="plreport")return<PLReportPage orders={orders} expenses={expenses} workers={workers} payrollWeeks={payrollAll} woodLots={woodLots} woodSettings={woodSettings} laborSettings={laborSettings} onBack={goBack}/>;
   return<Home syncInfo={syncInfo} devices={devices} dbHistory={dbHistory} photoMove={photoMove} onMovePhotosOut={runMovePhotosOut} handoffReport={handoffReport} onRestoreDbVersion={restoreDbVersion} onDownloadDbVersion={downloadDbVersion} deviceId={deviceIdRef.current} lastPageCrash={lastPageCrash} orders={orders} expenses={expenses} woodLots={woodLots} db={db} woodSettings={woodSettings} laborSettings={laborSettings} workers={workers} payrollWeeks={payrollAll} alertSettings={alertSettings} saveAlertSettings={saveAlertSettings} backupFailed={backupFailed} lastSyncAt={lastSyncAt} onManualRefresh={manualRefresh} pendingWrites={pendingWrites} onUpdateOrder={updateOrder} onNew={()=>navigate({page:"form"})} onHist={()=>navigate({page:"history"})} onHistMonth={()=>{navigate({page:"history",timeFilter:"month"});setTimeout(()=>window.scrollTo(0,0),30)}} onManage={()=>navigate({page:"manage"})} onExpense={()=>navigate({page:"expense"})} onWoodStock={()=>navigate({page:"woodstock",view:"list"})} onPayroll={()=>navigate({page:"payroll"})} onPLReport={()=>navigate({page:"plreport"})} onView={o=>navigate({page:"preview",orderNo:o.no,slip:0})} onViewDelivery={o=>navigate({page:"preview",orderNo:o.no,slip:5})} online={online} connError={connError} onResetConfig={onResetConfig} folderStatus={folderStatus} connectFolder={connectFolder} highlightNo={highlightNo} onBackupData={backupData} projectId={firebaseConfig?.projectId||""} appId={firebaseConfig?.appId||""} permanentSyncFailures={permanentSyncFailures} autoStuckStatus={autoStuckStatus} dbGaps={dbGaps} setDbGaps={setDbGaps} fsRef={fsRef}/>;
   };
@@ -6190,7 +6258,7 @@ function Home({onHistMonth,syncInfo,devices,dbHistory,photoMove,onMovePhotosOut,
                   <div style={{fontSize:12,fontWeight:700,color:"#222",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{o.cust.name} — {o.no}</div>
                   <div style={{fontSize:10,color:"#999",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",marginTop:1}}>{o.items.map(it=>it.variantBn).join(", ")}</div>
                   {orderWoodNames(o).length>0&&<div data-wood-line={o.no} style={{fontSize:9,color:"#a16207",fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",marginTop:1}}>🪵 {orderWoodNames(o).join(", ")}</div>}
-                  {o.allWorkers&&o.allWorkers.length>0&&<div style={{fontSize:10,color:"#6d28d9",fontWeight:600,marginTop:2}}>👷 {o.allWorkers.join(", ")}</div>}
+                  {o.allWorkers&&o.allWorkers.length>0&&<div style={{fontSize:10,color:"#6d28d9",fontWeight:600,marginTop:2}}>👷 {o.allWorkers.map(hzTeamLabel).join(", ")}</div>}
                   <div style={{display:"flex",alignItems:"center",gap:6,marginTop:4}}>
                     <a href={`tel:${o.cust.phone}`} onClick={e=>e.stopPropagation()} style={{background:"#eff6ff",color:"#1d4ed8",border:"none",borderRadius:6,padding:"2px 8px",fontSize:9,fontWeight:700,textDecoration:"none"}}>📱 কল</a>
                     <a href={`https://wa.me/${toIntlPhone(o.cust.phone)}`} target="_blank" rel="noopener noreferrer" onClick={e=>e.stopPropagation()} style={{background:"#f0fdf4",color:"#166534",border:"none",borderRadius:6,padding:"2px 8px",fontSize:9,fontWeight:700,textDecoration:"none"}}>💬 WhatsApp</a>
@@ -7175,7 +7243,7 @@ function RackRuler({wood,w,sq,cards,bands,dbHs,known,selected,onSelect,onEditRan
 const RACK_TABS=["usage","cutlist","labels","std"];
 const rackTabScroll={};
 const RACK_MEMO={}; // v5.45: র‍্যাকের পাতার বাছাইগুলো — পাতা ছেড়ে ফিরলে আগের মতো
-function WoodStockPage({woodLots,saveWoodLots,addLotPayment,woodSettings,saveWoodSettings,laborSettings,saveLaborSettings,rackSplits,addRackSplit,rackBands,addRackBand,removeRackBand,changeRackBands,changeRackSplits,db,rackStd,saveRackStd,rackUsageDef,saveRackUsageDef,onOpenView,onOpenModel,onSwitchView,payrollWeeks,workers,orders,expenses,onBack,view,lotId,onOpenList,onOpenDetail,onOpenNew,onOpenRates,onOpenUsage,highlightNo}){
+function WoodStockPage({mg,onPushMerge,woodLots,saveWoodLots,addLotPayment,woodSettings,saveWoodSettings,laborSettings,saveLaborSettings,rackSplits,addRackSplit,rackBands,addRackBand,removeRackBand,changeRackBands,changeRackSplits,db,rackStd,saveRackStd,rackUsageDef,saveRackUsageDef,onOpenView,onOpenModel,onSwitchView,payrollWeeks,workers,orders,expenses,onBack,view,lotId,onOpenList,onOpenDetail,onOpenNew,onOpenRates,onOpenUsage,highlightNo}){
   const today=todayStr();
   const setView=(v)=>{if(v==="list")onOpenList();else if(v==="new")onOpenNew();else if(v==="rates")onOpenRates();else if(v==="usage")onOpenUsage();else if(onOpenView)onOpenView(v)}; // পুরনো কল-সাইটের সাথে সামঞ্জস্যের জন্য
   const setSelLotId=(id)=>onOpenDetail(id);
@@ -7278,6 +7346,10 @@ function WoodStockPage({woodLots,saveWoodLots,addLotPayment,woodSettings,saveWoo
   const[mergeMode,setMergeMode]=useState(false);
   const[mergeSel,setMergeSel]=useState([]);
   const[mergeKeep,setMergeKeep]=useState(null);
+  // v5.85: মার্জ মোড চালু মানে নেভিগেশনে একটা বাড়তি ধাপ (mg) — তাই প্রথম ব্যাকে শুধু মার্জ মোড বন্ধ হয়, পাতা ছাড়ে না
+  const openMerge=()=>{if(!mg&&onPushMerge)onPushMerge()};
+  const closeMerge=()=>{setMergeMode(false);setMergeSel([]);setMergeKeep(null);if(mg&&onBack)onBack()};
+  useEffect(()=>{if(!mg){setMergeMode(false);setMergeSel([]);setMergeKeep(null)}},[mg]);
   const[renamingRack,setRenamingRack]=useState(null);
   const[rackNameDraft,setRackNameDraft]=useState("");
   // v5.28–5.32: উচ্চতার দাগ, লেবেল, কাটাই তালিকা, মূল উচ্চতা
@@ -7852,15 +7924,24 @@ function WoodStockPage({woodLots,saveWoodLots,addLotPayment,woodSettings,saveWoo
               </div>
             </div>;
             return<div className="no-print" style={{background:"white",borderRadius:10,padding:"9px 10px 3px",marginBottom:mergeMode?6:10,boxShadow:"0 1px 3px rgba(0,0,0,.06)"}}>
-              {seg("দেখানো","#065f46",[["cards","🗂️ কার্ড"],["ruler","📏 উচ্চতার দাগ"]],rackView,(k)=>{setRackView(k);setRulerSel(null);if(k==="ruler"){setMergeMode(false);setMergeSel([]);setRenamingRack(null)}},false)}
+              {seg("দেখানো","#065f46",[["cards","🗂️ কার্ড"],["ruler","📏 উচ্চতার দাগ"]],rackView,(k)=>{setRackView(k);setRulerSel(null);if(k==="ruler"){closeMerge();setRenamingRack(null)}},false)}
               {seg("সাজানো","#7c2d12",[["size","🔢 মাপে ছোট→বড়"],["use","📊 বেশি ব্যবহার আগে"]],rackSort,(k)=>setRackSort(k),ruler,"উচ্চতার দাগে সবসময় মাপ অনুযায়ী সাজানো থাকে")}
               <div style={{borderTop:"1px dashed #eee",paddingTop:7,marginBottom:6}}>
-                <button disabled={ruler} onClick={()=>{const on=!mergeMode;setMergeMode(on);setMergeSel([]);setMergeKeep(null);setRenamingRack(null);if(on)setRackSort("size")}} style={{width:"100%",background:mergeMode?"#b91c1c":(ruler?"#fafafa":"#fff7ed"),color:mergeMode?"white":(ruler?"#bbb":"#c2410c"),border:"1.5px dashed "+(mergeMode?"#b91c1c":(ruler?"#ddd":"#fb923c")),borderRadius:9,padding:"7px 10px",fontSize:11,fontWeight:800}}>{mergeMode?"✕ মার্জ বন্ধ করুন":"🔗 র‍্যাক মার্জ করুন"}</button>
+                <button disabled={ruler} onClick={()=>{const on=!mergeMode;setRenamingRack(null);if(on){setMergeMode(true);setMergeSel([]);setMergeKeep(null);setRackSort("size");openMerge()}else closeMerge()}} style={{width:"100%",background:mergeMode?"#b91c1c":(ruler?"#fafafa":"#fff7ed"),color:mergeMode?"white":(ruler?"#bbb":"#c2410c"),border:"1.5px dashed "+(mergeMode?"#b91c1c":(ruler?"#ddd":"#fb923c")),borderRadius:9,padding:"7px 10px",fontSize:11,fontWeight:800}}>{mergeMode?"✕ মার্জ বন্ধ করুন":"🔗 র‍্যাক মার্জ করুন"}</button>
                 <div style={{fontSize:8.5,color:"#999",marginTop:2,textAlign:"center"}}>{ruler?"মার্জ শুধু 🗂️ কার্ড দেখানোয় চলে":"আলাদা কাজ — কয়েকটা র‍্যাক বেছে এক র‍্যাক বানানো"}</div>
               </div>
             </div>;
           })()}
           {mergeMode&&<div className="no-print" style={{background:"#fff7ed",border:"1px solid #fed7aa",borderRadius:8,padding:"7px 10px",marginBottom:10,fontSize:10,color:"#9a3412",lineHeight:1.55}}>যে র‍্যাকগুলো একসাথে রাখবেন সেগুলোতে চাপ দিন (একই কাঠ ও একই দল)। নিচের বারে ফলাফল দেখে "✓ মার্জ করুন" চাপুন। ভবিষ্যতে এই রেঞ্জের যেকোনো মাপ নিজে থেকেই এই র‍্যাকে যাবে।</div>}
+          {mergeMode&&(()=>{
+            const gs={};codeList.filter(c=>!c.isSplit).forEach(c=>{const k=c.wood+"|"+parseFloat(c.w)+"|"+(c.sq?1:0);(gs[k]=gs[k]||[]).push(c)});
+            const clusters=[];
+            Object.values(gs).forEach(arr=>{arr.sort((a,b)=>a.h-b.h);let cur=[];arr.forEach(c=>{if(cur.length&&c.h-cur[0].h>5){if(cur.length>1)clusters.push(cur);cur=[]}cur.push(c)});if(cur.length>1)clusters.push(cur)});
+            if(!clusters.length)return<div className="no-print" style={{fontSize:9.5,color:"#999",textAlign:"center",marginBottom:10}}>💡 কাছাকাছি মাপের (৫″-এর মধ্যে) একই কাঠ ও দলের র‍্যাক নেই</div>;
+            return<div className="no-print" data-merge-suggest="1" style={{background:"#eff6ff",border:"1px solid #bfdbfe",borderRadius:8,padding:"7px 10px",marginBottom:10}}>
+              <div style={{fontSize:10,fontWeight:800,color:"#1d4ed8",marginBottom:5}}>💡 কাছাকাছি মাপের র‍্যাক — চাপলে সব বাছা হবে</div>
+              {clusters.map(cl=><button key={cl[0].code} onClick={()=>{setMergeSel(cl.map(x=>x.code));setMergeKeep(cl[0].code)}} style={{display:"block",width:"100%",textAlign:"left",background:"white",border:"1px solid #bfdbfe",color:"#1e3a8a",borderRadius:7,padding:"6px 9px",marginBottom:4,fontSize:10.5,fontWeight:600}}>{WOOD[cl[0].wood]?.bn} {cl[0].w}″ · {cl.map(x=>`${x.code} (${x.h}″)`).join(" ↔ ")}</button>)}
+            </div>})()}
           {(()=>{const bl=(rackBands||[]).filter(Boolean),pairs=[];for(let i=0;i<bl.length;i++)for(let j=i+1;j<bl.length;j++){const a=bl[i],b=bl[j];if(sameRackKind(a,b.wood,b.w,b.sq)&&!(parseFloat(a.to)<parseFloat(b.from)||parseFloat(a.from)>parseFloat(b.to)))pairs.push([a,b])}
             if(!pairs.length)return null;const cd=(b)=>rackCodeOf(b.wood,b.w,parseFloat(b.rep),!!b.sq);
             return<div className="no-print" style={{background:"#fef2f2",border:"1.5px solid #fca5a5",borderRadius:8,padding:"8px 10px",marginBottom:10,fontSize:10,color:"#991b1b",lineHeight:1.6}}>
@@ -7875,7 +7956,7 @@ function WoodStockPage({woodLots,saveWoodLots,addLotPayment,woodSettings,saveWoo
             const openRange=(code)=>{
               const c=codeList.find(x=>x.code===code);if(!c)return;
               const b=(rackBands||[]).find(x=>sameRackKind(x,c.wood,c.w,c.sq)&&parseFloat(x.rep)===parseFloat(c.h));
-              setRackView("cards");setRulerSel(null);setMergeMode(false);
+              setRackView("cards");setRulerSel(null);if(mergeMode)closeMerge();
               setBandDraft({...bandDraft,[code]:b?{from:String(b.from),to:String(b.to)}:{from:"",to:""}});
               setEditingBandFor(code);
               setTimeout(()=>{const el=document.getElementById(`rack-card-${code}`);if(el)el.scrollIntoView({behavior:"smooth",block:"center"})},150);
@@ -8009,9 +8090,10 @@ function WoodStockPage({woodLots,saveWoodLots,addLotPayment,woodSettings,saveWoo
                     <button onClick={returnChildren} style={{background:"#f0fdfa",color:"#0f766e",border:"1px solid #99f6e4",borderRadius:6,padding:"2px 7px",fontSize:9,fontWeight:700}}>↩️ সব {c.code}-এ ফেরত নিন</button>
                   </div>}
                   {suggested!==undefined&&<div style={{fontSize:10,color:wc.accent,fontWeight:700,marginTop:2}}>🗄️ প্রস্তাবিত র‍্যাক: {suggested}টি</div>}
+                  {mergeMode&&!c.isSplit&&mergeSel.length>0&&mergeSel.indexOf(c.code)<0&&mergeSel.some(sc=>{const o=codeList.find(x=>x.code===sc);return o&&o.wood===c.wood&&parseFloat(o.w)===parseFloat(c.w)&&!!o.sq===!!c.sq&&Math.abs(o.h-c.h)<=5})&&<div className="no-print" style={{fontSize:9,color:"#1d4ed8",fontWeight:700,marginTop:2}}>💡 বাছা র‍্যাকের কাছাকাছি</div>}
                   {!mergeMode&&!c.isSplit&&nearby.length>0&&<div className="no-print" style={{fontSize:9,color:"#1d4ed8",marginTop:2,display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
                     <span>💡 কাছাকাছি: {nearby.map(n=>`${n.code} (${n.h}″)`).join(", ")}</span>
-                    <button onClick={e=>{e.stopPropagation();setMergeMode(true);setRackSort("size");setRenamingRack(null);setMergeSel([c.code,...nearby.map(n=>n.code)]);setMergeKeep(c.code)}} style={{background:"#fff7ed",color:"#9a3412",border:"1px solid #fdba74",borderRadius:6,padding:"2px 7px",fontSize:9,fontWeight:700}}>🔗 এগুলোর সাথে মার্জ</button>
+                    <button onClick={e=>{e.stopPropagation();setMergeMode(true);setRackSort("size");setRenamingRack(null);setMergeSel([c.code,...nearby.map(n=>n.code)]);setMergeKeep(c.code);openMerge()}} style={{background:"#fff7ed",color:"#9a3412",border:"1px solid #fdba74",borderRadius:6,padding:"2px 7px",fontSize:9,fontWeight:700}}>🔗 এগুলোর সাথে মার্জ</button>
                   </div>}
                 </div>
                 <div style={{textAlign:"right",flexShrink:0,marginLeft:8}}>
@@ -8045,9 +8127,9 @@ function WoodStockPage({woodLots,saveWoodLots,addLotPayment,woodSettings,saveWoo
                   setEditingBandFor(opening?c.code:null);
                   if(opening)setBandDraft({...bandDraft,[c.code]:myBand?{from:String(myBand.from),to:String(myBand.to)}:{from:"",to:""}});
                 }} style={{background:"#eff6ff",color:"#1d4ed8",border:"1px solid #bfdbfe",borderRadius:7,padding:"5px 11px",fontSize:10,fontWeight:700}}>{isEditingBand?"বন্ধ করুন":myRange?"✏️ রেঞ্জ এডিট করুন":"📏 উচ্চতার রেঞ্জ"}</button>}
-                {myRange&&<button onClick={unmergeRack} style={{background:"#fef2f2",color:"#b91c1c",border:"1px solid #fecaca",borderRadius:7,padding:"5px 11px",fontSize:10,fontWeight:700}}>✂️ আলাদা করুন</button>}
+                {myRange&&<button onClick={unmergeRack} style={{background:"#fef2f2",color:"#b91c1c",border:"1px solid #fecaca",borderRadius:7,padding:"5px 11px",fontSize:10,fontWeight:700}}>↩️ মার্জ ভাঙুন</button>}
                 {showSplitSuggestion&&<>
-                  <button onClick={approveSplit} style={{background:"#f0fdfa",color:"#0d9488",border:"1px solid #99f6e4",borderRadius:7,padding:"8px 11px",minHeight:36,fontSize:10,fontWeight:700}}>+ আলাদা র‍্যাক করুন</button>
+                  <button onClick={approveSplit} style={{background:"#f0fdfa",color:"#0d9488",border:"1px solid #99f6e4",borderRadius:7,padding:"8px 11px",minHeight:36,fontSize:10,fontWeight:700}}>➕ নতুন র‍্যাক</button>
                   <span style={{fontSize:8,color:"#999",lineHeight:1.4}}>{domL.pct.toFixed(0)}%-ই {domL.len}″ ওসার</span>
                 </>}
               </div>}
@@ -8128,10 +8210,10 @@ function WoodStockPage({woodLots,saveWoodLots,addLotPayment,woodSettings,saveWoo
               if(plan.error)return;
               const names=plan.swallowed.map(x=>`${x.rackName||x.code} (${x.h}″)`).join(", ");
               const keepName=plan.code;
-              if(!window.confirm(`এই র‍্যাকগুলো এক করবেন?\n\n${names}\n\n→ একটা র‍্যাক "${keepName}" — ${WOOD[plan.wood]?.bn} ${plan.w}″, হাইট ${plan.from}″ থেকে ${plan.to}″।${plan.extra.length?`\n\n⚠️ মাঝে থাকায় এগুলোও মিশবে: ${plan.extra.map(x=>x.rackName||x.code).join(", ")}`:""}\n\nপুরনো ও নতুন সব অর্ডারের ট্রান্সপোর্ট কপিতে এখন থেকে এই র‍্যাক দেখাবে। পরে "✂️ আলাদা করুন" দিয়ে ফেরানো যায়।`))return;
+              if(!window.confirm(`এই র‍্যাকগুলো এক করবেন?\n\n${names}\n\n→ একটা র‍্যাক "${keepName}" — ${WOOD[plan.wood]?.bn} ${plan.w}″, হাইট ${plan.from}″ থেকে ${plan.to}″।${plan.extra.length?`\n\n⚠️ মাঝে থাকায় এগুলোও মিশবে: ${plan.extra.map(x=>x.rackName||x.code).join(", ")}`:""}\n\nপুরনো ও নতুন সব অর্ডারের ট্রান্সপোর্ট কপিতে এখন থেকে এই র‍্যাক দেখাবে। পরে "↩️ মার্জ ভাঙুন" দিয়ে ফেরানো যায়।`))return;
               if(plan.remove.length||plan.add)changeRackBands(plan.remove,plan.add?[plan.add]:[]);
               if(plan.removeSplits.length)changeRackSplits(plan.removeSplits,[]);
-              setMergeMode(false);setMergeSel([]);setMergeKeep(null);
+              closeMerge();
             };
             return<div className="no-print" style={{position:"sticky",bottom:8,zIndex:6,background:"#7c2d12",color:"white",borderRadius:12,padding:"10px 12px",marginTop:4,boxShadow:"0 4px 14px rgba(0,0,0,.25)"}}>
               <div style={{fontSize:11,fontWeight:700,marginBottom:4}}>🔗 বাছাই: {pickedCards.length?pickedCards.map(x=>x.rackName||x.code).join(", "):"এখনো কিছু না — উপরের কার্ডে চাপ দিন"}</div>
@@ -8268,7 +8350,7 @@ function WoodStockPage({woodLots,saveWoodLots,addLotPayment,woodSettings,saveWoo
         const addH=()=>{const nums=String(stdDraft).replace(/[০-৯]/g,d=>String("০১২৩৪৫৬৭৮৯".indexOf(d))).split(/[^0-9.]+/).map(parseFloat).filter(x=>x>0&&x<=240);if(!nums.length)return;saveRackStd({heights:[...(std.heights||[]),...nums],tol});setStdDraft("")};
         const takeSuggest=()=>{if((std.heights||[]).length&&!window.confirm(`এখনকার তালিকা (${(std.heights||[]).join(", ")}) বদলে প্রস্তাবিত তালিকা বসাবেন?\n\n${plan.suggest.join(", ")}`))return;saveRackStd({heights:plan.suggest,tol})};
         const chosen=plan.proposals.filter(p=>!stdOff[p.code]);
-        const apply=()=>{if(!chosen.length)return;if(!window.confirm(`${chosen.length}টা রেঞ্জ বসাবেন?\n\n${chosen.map(p=>`${p.code}: ${p.from}″–${p.to}″`).join("\n")}\n\nএরপর এই উচ্চতার সব কাঠ (পুরনো ও নতুন অর্ডারের) এই র‍্যাকগুলোতে যাবে। পরে র‍্যাক পাতায় "✂️ আলাদা করুন" দিয়ে ফেরানো যায়।`))return;changeRackBands([],chosen.map(plan.toBand));setStdOff({})};
+        const apply=()=>{if(!chosen.length)return;if(!window.confirm(`${chosen.length}টা রেঞ্জ বসাবেন?\n\n${chosen.map(p=>`${p.code}: ${p.from}″–${p.to}″`).join("\n")}\n\nএরপর এই উচ্চতার সব কাঠ (পুরনো ও নতুন অর্ডারের) এই র‍্যাকগুলোতে যাবে। পরে র‍্যাক পাতায় "↩️ মার্জ ভাঙুন" দিয়ে ফেরানো যায়।`))return;changeRackBands([],chosen.map(plan.toBand));setStdOff({})};
         const pct=(v)=>plan.total>0?Math.round(v/plan.total*100):0;
         const card={background:"white",borderRadius:12,padding:12,marginBottom:12,boxShadow:"0 1px 4px rgba(0,0,0,.07)"};
         const hd={fontSize:12,fontWeight:800,color:"#7c2d12",marginBottom:6};
@@ -8719,6 +8801,9 @@ function PLReportPage({orders,expenses,workers,payrollWeeks,woodLots,woodSetting
 //   আগের সপ্তাহগুলো এই অ্যাপের পুরনো হিসাব (অগ্রিম দিন ও সময় অনুযায়ী)।
 // কর্মী: তালিকা আগে, "+ নতুন কর্মী" চাপলে ফর্ম; প্রতিটা কর্মীর "💹 হাজিরা বদল" (নির্দিষ্ট সপ্তাহ থেকে)
 //   আর "📒 খাতা" (সপ্তাহ ধরে দিন, হার, আয়, কবে কখন কত অগ্রিম, প্রাপ্য)।
+// v5.85: সাময়িক সুইচ — true থাকলে হাজিরা-অ্যাপ সংযোগের আগের সপ্তাহগুলোতে হাজিরা (দিন) ও অগ্রিম আবার এই অ্যাপে লেখা যায়।
+// আগের সপ্তাহের লেখা শেষ হলে এটা false করে দিন (কর্মীর সংখ্যা/হাজিরা অ্যাপের সপ্তাহে কোনো প্রভাব নেই)।
+const ALLOW_PAST_WEEK_INPUT=true;
 const PAY_WEEKDAYS=["রবিবার","সোমবার","মঙ্গলবার","বুধবার","বৃহস্পতিবার","শুক্রবার","শনিবার"];
 const payWeekday=(ds)=>{try{return PAY_WEEKDAYS[parseISO(ds).getUTCDay()]||""}catch(e){return""}};
 const payWeekRange=(we)=>`${fmtDate(addDays(we,-6))} – ${fmtDate(we)}`;
@@ -8743,7 +8828,7 @@ function advTimeOf(a){
 }
 const advSortKey=(a)=>{const tm=advTimeOf(a);return String(a.date||"")+" "+(tm?tm.t:"00:00")};
 
-function PayrollPage({workers,saveWorker,deleteWorker,payrollWeeks,hajiraBooks,hajiraLink,hajiraErr,saveHajiraLink,onBack}){
+function PayrollPage({workers,saveWorker,deleteWorker,payrollWeeks,hajiraBooks,hajiraLink,hajiraErr,saveHajiraLink,onBack,updateAttendance,addAdvanceEntry,removeAdvanceEntry}){
   const today=todayStr();
   const thisWeek=weekEndThursday(today);
   const[view,setView]=useState("week"); // week | workers
@@ -8758,6 +8843,7 @@ function PayrollPage({workers,saveWorker,deleteWorker,payrollWeeks,hajiraBooks,h
   const[rateFor,setRateFor]=useState(null);
   const[rateDraft,setRateDraft]=useState({rate:"",from:""});
   const[ledgerFor,setLedgerFor]=useState(null);
+  const[advDraft,setAdvDraft]=useState({workerId:"",amount:"",date:"",note:""}); // v5.85
   const idCardInput=useRef();
   const photoInput=useRef();
   const inp={width:"100%",border:"1.5px solid #e0e0e0",borderRadius:9,padding:"10px 11px",fontSize:13,outline:"none",boxSizing:"border-box"};
@@ -8790,6 +8876,9 @@ function PayrollPage({workers,saveWorker,deleteWorker,payrollWeeks,hajiraBooks,h
   // ── v5.75: রূপালী হাজিরা অ্যাপ — এই সপ্তাহ সংযোগের সপ্তাহ বা পরের হলে সব অঙ্ক সেখানকার খাতা থেকে ──
   const hzFrom=hajiraFromWeek(hajiraLink);
   const isHz=weekEnd>=hzFrom;
+  const editable=ALLOW_PAST_WEEK_INPUT&&!isHz&&!!updateAttendance; // v5.85: আগের সপ্তাহে লেখা যাবে
+  const setDays=(wid,v)=>{const n=Math.max(0,Math.round((parseFloat(v)||0)*2)/2);updateAttendance(weekEnd,wid,n)};
+  const addAdv=()=>{const amt=parseFloat(advDraft.amount)||0;if(!advDraft.workerId||amt<=0){alert("কর্মী বাছুন ও অগ্রিমের টাকা লিখুন");return}addAdvanceEntry(weekEnd,{id:"adv_"+Date.now(),workerId:advDraft.workerId,amount:amt,date:advDraft.date||days[days.length-1],time:nowHM(),note:(advDraft.note||"").trim()});setAdvDraft({workerId:"",amount:"",date:advDraft.date,note:""})};
   const book=isHz?((hajiraBooks||{})[weekEnd]||null):null;
   const deptKey=(d)=>PAYROLL_DEPTS.includes(d)?d:"অন্যান্য";
   const R=isHz?(book?Object.entries(book.rows||{}).filter(([,r])=>r).map(([pin,r])=>{
@@ -8939,7 +9028,7 @@ function PayrollPage({workers,saveWorker,deleteWorker,payrollWeeks,hajiraBooks,h
             {isHz?(book?(book.final?<span style={{color:"#166534",fontWeight:700}}>✓ সবার বেতন পরিশোধিত — চূড়ান্ত</span>
               :<>হাজিরা অ্যাপ থেকে · পরিশোধিত {toBnDigits(book.paidN||0)}/{toBnDigits(book.n||R.length)} জন</>)
               :"হাজিরা অ্যাপ থেকে এই সপ্তাহের খাতা এখনো আসেনি")
-              :<>এই অ্যাপের পুরনো হিসাব (শুধু দেখা যায়) · হাজিরা লেখা: {toBnDigits(attCount)}/{toBnDigits(rowsW.length)} জন</>}
+              :<>এই অ্যাপের পুরনো হিসাব{editable?" (সাময়িকভাবে লেখা যাচ্ছে ✏️)":" (শুধু দেখা যায়)"} · হাজিরা লেখা: {toBnDigits(attCount)}/{toBnDigits(rowsW.length)} জন</>}
             {isHz&&book&&hzAt(book.at)&&<div>সর্বশেষ এসেছে: {hzAt(book.at)}</div>}
           </div>
         </div>
@@ -8950,7 +9039,22 @@ function PayrollPage({workers,saveWorker,deleteWorker,payrollWeeks,hajiraBooks,h
           <a href={HAJIRA_URL} target="_blank" rel="noopener" style={{display:"inline-block",background:PAY,color:"white",borderRadius:9,padding:"9px 16px",fontSize:12.5,fontWeight:800,textDecoration:"none"}}>হাজিরা খুলুন ↗</a>
         </div>}
 
-        {/* ③ পুরনো সপ্তাহের অগ্রিম — শুধু দেখা */}
+        {/* ③ পুরনো সপ্তাহের অগ্রিম — v5.81: সুইচ চালু থাকলে লেখা যায় */}
+        {editable&&<div className="no-print" data-adv-add="1" style={card}>
+          <div style={{fontWeight:800,fontSize:13,color:PAY_DARK,marginBottom:8}}>➕ অগ্রিম লিখুন (এই সপ্তাহ)</div>
+          <select value={advDraft.workerId} onChange={e=>setAdvDraft({...advDraft,workerId:e.target.value})} style={{...inp,marginBottom:6}}>
+            <option value="">কর্মী বাছুন</option>
+            {activeWorkers.map(w=><option key={w.id} value={w.id}>{w.name}</option>)}
+          </select>
+          <div style={{display:"flex",gap:6,marginBottom:6}}>
+            <input type="number" inputMode="decimal" value={advDraft.amount} onChange={e=>setAdvDraft({...advDraft,amount:e.target.value})} placeholder="টাকা" style={{...inp,flex:1}}/>
+            <select value={advDraft.date||days[days.length-1]} onChange={e=>setAdvDraft({...advDraft,date:e.target.value})} style={{...inp,flex:1.3}}>
+              {days.map(d=><option key={d} value={d}>{payWeekday(d)}, {fmtDate(d)}</option>)}
+            </select>
+          </div>
+          <input value={advDraft.note} onChange={e=>setAdvDraft({...advDraft,note:e.target.value})} placeholder="নোট (ঐচ্ছিক)" style={{...inp,marginBottom:8}}/>
+          <button onClick={addAdv} style={{width:"100%",background:PAY,color:"white",border:"none",borderRadius:9,padding:"11px",fontSize:13,fontWeight:800}}>অগ্রিম যোগ করুন</button>
+        </div>}
         {!isHz&&advs.length>0&&<div className="no-print" data-adv-list="1" style={card}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:8}}>
             <div style={{fontWeight:800,fontSize:13,color:PAY_DARK}}>💰 এই সপ্তাহের অগ্রিম — কে, কবে, কখন</div>
@@ -8967,6 +9071,7 @@ function PayrollPage({workers,saveWorker,deleteWorker,payrollWeeks,hajiraBooks,h
                 {w?<WorkerAvatar worker={w} size={24}/>:null}
                 <span style={{flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis"}}>{w?w.name:((snaps[a.workerId]&&snaps[a.workerId].name)||"(মুছে ফেলা কর্মী)")}{a.note?<span style={{color:"#999",fontSize:10}}> · {a.note}</span>:null}</span>
                 <strong style={{flexShrink:0}}>{money(a.amount)}</strong>
+                {editable&&<button onClick={()=>{if(window.confirm("এই অগ্রিমটা মুছবেন?"))removeAdvanceEntry(weekEnd,a)}} style={{background:"#fee2e2",border:"none",borderRadius:6,color:"#b91c1c",fontSize:12,padding:"3px 8px",flexShrink:0}}>✕</button>}
               </div>})}
             </div>;
           })}
@@ -8995,10 +9100,14 @@ function PayrollPage({workers,saveWorker,deleteWorker,payrollWeeks,hajiraBooks,h
                   :<div style={{fontSize:10,color:"#777",marginTop:1}}>দৈনিক {money(Math.round(r.rate))}{!isHz&&r.w&&rateChangedHere(r.w)&&<span style={{marginLeft:4,background:"#dcfce7",color:"#166534",borderRadius:6,padding:"0 5px",fontWeight:700,fontSize:9}}>নতুন হার</span>} · আয় <b style={{color:"#0f766e"}}>{money(r.gross)}</b></div>}
                   {r.adv>0&&<div style={{fontSize:9.5,color:"#999",marginTop:1}}>অগ্রিম {money(r.adv)} · প্রাপ্য <b style={{color:"#166534"}}>{money(r.net)}</b></div>}
                 </div>
-                <div style={{textAlign:"center",minWidth:44,flexShrink:0}}>
+                {editable&&r.w&&!r.ghost?<div className="no-print" style={{display:"flex",alignItems:"center",gap:4,flexShrink:0}}>
+                  <button onClick={()=>setDays(r.id,r.units-0.5)} style={{width:30,height:30,borderRadius:8,border:"none",background:"#fee2e2",color:"#b91c1c",fontSize:16,fontWeight:800}}>−</button>
+                  <div style={{textAlign:"center",minWidth:34}}><div style={{fontSize:16,fontWeight:800,color:c}}>{toBnDigits(r.units)}</div><div style={{fontSize:8.5,color:"#999"}}>হাজিরা</div></div>
+                  <button onClick={()=>setDays(r.id,r.units+0.5)} style={{width:30,height:30,borderRadius:8,border:"none",background:"#dcfce7",color:"#166534",fontSize:16,fontWeight:800}}>+</button>
+                </div>:<div style={{textAlign:"center",minWidth:44,flexShrink:0}}>
                   <div style={{fontSize:16,fontWeight:800,color:c}}>{toBnDigits(r.units)}</div>
                   <div style={{fontSize:8.5,color:"#999"}}>হাজিরা</div>
-                </div>
+                </div>}
               </div>)}
             </div>
           })}
@@ -9227,6 +9336,7 @@ function ManageDB({db,saveDb,galleries,saveGalleryEntry,onBack,navigate,goBack,r
   const[expandedJointFor,setExpandedJointFor]=useState(null);
   // v4.45: কাঠের তালিকায় কোন পিসটা এখন সম্পাদনায় আছে — {si,pi,bn,w,h,l,pc}
   const[editingPiece,setEditingPiece]=useState(null);
+  const pieceNames=useMemo(()=>{const cnt={};Object.values(db||{}).forEach(c=>Object.values((c&&c.variants)||{}).forEach(v=>((v&&v.sections)||[]).forEach(sc=>((sc&&sc.pieces)||[]).forEach(p=>{const n=String((p&&p.bn)||"").trim();if(n)cnt[n]=(cnt[n]||0)+1}))));return Object.keys(cnt).sort((a,b)=>cnt[b]-cnt[a])},[db]); // v5.85
   // ── v5.35: পিসের পাশে র‍্যাক কোড। কাঠ ঠিক হয় অর্ডারে, তাই কোডে কাঠের অক্ষর থাকে না ("1566") — অর্ডারে
   // যে কাঠ বাছবেন তার অক্ষর সামনে বসবে (M1566, A1566…)। সেকশনে কাঠ ঠিক করা থাকলে (সবসময় সেগুন)
   // তখন পুরো কোড। সবুজ = অন্তত এক কাঠে এই র‍্যাক চালু আছে, কমলা = কোনো কাঠেই নেই ──
@@ -9255,6 +9365,8 @@ function ManageDB({db,saveDb,galleries,saveGalleryEntry,onBack,navigate,goBack,r
   // অন্য পাতায় গিয়ে ফিরে এলেও (যেমন র‍্যাক পাতা থেকে মডেল খুললে) কপি করা সেকশন হারায় না
   const[copiedSection,setCopiedSectionRaw]=useState(()=>window.__rfCopiedSection||null); // {sec,from,tag}
   const setCopiedSection=(v)=>{window.__rfCopiedSection=v;setCopiedSectionRaw(v)};
+  const[copiedPiece,setCopiedPieceRaw]=useState(()=>window.__rfCopiedPiece||null); // v5.90: {piece,from,tag}
+  const setCopiedPiece=(v)=>{window.__rfCopiedPiece=v;setCopiedPieceRaw(v)};
   // ── v5.39: র‍্যাক পাতা থেকে "এই পিস ছোট করলে" দেখতে এলে কোন পিসগুলো দাগানো থাকবে ──
   const hl=curScreen.hl||null;
   const hlShow=!!hl&&hl.mode==="show"; // v5.44: র‍্যাকের "বিস্তারিত" থেকে — শুধু দেখানো, বদলের প্রস্তাব নয়
@@ -9778,7 +9890,8 @@ function ManageDB({db,saveDb,galleries,saveGalleryEntry,onBack,navigate,goBack,r
               const hasAnyJoint=Object.values(jr).some(v=>parseInt(v)>1);
               return<div key={pi}>
                 {editingPiece&&editingPiece.si===si&&editingPiece.pi===pi?<div style={{background:"#f5f3ff",border:"1.5px solid #c4b5fd",borderRadius:8,padding:8,marginBottom:6}}>
-                  <input value={editingPiece.bn} onChange={e=>setEditingPiece({...editingPiece,bn:e.target.value})} placeholder="কাঠের নাম" style={{...inp,padding:"6px 8px",fontSize:11,marginBottom:6}}/>
+                  <input value={editingPiece.bn} onChange={e=>setEditingPiece({...editingPiece,bn:e.target.value})} placeholder="কাঠের নাম" style={{...inp,padding:"6px 8px",fontSize:11,marginBottom:4}}/>
+                  <NameSuggest value={editingPiece.bn} names={pieceNames} onPick={n=>setEditingPiece(ep=>({...ep,bn:n}))}/>
                   <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:4}}>
                     {[{k:"w",p:"W\""},{k:"h",p:"H\""},{k:"l",p:"L\""},{k:"pc",p:"পিস"}].map(f=><div key={f.k}>
                       <div style={{fontSize:8.5,color:"#6d28d9",fontWeight:700,marginBottom:2,textAlign:"center"}}>{f.p}</div>
@@ -9795,11 +9908,12 @@ function ManageDB({db,saveDb,galleries,saveGalleryEntry,onBack,navigate,goBack,r
                   <span style={{fontFamily:"monospace",color:"#555",flexShrink:0}}>{p.w}×{p.h}×{p.l} × {p.pc}pc</span>
                   {rackChipFor(p,sec)}
                   <button onClick={()=>startPieceEdit(si,pi)} title="নাম/মাপ বদলান" style={{background:"#f5f3ff",border:"none",borderRadius:4,padding:"2px 6px",color:"#6d28d9",fontSize:10,cursor:"pointer",flexShrink:0}}>✏️</button>
-                  <button onClick={()=>setExpandedJointFor(isJointOpen?null:jointKey)} title="জোড়ার নিয়ম" style={{background:hasAnyJoint?"#ede9fe":"#f3f4f6",border:"none",borderRadius:4,padding:"2px 6px",color:hasAnyJoint?"#6d28d9":"#999",fontSize:10,cursor:"pointer",flexShrink:0}}>🔗</button>
-                  <button onClick={()=>removePiece(si,pi)} style={{background:"#fee2e2",border:"none",borderRadius:4,padding:"2px 6px",color:RED,fontSize:10,cursor:"pointer",flexShrink:0}}>✕</button>
+                  <button onClick={()=>setExpandedJointFor(isJointOpen?null:jointKey)} title="জোড়ার নিয়ম" style={{background:hasAnyJoint?"#4c1d95":"#f3f4f6",border:"none",borderRadius:4,padding:"2px 6px",color:hasAnyJoint?"white":"#999",fontSize:10,fontWeight:hasAnyJoint?800:400,boxShadow:hasAnyJoint?"0 0 0 1.5px #4c1d95":"none",filter:hasAnyJoint?"none":"grayscale(1)",cursor:"pointer",flexShrink:0}}>🔗</button>
+                  <button onClick={()=>setCopiedPiece({piece:JSON.parse(JSON.stringify(p)),from:db[selCat]?.variants[selVar]?.bn||"",tag:selCat+"|"+selVar+"|"+si+"|"+pi})} title="এই লাইন কপি করুন" style={{background:copiedPiece&&copiedPiece.tag===selCat+"|"+selVar+"|"+si+"|"+pi?"#dcfce7":"#eff6ff",border:"none",borderRadius:4,padding:"2px 6px",color:copiedPiece&&copiedPiece.tag===selCat+"|"+selVar+"|"+si+"|"+pi?"#166534":"#1d4ed8",fontSize:10,cursor:"pointer",flexShrink:0}}>{copiedPiece&&copiedPiece.tag===selCat+"|"+selVar+"|"+si+"|"+pi?"✓":"📋"}</button>
+                  <button onClick={()=>{if(window.confirm(`"${p.bn||"এই কাঠ"}" (${p.w}×${p.h}×${p.l} × ${p.pc}pc) মুছে ফেলবেন?\n\nনিচে "সংরক্ষণ করুন" না চাপা পর্যন্ত আসল তালিকা বদলাবে না।`))removePiece(si,pi)}} style={{background:"#fee2e2",border:"none",borderRadius:4,padding:"2px 6px",color:RED,fontSize:10,cursor:"pointer",flexShrink:0}}>✕</button>
                 </div>}
                 {isJointOpen&&<div style={{background:"#faf5ff",borderRadius:6,padding:"7px 8px",marginBottom:6}}>
-                  <div style={{fontSize:8,color:"#6d28d9",marginBottom:5,lineHeight:1.4}}>কাঠভেদে এই মাপে জোড়া দেওয়ার সর্বোচ্চ (ম্যাক্সিমাম) পিস সংখ্যা (১ = জোড়া ছাড়া, একটাই টুকরা):</div>
+                  <div style={{fontSize:8,color:"#6d28d9",marginBottom:5,lineHeight:1.4}}>কাঠভেদে এই মাপে জোড়া দেওয়ার সর্বোচ্চ (ম্যাক্সিমাম) পিস সংখ্যা (১ = জোড়া ছাড়া)। একটা লিখলেই বাকিগুলো নিজে বসবে — মেহগনি/কড়ই যত, আকাশমণি/সেগুন তার দুই গুণ:</div>
                   <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
                     {Object.entries(WOOD).map(([wk,wv])=><div key={wk} style={{display:"flex",alignItems:"center",gap:3}}>
                       <span style={{fontSize:8,color:"#555"}}>{wv.bn}:</span>
@@ -9807,8 +9921,15 @@ function ManageDB({db,saveDb,galleries,saveGalleryEntry,onBack,navigate,goBack,r
                         const val=e.target.value;
                         const ns=JSON.parse(JSON.stringify(editSections));
                         const jrObj={...(ns[si].pieces[pi].jointRules||{})};
-                        if(val==="")delete jrObj[wk]; // খালি করলে সেই কাঠের জন্য নির্দিষ্ট মান মুছে যাবে, ডিফল্ট ১ (জোড়া ছাড়া) হিসেবে গণ্য হবে
-                        else jrObj[wk]=parseInt(val)||1;
+                        // v5.90: মেহগনি/কড়ই = N হলে আকাশমণি/সেগুন = ২N (উল্টোটায় বিজোড় হলে ওপরে রাউন্ড) — একটা লিখলেই বাকিগুলো বসে; ইউক্যালিপটাস আলাদা
+                        const grpLow=["M","K"],grpHigh=["A","S"];
+                        if(val===""){if(grpLow.includes(wk)||grpHigh.includes(wk)){[...grpLow,...grpHigh].forEach(k=>{delete jrObj[k]})}else delete jrObj[wk]}
+                        else{
+                          const n=Math.max(1,parseInt(val)||1);
+                          if(grpLow.includes(wk)){grpLow.forEach(k=>{jrObj[k]=n});grpHigh.forEach(k=>{jrObj[k]=n*2})}
+                          else if(grpHigh.includes(wk)){grpHigh.forEach(k=>{jrObj[k]=n});grpLow.forEach(k=>{jrObj[k]=Math.max(1,Math.ceil(n/2))})}
+                          else jrObj[wk]=n;
+                        }
                         ns[si].pieces[pi].jointRules=jrObj;
                         setEditSections(ns);
                       }} style={{width:34,border:"1px solid #ddd",borderRadius:4,padding:"3px 4px",fontSize:9,textAlign:"center"}}/>
@@ -9823,6 +9944,8 @@ function ManageDB({db,saveDb,galleries,saveGalleryEntry,onBack,navigate,goBack,r
               {[{k:"w",p:"W\""},{k:"h",p:"H\""},{k:"l",p:"L\""},{k:"pc",p:"পিস"}].map(f=><input key={f.k} type="number" step="0.25" placeholder={f.p} value={newPiece.sectionIdx===si?newPiece[f.k]:""} onChange={e=>setNewPiece({...newPiece,sectionIdx:si,[f.k]:e.target.value})} style={{...inp,padding:"5px 4px",fontSize:10}}/>)}
               <button onClick={addPiece} style={{background:"#6d28d9",color:"white",border:"none",borderRadius:6,padding:"8px 10px",minHeight:36,fontSize:11}}>+</button>
             </div>
+            {newPiece.sectionIdx===si&&<div style={{marginTop:4}}><NameSuggest value={newPiece.bn} names={pieceNames} onPick={n=>setNewPiece(p=>({...p,bn:n}))}/></div>}
+            {copiedPiece&&<button onClick={()=>{const ns=JSON.parse(JSON.stringify(editSections));ns[si].pieces.push(JSON.parse(JSON.stringify(copiedPiece.piece)));setEditSections(ns)}} style={{width:"100%",background:"#dcfce7",border:"1.5px dashed #16a34a",color:"#166534",borderRadius:7,padding:"7px",fontSize:10.5,fontWeight:700,marginTop:5,lineHeight:1.4}}>📥 পেস্ট: {copiedPiece.piece.bn} <span style={{fontFamily:"monospace",fontWeight:500}}>{copiedPiece.piece.w}×{copiedPiece.piece.h}×{copiedPiece.piece.l} × {copiedPiece.piece.pc}pc</span>{copiedPiece.from?<span style={{display:"block",fontSize:9,fontWeight:500}}>{copiedPiece.from} থেকে কপি</span>:null}</button>}
             {newPiece.sectionIdx===si&&parseFloat(newPiece.w)>0&&parseFloat(newPiece.h)>0&&<div style={{marginTop:5,fontSize:9.5,color:"#555",display:"flex",alignItems:"center",gap:5}}>এই পিস যাবে: {rackChipFor({w:newPiece.w,h:newPiece.h,l:newPiece.l},sec)}</div>}
           </div>
         </div>})}
@@ -10188,7 +10311,7 @@ function Form({recentRates,onSave,onBack,db,saveDb,galleries,woodSettings,laborS
           {fVar&&isEmptyWood(fVar)&&<div style={{background:"#fef2f2",border:"1px solid #fecaca",borderRadius:8,padding:"7px 10px",marginBottom:10,fontSize:10,color:"#991b1b"}}>⚠️ এই মডেলের কাঠের মাপ এখনো যোগ করা হয়নি। অর্ডার কনফার্ম করার পর কার্পেন্টার স্লিপ থেকে যোগ করুন।</div>}
           {lbl("কাঠের ধরন")}
           <select value={ni.wood} onChange={e=>setNi({...ni,wood:e.target.value})} style={{...inp,marginBottom:10}}>
-            {Object.entries(WOOD).map(([k,v])=><option key={k} value={k}>{v.bn} ({v.en})</option>)}
+            {woodOptions(ni.wood)}
           </select>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:10}}>
             <div>{lbl("পরিমাণ")}<input type="number" min={1} value={ni.qty} placeholder="1" onChange={e=>setNi({...ni,qty:e.target.value})} style={inp}/></div>
