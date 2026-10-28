@@ -189,7 +189,7 @@ function compressImage(file,maxDim=1000,quality=0.70,maxBytes=45000){
 /* ── FULL-RESOLUTION LOCAL FOLDER STORAGE (desktop Chrome/Edge/Brave only) ──
    Original, uncompressed images are saved as real files in a folder you choose
    on your computer. Only a small compressed thumbnail syncs to the cloud/mobile. */
-const BUILD_TAG="5.90";
+const BUILD_TAG="5.91";
 const FS_SUPPORTED=typeof window!=="undefined"&&"showDirectoryPicker" in window;
 function idbOpen(){
   return new Promise((resolve,reject)=>{
@@ -2106,6 +2106,55 @@ function hzTeamLabel(name){
   const tm=(r.teamOf[m.pin]||[]).map(e=>e.name);
   return tm.length?name+" + "+tm.join(" + "):name;
 }
+// v5.91: হার্ডওয়্যার শপের (আলাদা Firebase প্রজেক্ট) "ফার্নিচার শাখায় স্থানান্তর" বিক্রয় এখানে স্বয়ংক্রিয় খরচ হিসেবে দেখানো — শুধু পড়া হয়, OMS-এর Firestore-এ কিছু জমা হয় না
+const HW_CAT_MAP={"লেকার ও পলিশ":"varnish","রং ও এনামেল":"varnish","থিনার ও কেমিক্যাল":"varnish","আঠা ও গাম":"varnish","শিরিষ ও ঘষা":"varnish","ব্রাশ ও রোলার":"varnish","পেরেক ও স্ক্রু":"hardware","কব্জা ও ফিটিংস":"hardware","তালা ও হ্যান্ডেল":"hardware","চ্যানেল ও রেল":"hardware","যন্ত্রপাতি":"machine","সেফটি ও অন্যান্য":"other"};
+const hwDay=(ms)=>{const d=new Date(+ms||0);return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0")};
+// কনফিগ JSON বা JS অবজেক্ট (const firebaseConfig = {...}) — দুটোই বোঝে
+function parseFbCfg(txt){
+  try{const o=JSON.parse(txt);if(o&&o.projectId)return o}catch(e){}
+  try{
+    const m=String(txt).match(/\{[\s\S]*\}/);if(!m)return null;
+    const j=m[0].replace(/([{,]\s*)([A-Za-z_]\w*)\s*:/g,'$1"$2":').replace(/'/g,'"').replace(/,\s*}/g,"}");
+    const o=JSON.parse(j);return o&&o.projectId?o:null;
+  }catch(e){return null}
+}
+function hwBuildExpenses(sales,returns,from){
+  const out=[],byId={};
+  const grp=(items,total,scale,qtyKey)=>{
+    const g={};
+    (items||[]).forEach(i=>{const c=HW_CAT_MAP[i.cat]||"other";const v=(qtyKey?(+i.qty||0)*(+i.rate||0):(+i.total||0))*scale;(g[c]=g[c]||{total:0,names:[]});g[c].total+=v;if(i.name)g[c].names.push(i.name)});
+    if(!Object.keys(g).length&&total>0)g.other={total:total,names:["(বিবরণ নেই)"]};
+    return g;
+  };
+  const nm=(names)=>names.slice(0,3).join(", ")+(names.length>3?" +"+(names.length-3)+"টি":"");
+  (sales||[]).forEach(sl=>{
+    if(!sl||!sl.id||sl.deleted||!sl.internal)return;
+    const day=hwDay(sl.date);if(from&&day<from)return;
+    byId[sl.id]=sl;
+    const items=Array.isArray(sl.items)?sl.items:[];
+    const sub=items.reduce((t,i)=>t+(+i.total||0),0);
+    const scale=sub>0&&(+sl.total)>=0?(+sl.total/sub):1;
+    const g=grp(items,+sl.total||0,scale,false),due=+sl.due||0;
+    Object.keys(g).forEach(c=>{
+      const tot=Math.round(g[c].total*100)/100;if(!tot)return;
+      out.push({id:"hw_"+sl.id+"_"+c,date:day,category:c,itemName:nm(g[c].names),qty:"",unit:"",rate:"",total:tot,supplier:"রূপালী লেকার এন্ড হার্ডওয়্যার",supplierPhone:"",payMethod:"নগদ",notes:"ইনভয়েস "+(sl.invNo||"")+(due>0.4?" · হার্ডওয়্যারে বাকি ৳"+Math.round(due):""),auto:true,source:"hw",at:new Date(+sl.date||0).toISOString()});
+    });
+  });
+  (returns||[]).forEach(r=>{
+    if(!r||!r.id||r.deleted||r.kind!=="sale")return;
+    const sl=byId[r.saleId];if(!sl)return;
+    const day=hwDay(r.date);if(from&&day<from)return;
+    const items=Array.isArray(sl.items)?sl.items:[];
+    const sub=items.reduce((t,i)=>t+(+i.total||0),0);
+    const scale=sub>0&&(+sl.total)>=0?(+sl.total/sub):1;
+    const g=grp(r.items,+r.amount*scale||0,scale,true);
+    Object.keys(g).forEach(c=>{
+      const tot=-Math.round(g[c].total*100)/100;if(!tot)return;
+      out.push({id:"hwr_"+r.id+"_"+c,date:day,category:c,itemName:"↩️ ফেরত: "+nm(g[c].names),qty:"",unit:"",rate:"",total:tot,supplier:"রূপালী লেকার এন্ড হার্ডওয়্যার",supplierPhone:"",payMethod:"নগদ",notes:"ফেরত — ইনভয়েস "+(sl.invNo||""),auto:true,source:"hw",at:new Date(+r.date||0).toISOString()});
+    });
+  });
+  return out.sort((a,b)=>new Date(b.date)-new Date(a.date));
+}
 const HZ_DEPT={"ছুতার":"ছুতার","নকশা":"কারিগর","কারিগর":"কারিগর","বার্নিশ":"বার্নিশ","পরিবহন":"পরিবহন","অন্যান্য":"অন্যান্য"};
 const isWeekKey=(k)=>/^\d{4}-\d{2}-\d{2}$/.test(String(k||""));
 const hajiraFromWeek=(link)=>{const f=link&&link.fromWeek;return isWeekKey(f)?weekEndThursday(f):HAJIRA_FROM_DEFAULT};
@@ -3357,6 +3406,7 @@ function App({firebaseConfig,onResetConfig}){
   // v5.74: রূপালী হাজিরা অ্যাপের সাপ্তাহিক বেতনের খাতা (att_book) ও কোন সপ্তাহ থেকে সেটা নেওয়া হবে (meta/hajiraLink)
   const[hzWorkers,setHzWorkers]=useState({});const[hzOwner,setHzOwner]=useState("");
   HZ_DATA={workers:hzWorkers,ownerPin:hzOwner}; // v5.90
+  const[hwLink,setHwLink]=useState({});const[hwSales,setHwSales]=useState([]);const[hwReturns,setHwReturns]=useState([]);const[hwState,setHwState]=useState({state:"off",err:""}); // v5.91
   const[hajiraBooks,setHajiraBooks]=useState(()=>{const v=offlineSeedRef.current;return(v&&v.hajiraBooks&&typeof v.hajiraBooks==="object")?v.hajiraBooks:{}});
   const[hajiraLink,setHajiraLink]=useState(()=>{const v=offlineSeedRef.current;return(v&&v.hajiraLink&&typeof v.hajiraLink==="object")?v.hajiraLink:{}});
   const[hajiraErr,setHajiraErr]=useState("");
@@ -3876,6 +3926,10 @@ function App({firebaseConfig,onResetConfig}){
     if(fsRef.current)fsRef.current.doc("meta/alertSettings").set(s).catch(err=>alert("⚠️ সতর্কতার সীমা সেভ করতে সমস্যা হয়েছে: "+err.message));
   };
   // v5.75: কোন সপ্তাহ থেকে বেতন হাজিরা অ্যাপ থেকে (সব ডিভাইসে একই)
+  const saveHwLink=(l)=>{ // v5.91: হার্ডওয়্যারের সংযোগ (সব ডিভাইসে একই)
+    setHwLink(l);
+    if(fsRef.current)fsRef.current.doc("meta/hwLink").set(l).catch(err=>alert("⚠️ হার্ডওয়্যারের সংযোগ সেভ করতে সমস্যা হয়েছে: "+err.message));
+  };
   const saveHajiraLink=(l)=>{
     setHajiraLink(l);
     if(fsRef.current)fsRef.current.doc("meta/hajiraLink").set(l).catch(err=>alert("⚠️ হাজিরার সংযোগ সেভ করতে সমস্যা হয়েছে: "+err.message));
@@ -4127,6 +4181,7 @@ function App({firebaseConfig,onResetConfig}){
       // v5.90: হাজিরা অ্যাপের কর্মী ও দল (পড়া-মাত্র) — মিস্ত্রি/যোগালের মিলকরণ ট্র্যাকিংয়ে দেখাতে
       const unsubHzWorkers=firestore.collection("att_workers").onSnapshot(snap=>{const m={};snap.docs.forEach(d=>{m[d.id]=d.data()});setHzWorkers(m)},err=>{});
       const unsubHzSettings=firestore.collection("att_settings").doc("main").onSnapshot(d=>{const v=d.exists?(d.data()||{}).ownerPin:null;setHzOwner(v!=null&&String(v).trim()&&String(v).trim()!=="none"?String(v).trim():"")},err=>{});
+      const unsubHwLink=firestore.doc("meta/hwLink").onSnapshot(snap=>{setHwLink(snap.exists?(snap.data()||{}):{})},err=>{}); // v5.91
       const unsubHajiraLink=firestore.doc("meta/hajiraLink").onSnapshot(snap=>{
         setHajiraLink(snap.exists?(snap.data()||{}):{});
       },err=>{});
@@ -4545,7 +4600,7 @@ function App({firebaseConfig,onResetConfig}){
       const firstStuckCheck=setTimeout(()=>{},0);
       const stuckCheckInterval=setInterval(()=>{},3600000);
 
-      return()=>{clearTimeout(timer);clearTimeout(firstStuckCheck);clearInterval(stuckCheckInterval);try{unsubVer();unsubDevices()}catch(e){}try{unsubHzWorkers();unsubHzSettings()}catch(e){}unsubOrders();unsubExpenses();unsubLots();unsubDb();unsubGalleries();unsubWoodSettings();unsubLaborSettings();unsubAlertSettings();unsubRackSplits();unsubRackBands();unsubCarp();unsubWorkers();unsubPayroll();unsubHajira();unsubHajiraLink()};
+      return()=>{clearTimeout(timer);clearTimeout(firstStuckCheck);clearInterval(stuckCheckInterval);try{unsubVer();unsubDevices()}catch(e){}try{unsubHzWorkers();unsubHzSettings()}catch(e){}try{unsubHwLink()}catch(e){}unsubOrders();unsubExpenses();unsubLots();unsubDb();unsubGalleries();unsubWoodSettings();unsubLaborSettings();unsubAlertSettings();unsubRackSplits();unsubRackBands();unsubCarp();unsubWorkers();unsubPayroll();unsubHajira();unsubHajiraLink()};
     }catch(e){
       clearTimeout(timer);
       setConnError(e.message);
@@ -5283,6 +5338,32 @@ function App({firebaseConfig,onResetConfig}){
   // v5.74: হিসাবের জন্য পে-রোলের সপ্তাহ — সংযোগের সপ্তাহ থেকে বেতন হাজিরা অ্যাপের খাতা থেকে
   const payrollAll=useMemo(()=>mergeHajiraPayroll(payrollWeeks,hajiraBooks,hajiraLink),[payrollWeeks,hajiraBooks,hajiraLink]);
   // v5.90: শেষ ২ বছরের অর্ডারে কাঠভেদে শতকরা ভাগ (নতুন অর্ডারের ড্রপডাউনের ক্রম)
+  // v5.91: হার্ডওয়্যারের আলাদা Firebase প্রজেক্টে দ্বিতীয় সংযোগ (শুধু পড়া) — ফার্নিচার শাখায় স্থানান্তরের বিক্রয় ও ফেরত
+  const hwCfgStr=(hwLink&&hwLink.cfg)||"";
+  useEffect(()=>{
+    setHwSales([]);setHwReturns([]);
+    if(!hwCfgStr){setHwState({state:"off",err:""});return}
+    let dead=false;const unsubs=[];
+    setHwState({state:"connecting",err:""});
+    (async()=>{
+      try{
+        const cfg=parseFbCfg(hwCfgStr);
+        if(!cfg)throw new Error("কনফিগ পড়া যায়নি");
+        if(!window.firebase)throw new Error("Firebase লোড হয়নি");
+        let app=firebase.apps.find(a=>a.name==="hwlink");
+        if(app&&app.options&&app.options.projectId!==cfg.projectId){await app.delete();app=null}
+        if(!app)app=firebase.initializeApp(cfg,"hwlink");
+        const f=app.firestore();
+        if(!app.__hwPersist){app.__hwPersist=true;try{await f.enablePersistence({synchronizeTabs:true})}catch(e){}}
+        if(dead)return;
+        unsubs.push(f.collection("sales").where("internal","==",true).onSnapshot(snap=>{if(dead)return;setHwSales(snap.docs.map(d=>d.data()));setHwState({state:"live",err:""})},err=>{if(!dead)setHwState({state:"error",err:err.message})}));
+        unsubs.push(f.collection("returns").where("kind","==","sale").onSnapshot(snap=>{if(dead)return;setHwReturns(snap.docs.map(d=>d.data()))},err=>{}));
+      }catch(e){if(!dead)setHwState({state:"error",err:e.message||String(e)})}
+    })();
+    return()=>{dead=true;unsubs.forEach(u=>{try{u()}catch(e){}})};
+  },[hwCfgStr]);
+  const hwExpenses=useMemo(()=>hwBuildExpenses(hwSales,hwReturns,hwLink&&hwLink.from),[hwSales,hwReturns,hwLink&&hwLink.from]);
+  const expensesAll=useMemo(()=>hwExpenses.length?[...expenses,...hwExpenses]:expenses,[expenses,hwExpenses]);
   WOOD_RANK_PCT=useMemo(()=>{
     const since=addDays(todayStr(),-730),cnt={};let tot=0;
     (orders||[]).forEach(o=>{
@@ -5295,7 +5376,7 @@ function App({firebaseConfig,onResetConfig}){
     return out;
   },[orders]);
   // v4.61: নতুন অর্ডারের দামের পরামর্শে সাম্প্রতিক আসল বেতন ও খরচের হার (শুধু নতুন অর্ডারের পাতায় হিসাব হয়)
-  const recentCostRates=useMemo(()=>page==="form"?furnitureCosting(orders,buildSpendLedger(expenses,payrollAll,workers,woodLots),woodSettings,laborSettings,db,null).recent:null,[page,orders,expenses,payrollAll,workers,woodLots,woodSettings,laborSettings,db]);
+  const recentCostRates=useMemo(()=>page==="form"?furnitureCosting(orders,buildSpendLedger(expensesAll,payrollAll,workers,woodLots),woodSettings,laborSettings,db,null).recent:null,[page,orders,expensesAll,payrollAll,workers,woodLots,woodSettings,laborSettings,db]);
   if(verBlock)return<div style={{padding:"40px 24px",textAlign:"center",maxWidth:440,margin:"50px auto"}}>
     <div style={{fontSize:36,marginBottom:10}}>⛔</div>
     <div style={{fontSize:16,fontWeight:800,color:"#991b1b",marginBottom:10}}>এটা অ্যাপের পুরনো সংস্করণ (v{BUILD_TAG})</div>
@@ -5349,10 +5430,10 @@ function App({firebaseConfig,onResetConfig}){
   if(page==="history")return<Hist syncInfo={syncInfo} online={online} orders={orders} db={db} onBack={goBack} onView={o=>navigate({page:"preview",orderNo:o.no,slip:0})} highlightNo={highlightNo} q={curScreen.q||""} setQ={q=>replaceTop({...curScreen,q})} statusFilter={curScreen.statusFilter||"all"} setStatusFilter={statusFilter=>replaceTop({...curScreen,statusFilter})} catFilter={curScreen.catFilter||"all"} setCatFilter={catFilter=>replaceTop({...curScreen,catFilter})} sortMode={curScreen.sortMode||"recent"} setSortMode={sortMode=>replaceTop({...curScreen,sortMode})} timeFilter={curScreen.timeFilter||"all"} setTimeFilter={timeFilter=>replaceTop({...curScreen,timeFilter})} resetFilters={()=>replaceTop({page:"history"})}/>;
   if(page==="manage")return<ManageDB db={db} saveDb={saveDb} galleries={galleries} saveGalleryEntry={saveGalleryEntry} onBack={goBack} navigate={navigate} goBack={goBack} replaceTop={replaceTop} curScreen={curScreen} highlightNo={highlightNo} onRenameVariant={propagateVariantRename} orders={orders} woodSettings={woodSettingsWithBands} rackSplits={rackSplits} onMergeMany={mergeManyAcrossOrders} onMoveVariant={propagateVariantMove} onRecodeVariant={propagateVariantCode} onWoodChange={propagateWoodChange} onMergeVariants={mergeVariantsAcrossOrders}/>;
   if(page==="woodstock")return<WoodStockPage woodLots={woodLots} saveWoodLots={saveWoodLots} addLotPayment={addLotPayment} woodSettings={woodSettingsWithBands} saveWoodSettings={saveWoodSettings} laborSettings={laborSettings} saveLaborSettings={saveLaborSettings} rackSplits={rackSplits} addRackSplit={addRackSplit} rackBands={rackBands} addRackBand={addRackBand} removeRackBand={removeRackBand} changeRackBands={changeRackBands} changeRackSplits={changeRackSplits} payrollWeeks={payrollAll} workers={workers} orders={orders} expenses={expenses} onBack={goBack} view={curScreen.view||"list"} lotId={curScreen.lotId||null} onOpenList={openWoodList} onOpenDetail={lotId=>navigate({page:"woodstock",view:"detail",lotId})} onOpenNew={()=>navigate({page:"woodstock",view:"new"})} onOpenRates={()=>navigate({page:"woodstock",view:"rates"})} onOpenUsage={()=>navigate({page:"woodstock",view:"usage"})} onOpenView={v=>navigate({page:"woodstock",view:v})} onOpenModel={(c,v,hl)=>navigate({page:"manage",tab:"edit",selCat:c,selVar:v,hl:hl||null})} onSwitchView={switchRackTab} mg={!!curScreen.mg} onPushMerge={()=>navigate({...curScreen,mg:1})} db={db} rackStd={rackStd} saveRackStd={saveRackStd} rackUsageDef={rackUsageDef} saveRackUsageDef={saveRackUsageDef} highlightNo={highlightNo}/>;
-  if(page==="expense")return<ExpensePage expenses={expenses} onSave={saveExpense} onBack={goBack}/>;
+  if(page==="expense")return<ExpensePage expenses={expenses} autoExpenses={hwExpenses} hwInfo={{link:hwLink,state:hwState,onSave:saveHwLink}} onSave={saveExpense} onBack={goBack}/>;
   if(page==="payroll")return<PayrollPage workers={workers} saveWorker={saveWorker} deleteWorker={deleteWorker} payrollWeeks={payrollWeeks} hajiraBooks={hajiraBooks} hajiraLink={hajiraLink} hajiraErr={hajiraErr} saveHajiraLink={saveHajiraLink} onBack={goBack} updateAttendance={updateAttendance} addAdvanceEntry={addAdvanceEntry} removeAdvanceEntry={removeAdvanceEntry}/>;
-  if(page==="plreport")return<PLReportPage orders={orders} expenses={expenses} workers={workers} payrollWeeks={payrollAll} woodLots={woodLots} woodSettings={woodSettings} laborSettings={laborSettings} onBack={goBack}/>;
-  return<Home syncInfo={syncInfo} devices={devices} dbHistory={dbHistory} photoMove={photoMove} onMovePhotosOut={runMovePhotosOut} handoffReport={handoffReport} onRestoreDbVersion={restoreDbVersion} onDownloadDbVersion={downloadDbVersion} deviceId={deviceIdRef.current} lastPageCrash={lastPageCrash} orders={orders} expenses={expenses} woodLots={woodLots} db={db} woodSettings={woodSettings} laborSettings={laborSettings} workers={workers} payrollWeeks={payrollAll} alertSettings={alertSettings} saveAlertSettings={saveAlertSettings} backupFailed={backupFailed} lastSyncAt={lastSyncAt} onManualRefresh={manualRefresh} pendingWrites={pendingWrites} onUpdateOrder={updateOrder} onNew={()=>navigate({page:"form"})} onHist={()=>navigate({page:"history"})} onHistMonth={()=>{navigate({page:"history",timeFilter:"month"});setTimeout(()=>window.scrollTo(0,0),30)}} onManage={()=>navigate({page:"manage"})} onExpense={()=>navigate({page:"expense"})} onWoodStock={()=>navigate({page:"woodstock",view:"list"})} onPayroll={()=>navigate({page:"payroll"})} onPLReport={()=>navigate({page:"plreport"})} onView={o=>navigate({page:"preview",orderNo:o.no,slip:0})} onViewDelivery={o=>navigate({page:"preview",orderNo:o.no,slip:5})} online={online} connError={connError} onResetConfig={onResetConfig} folderStatus={folderStatus} connectFolder={connectFolder} highlightNo={highlightNo} onBackupData={backupData} projectId={firebaseConfig?.projectId||""} appId={firebaseConfig?.appId||""} permanentSyncFailures={permanentSyncFailures} autoStuckStatus={autoStuckStatus} dbGaps={dbGaps} setDbGaps={setDbGaps} fsRef={fsRef}/>;
+  if(page==="plreport")return<PLReportPage orders={orders} expenses={expensesAll} workers={workers} payrollWeeks={payrollAll} woodLots={woodLots} woodSettings={woodSettings} laborSettings={laborSettings} onBack={goBack}/>;
+  return<Home syncInfo={syncInfo} devices={devices} dbHistory={dbHistory} photoMove={photoMove} onMovePhotosOut={runMovePhotosOut} handoffReport={handoffReport} onRestoreDbVersion={restoreDbVersion} onDownloadDbVersion={downloadDbVersion} deviceId={deviceIdRef.current} lastPageCrash={lastPageCrash} orders={orders} expenses={expensesAll} woodLots={woodLots} db={db} woodSettings={woodSettings} laborSettings={laborSettings} workers={workers} payrollWeeks={payrollAll} alertSettings={alertSettings} saveAlertSettings={saveAlertSettings} backupFailed={backupFailed} lastSyncAt={lastSyncAt} onManualRefresh={manualRefresh} pendingWrites={pendingWrites} onUpdateOrder={updateOrder} onNew={()=>navigate({page:"form"})} onHist={()=>navigate({page:"history"})} onHistMonth={()=>{navigate({page:"history",timeFilter:"month"});setTimeout(()=>window.scrollTo(0,0),30)}} onManage={()=>navigate({page:"manage"})} onExpense={()=>navigate({page:"expense"})} onWoodStock={()=>navigate({page:"woodstock",view:"list"})} onPayroll={()=>navigate({page:"payroll"})} onPLReport={()=>navigate({page:"plreport"})} onView={o=>navigate({page:"preview",orderNo:o.no,slip:0})} onViewDelivery={o=>navigate({page:"preview",orderNo:o.no,slip:5})} online={online} connError={connError} onResetConfig={onResetConfig} folderStatus={folderStatus} connectFolder={connectFolder} highlightNo={highlightNo} onBackupData={backupData} projectId={firebaseConfig?.projectId||""} appId={firebaseConfig?.appId||""} permanentSyncFailures={permanentSyncFailures} autoStuckStatus={autoStuckStatus} dbGaps={dbGaps} setDbGaps={setDbGaps} fsRef={fsRef}/>;
   };
   return<PageErrorBoundary resetKey={navStack.length+"|"+page+"|"+(curScreen.tab||"")} canGoBack={navStack.length>1} onError={onPageCrash}>{renderPage()}</PageErrorBoundary>;
 }
@@ -7043,13 +7124,54 @@ function Home({onHistMonth,syncInfo,devices,dbHistory,photoMove,onMovePhotosOut,
 }
 
 /* ── EXPENSE PAGE ── */
-function ExpensePage({expenses,onSave,onBack}){
+function HwLinkCard({info,autoExpenses}){
+  const[open,setOpen]=useState(false);
+  const[cfg,setCfg]=useState("");
+  const link=(info&&info.link)||{};
+  const[from,setFrom]=useState(link.from||"");
+  useEffect(()=>{setFrom(link.from||"")},[link.from]);
+  const st=(info&&info.state)||{state:"off"};
+  const on=!!link.cfg;
+  const net=(autoExpenses||[]).reduce((t,e)=>t+(+e.total||0),0);
+  const stTxt=!on?"সংযুক্ত নয়":st.state==="live"?"✅ সংযুক্ত":st.state==="connecting"?"⏳ সংযোগ হচ্ছে…":st.state==="error"?"⚠️ "+(st.err||"সমস্যা"):"";
+  const save=()=>{
+    let c=link.cfg||"";
+    if(cfg.trim()){const p=parseFbCfg(cfg);if(!p){alert("কনফিগ পড়া যায়নি। হার্ডওয়্যার সফটওয়্যারের সেটিংসে যে Firebase কনফিগ বসিয়েছেন, হুবহু সেটাই বসান।");return}c=JSON.stringify(p)}
+    if(!c){alert("হার্ডওয়্যারের Firebase কনফিগ বসান");return}
+    if(!from){alert("শুরুর তারিখ বাছুন — এর আগের বিক্রয় খরচে ধরা হবে না");return}
+    info.onSave({cfg:c,from});setCfg("");setOpen(false);
+  };
+  const off=()=>{if(window.confirm("হার্ডওয়্যারের সংযোগ বন্ধ করবেন? স্বয়ংক্রিয় খরচ আর দেখাবে না।")){info.onSave({});setOpen(false)}};
+  const box={background:"white",borderRadius:11,padding:"10px 12px",marginBottom:10,boxShadow:"0 1px 4px rgba(0,0,0,.06)",border:"1px solid #ccfbf1"};
+  return<div className="no-print" data-hw-card="1" style={box}>
+    <div onClick={()=>setOpen(o=>!o)} style={{display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer",gap:8}}>
+      <div style={{minWidth:0}}>
+        <div style={{fontSize:12,fontWeight:800,color:"#0f766e"}}>🏪 হার্ডওয়্যার শপ থেকে স্বয়ংক্রিয় খরচ</div>
+        <div style={{fontSize:10,color:"#888",marginTop:2}}>{stTxt}{on&&st.state==="live"?` · ${autoExpenses.length}টি এন্ট্রি · মোট ${money(net)} (${fmtDate(link.from)} থেকে)`:""}</div>
+      </div>
+      <span style={{color:"#0f766e",fontSize:12}}>{open?"▲":"▼"}</span>
+    </div>
+    {open&&<div style={{marginTop:10}}>
+      <div style={{fontSize:10,color:"#555",marginBottom:6,lineHeight:1.5}}>হার্ডওয়্যার সফটওয়্যারে "ফার্নিচার শাখা" ক্রেতাকে যা বিক্রি (স্থানান্তর) হবে, তা এখানে খরচ হিসেবে নিজে থেকে আসবে। বদলাতে বা মুছতে হবে হার্ডওয়্যার সফটওয়্যারে।</div>
+      <div style={{fontSize:11,fontWeight:600,color:"#555",marginBottom:4}}>হার্ডওয়্যারের Firebase কনফিগ {on&&<span style={{fontWeight:400,color:"#16a34a"}}>(সেভ করা আছে — বদলাতে চাইলে নতুনটা বসান)</span>}</div>
+      <textarea rows={4} value={cfg} onChange={e=>setCfg(e.target.value)} placeholder={'{"apiKey":"...","authDomain":"...","projectId":"...","appId":"..."}'} style={{width:"100%",border:"1.5px solid #e0e0e0",borderRadius:9,padding:"8px 10px",fontSize:11,fontFamily:"monospace",marginBottom:8}}/>
+      <div style={{fontSize:11,fontWeight:600,color:"#555",marginBottom:4}}>শুরুর তারিখ (এর আগের বিক্রয় ধরা হবে না — হাতে লেখা খরচের সাথে দ্বিগুণ এড়াতে)</div>
+      <input type="date" value={from} onChange={e=>setFrom(e.target.value)} style={{width:"100%",border:"1.5px solid #e0e0e0",borderRadius:9,padding:"9px 10px",fontSize:13,marginBottom:8}}/>
+      <div style={{display:"flex",gap:8}}>
+        <button onClick={save} style={{flex:1,background:"#0f766e",color:"white",border:"none",borderRadius:9,padding:"10px",fontSize:12,fontWeight:700}}>সেভ করুন</button>
+        {on&&<button onClick={off} style={{background:"#fee2e2",color:"#b91c1c",border:"none",borderRadius:9,padding:"10px 14px",fontSize:12,fontWeight:700}}>বন্ধ করুন</button>}
+      </div>
+    </div>}
+  </div>
+}
+function ExpensePage({expenses,autoExpenses,hwInfo,onSave,onBack}){
   const today=todayStr();
   const now=new Date();
   const[form,setForm]=useState({date:today,category:"hardware",itemName:"",qty:"",unit:"cft",rate:"",supplier:"",supplierPhone:"",payMethod:"নগদ",notes:""});
   const[viewYear,setViewYear]=useState(now.getFullYear());
   const[viewMonth,setViewMonth]=useState(now.getMonth());
   const[search,setSearch]=useState("");
+  const listAll=useMemo(()=>[...expenses,...(autoExpenses||[])],[expenses,autoExpenses]); // v5.91: হার্ডওয়্যার থেকে স্বয়ংক্রিয়গুলোসহ
   const inp={width:"100%",border:"1.5px solid #e0e0e0",borderRadius:9,padding:"11px 12px",fontSize:14,outline:"none"};
   const lbl=(t)=><div style={{fontSize:12,fontWeight:600,color:"#555",marginBottom:5}}>{t}</div>;
 
@@ -7096,17 +7218,17 @@ function ExpensePage({expenses,onSave,onBack}){
 
   // ── ডিফল্টে শুধু নির্বাচিত মাসের খরচ (তালিকা যাতে দিনে দিনে বিশাল না হয়ে যায়) ──
   // সার্চ করলে সব সময়ের ভেতর থেকে খোঁজা হয়
-  const monthExpenses=useMemo(()=>expenses.filter(e=>{
+  const monthExpenses=useMemo(()=>listAll.filter(e=>{
     const d=new Date(e.date);
     return d.getFullYear()===viewYear&&d.getMonth()===viewMonth;
-  }).sort((a,b)=>new Date(b.date)-new Date(a.date)),[expenses,viewYear,viewMonth]);
+  }).sort((a,b)=>new Date(b.date)-new Date(a.date)),[listAll,viewYear,viewMonth]);
 
   const searchResults=useMemo(()=>{
     const q=search.trim().toLowerCase();
     if(q.length<2)return null;
-    return expenses.filter(e=>(e.itemName||"").toLowerCase().includes(q)||(e.supplier||"").toLowerCase().includes(q))
+    return listAll.filter(e=>(e.itemName||"").toLowerCase().includes(q)||(e.supplier||"").toLowerCase().includes(q))
       .sort((a,b)=>new Date(b.date)-new Date(a.date)).slice(0,40);
-  },[expenses,search]);
+  },[listAll,search]);
 
   const displayList=searchResults!==null?searchResults:monthExpenses;
   const monthTotal=monthExpenses.reduce((s,e)=>s+(parseFloat(e.total)||0),0);
@@ -7157,6 +7279,7 @@ function ExpensePage({expenses,onSave,onBack}){
         <button onClick={submit} style={{width:"100%",background:"#0f766e",color:"white",border:"none",borderRadius:11,padding:"15px",fontSize:15,fontWeight:700}}>খরচ সংরক্ষণ করুন</button>
       </div>
 
+      {hwInfo&&<HwLinkCard info={hwInfo} autoExpenses={autoExpenses}/>}
       <div style={{marginBottom:10}}>
         <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="🔍 পণ্য বা সাপ্লায়ারের নাম দিয়ে যেকোনো সময়ের খরচ খুঁজুন..." style={{...inp,background:"white"}}/>
       </div>
@@ -7174,8 +7297,8 @@ function ExpensePage({expenses,onSave,onBack}){
       {displayList.length===0?<div style={{textAlign:"center",color:"#aaa",padding:20,fontSize:13}}>{searchResults!==null?"কিছু পাওয়া যায়নি":"এই মাসে কোনো খরচ এন্ট্রি নেই"}</div>:
       displayList.map((e,i)=>{
         const cat=EXP_CATS.find(c=>c.id===e.category);
-        return<div key={i} style={{background:"white",borderRadius:10,padding:"11px 13px",marginBottom:8,boxShadow:"0 1px 4px rgba(0,0,0,.06)",display:"flex",justifyContent:"space-between"}}>
-          <div><div style={{fontWeight:700,fontSize:13}}>{e.itemName}</div><div style={{fontSize:11,color:"#888",marginTop:1}}>{cat?.bn} | {e.qty} {e.unit} × {money(e.rate)} | {e.supplier||"—"}</div></div>
+        return<div key={i} style={{background:e.auto?"#f0fdfa":"white",borderRadius:10,padding:"11px 13px",marginBottom:8,boxShadow:"0 1px 4px rgba(0,0,0,.06)",display:"flex",justifyContent:"space-between",borderLeft:e.auto?"3px solid #14b8a6":"none"}}>
+          <div style={{minWidth:0}}><div style={{fontWeight:700,fontSize:13}}>{e.auto?"🏪 ":""}{e.itemName}</div>{e.auto?<div style={{fontSize:11,color:"#888",marginTop:1}}>{cat?.bn} | {e.notes} | হার্ডওয়্যার থেকে (স্বয়ংক্রিয়)</div>:<div style={{fontSize:11,color:"#888",marginTop:1}}>{cat?.bn} | {e.qty} {e.unit} × {money(e.rate)} | {e.supplier||"—"}</div>}</div>
           <div style={{textAlign:"right"}}><div style={{fontWeight:800,color:"#0f766e"}}>{money(e.total)}</div><div style={{fontSize:10,color:"#aaa"}}>{fmtDate(e.date)}</div></div>
         </div>
       })}
